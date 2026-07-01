@@ -18,7 +18,7 @@ except ImportError:
     from dataloader import CIFTABLE_PATTERNS, cifs
 
 
-L2DATA_PATH = "D:/data/l2"
+L2DATA_PATH = "D:/data/l2/test"
 
 
 def normalize_date(date: dt.date | dt.datetime | str) -> str:
@@ -63,7 +63,7 @@ def manulpull_l2data(date: dt.date | dt.datetime | str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for key, pattern in CIFTABLE_PATTERNS.items():
-        zip_path = Path(L2DATA_PATH) / "raw" / f"{date}_{pattern}.csv.zip"
+        zip_path = Path(L2DATA_PATH) / f"{date}_{pattern}.csv.zip"
         if not zip_path.exists():
             raise FileNotFoundError(f"Local zip file not found: {zip_path}")
 
@@ -86,5 +86,5 @@ def manulpull_l2data(date: dt.date | dt.datetime | str) -> None:
 
 
 if __name__ == "__main__":
-    manulpull_l2data("20260625")  
+    manulpull_l2data("20250930")  
 
