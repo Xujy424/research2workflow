@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "researchflow"
+version = "0.2.0"
+description = "Research-only factor admission and model publishing workflow"
+requires-python = ">=3.10"
+dependencies = ["quant-shared>=0.1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

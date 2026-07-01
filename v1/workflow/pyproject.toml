@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-workflow"
+version = "0.6.0"
+description = "Daily portfolio construction, execution, replay, and monitoring workflow"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "quant-shared>=0.1.0",
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scipy>=1.9",
+    "scikit-learn>=1.1",
+    "cvxpy>=1.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4", "mypy>=1.8", "build>=1.0"]
+l2 = ["pyarrow>=12", "polars>=0.20"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
