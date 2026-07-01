@@ -18,7 +18,7 @@ except ImportError:
     from dataloader import CIFTABLE_PATTERNS, cifs
 
 
-L2DATA_PATH = "D:/data/l2/test"
+L2DATA_PATH = "/data/xujiayi/xjy/l2/test/"
 
 
 def normalize_date(date: dt.date | dt.datetime | str) -> str:
