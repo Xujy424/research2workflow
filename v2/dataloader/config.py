@@ -62,6 +62,8 @@ CIFTABLE_PATTERNS = {
     "szwt": "mdl_6_33_0",
     "szcj": "mdl_6_36_0",
     "sh": "mdl_4_24_0",
+    "szshot": "mdl_6_28_0",
+    "shshot": "MarketData",
 }
 cifs = CIFSLoader("xujiayi", "ZSfund.com@202606")
 L2DATA_PATH = 'D:/data/l2/raw/'

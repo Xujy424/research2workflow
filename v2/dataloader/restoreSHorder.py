@@ -11,7 +11,7 @@ def RestoreOrder(order_dff,deal_dff):
     order_df = order_dff.with_columns(pl.col("TransactTime").str.strptime(pl.Time, "%H:%M:%S%.3f"))
 
     # 剔除集合竞价
-    deal_df = deal_dff.filter(~((pl.col("TransactTime") < pl.time(9, 30, 0)) | (pl.col("TransactTime") >= pl.time(14, 57, 0))))
+    deal_df = deal_dff.filter(~((pl.col("TransactTime") <= pl.time(9, 29)) | (pl.col("TransactTime") >= pl.time(14, 57))))
 
     # 拆分撤单
     deal = deal_df.filter(~(pl.col("ExecType") == 52)).sort(["ChannelNo", "ApplSeqNum", "SecCode", "TransactTime"])
