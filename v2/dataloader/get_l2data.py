@@ -86,30 +86,8 @@ def manulpull_l2data(date: dt.date | dt.datetime | str) -> None:
 
 
 if __name__ == "__main__":
-    # manulpull_l2data("20250930")
-    date = '20250930'
-    out_dir = Path(L2DATA_PATH) / "raw" / date
-     
-    zip_path = Path(L2DATA_PATH) / f"{date}_mdl_6_28_0.csv.zip"
-    if not zip_path.exists():
-        raise FileNotFoundError(f"Local zip file not found: {zip_path}")
-
-    with zipfile.ZipFile(zip_path, "r") as z:
-        members = [info for info in z.infolist() if not info.is_dir() and info.file_size > 0]
-        if not members:
-            raise ValueError(f"No non-empty CSV file in zip: {zip_path}")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_csv = Path(tmp) / members[0].filename
-            tmp_csv.parent.mkdir(parents=True, exist_ok=True)
-
-            with z.open(members[0]) as src, open(tmp_csv, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-
-            pl.scan_csv(tmp_csv, truncate_ragged_lines=True).sink_parquet(
-                out_dir / f"szshot.pq",
-                compression="gzip",
-            )
+    
+    manulpull_l2data("20250930")
 
 
 
