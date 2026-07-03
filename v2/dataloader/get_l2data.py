@@ -10,15 +10,12 @@ from pathlib import Path
 import polars as pl
 
 try:
-    from . import CIFTABLE_PATTERNS, cifs
+    from . import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
 except ImportError:
     import sys
 
     sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from dataloader import CIFTABLE_PATTERNS, cifs
-
-
-L2DATA_PATH = "/data/xujiayi/xjy/l2/test/"
+    from dataloader import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
 
 
 def normalize_date(date: dt.date | dt.datetime | str) -> str:
@@ -87,7 +84,7 @@ def manulpull_l2data(date: dt.date | dt.datetime | str) -> None:
 
 if __name__ == "__main__":
     
-    manulpull_l2data("20250930")
+    manulpull_l2data("20260624")
 
 
 

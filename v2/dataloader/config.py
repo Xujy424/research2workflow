@@ -66,6 +66,6 @@ CIFTABLE_PATTERNS = {
     "shshot": "MarketData",
 }
 cifs = CIFSLoader("xujiayi", "ZSfund.com@202606")
-L2DATA_PATH = 'D:/data/l2/raw/'
+L2DATA_PATH = 'D:/data/l2/'
 
 
