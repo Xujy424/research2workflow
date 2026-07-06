@@ -20,6 +20,9 @@ def get_xshg_calendar():
     return xcals.get_calendar("XSHG")
 
 
+ROOT = 'D:/data/'
+
+
 JY_CONFIG = {
     "server": "10.10.0.102",
     "user": "jydbReader",
@@ -66,6 +69,6 @@ CIFTABLE_PATTERNS = {
     "shshot": "MarketData",
 }
 cifs = CIFSLoader("xujiayi", "ZSfund.com@202606")
-L2DATA_PATH = 'D:/data/l2/'
+L2DATA_PATH = ROOT + 'l2/'
 
 

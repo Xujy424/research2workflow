@@ -12,8 +12,8 @@ def normalize_date(date: dt.date | dt.datetime | str) -> str:
 
 def generate_path(root, date):
     date = normalize_date(date)
-    rawpath = Path(L2DATA_PATH)/"raw"/date
-    outpath = Path(L2DATA_PATH)/"proc"/date
+    rawpath = Path(root)/"raw"/date
+    outpath = Path(root)/"proc"/date
     outpath.mkdir(parents=True, exist_ok=True)
     return rawpath, outpath
 
@@ -495,15 +495,15 @@ def generate_closebook(
 
 if __name__ == '__main__':
 
-    L2DATA_PATH = "/data/xujiayi/xjy/l2/test"
-    rawpath, outpath = generate_path(L2DATA_PATH, '20250930')
+    L2DATA_PATH = "D:/data/l2/"
+    rawpath, outpath = generate_path(L2DATA_PATH, '20260625')
 
     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
 
     sh_closebook, sh_aliveorders = generate_closebook(shwt, shcj, shcd, topn=10)
     print(sh_closebook.filter(pl.col('SecurityID')==600000))
 
-    sh_closebook_correct = get_closebook('sh', L2DATA_PATH, '20250930')
+    sh_closebook_correct = get_closebook('sh', L2DATA_PATH, '20260625')
     print(sh_closebook_correct.filter(pl.col('SecurityID')==600000))
 
 
