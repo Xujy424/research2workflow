@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
+import sys
 
 import numpy as np
 
-from ..matrix_math import cross_sectional_zscore, industry_size_neutralize, winsorize
+try:
+    from ..matrix_math import cross_sectional_zscore, industry_size_neutralize, winsorize
+    from ..matrix_store import MatrixStore
+except ImportError:  # Allows direct execution from an IDE without package context.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from ResearchFlow.matrix_math import cross_sectional_zscore, industry_size_neutralize, winsorize
+    from ResearchFlow.matrix_store import MatrixStore
 
 
 WinsorMethod = Literal["mad", "sigma", "quantile"]
@@ -19,7 +27,7 @@ class PreprocessConfig:
     quantile_p: float = 0.01
     n_sigma: float = 3.0
     standardize: bool = True
-    neutralize: bool = False
+    neutralize: bool = True
 
 
 @dataclass(frozen=True)
@@ -28,10 +36,10 @@ class FactorDataStats:
     finite_ratio: float
     nan_ratio: float
     inf_count: int
-    mean_abs_cross_median: float
-    median_cross_std: float
-    extreme_ratio_mad3: float
-    max_abs_robust_z: float
+    mean_abs_cross_median: float         # 横截面中心是否偏离0
+    median_cross_std: float              # 横截面离散度是否稳定
+    extreme_ratio_mad3: float            # 极值比例
+    max_abs_robust_z: float              # 最严重异常点强度
 
 
 def describe_factor_values(factor: np.ndarray, *, mask: np.ndarray | None = None) -> FactorDataStats:
@@ -108,3 +116,31 @@ class FactorPreprocessor:
             industry=industry,
             market_cap=market_cap,
         )
+
+
+
+if __name__ == '__main__':
+    
+    import pandas as pd
+    import bisect
+
+    ms = MatrixStore()
+    axis = ms.load_axis()
+    start_idx = bisect.bisect_left(axis.dates,pd.to_datetime('2021-01-01'))
+    end_idx = bisect.bisect_right(axis.dates,pd.to_datetime('2025-12-31'))
+    dts = axis.dates[start_idx:end_idx]
+
+    tradable = ms.read_slice('mask','tradable',dtype=bool,dates=dts)
+    industry = ms.read_slice('mask','industry',dtype=float,dates=dts)
+    mv = ms.read_slice('d_field','mv',dtype=float,dates=dts)
+
+    factor_path = Path(__file__).resolve().parents[1] / 'examples' / 'alpha_merge_20210104_20251231.csv'
+    factor = pd.read_csv(factor_path, index_col=0)
+    val = factor.to_numpy()
+
+    preprocess = FactorPreprocessor()
+    factor_stats = preprocess.describe(val)
+    factor_trans = preprocess.transform(val, tradable=tradable, industry=industry, market_cap=mv)
+    factor_trans = pd.DataFrame(factor_trans, index=factor.index, columns=factor.columns)
+    factor_trans.to_csv(Path(__file__).resolve().parents[1] / 'examples' /'GRU.csv')
+    print('hahahah')

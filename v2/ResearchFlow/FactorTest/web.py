@@ -53,12 +53,6 @@ class ModuleSpec:
 
 MODULES: tuple[ModuleSpec, ...] = (
     ModuleSpec(
-        key="info",
-        title="因子信息表",
-        outputs=(OutputSpec("因子基础信息", "info", "info_table"),),
-        accent="#D9EAF7",
-    ),
-    ModuleSpec(
         key="signal_test",
         title="PRF 与多期胜率检验",
         outputs=(
@@ -139,12 +133,13 @@ MODULES: tuple[ModuleSpec, ...] = (
         ),
         accent="#F2DED3",
     ),
-    ModuleSpec(
-        key="spearman",
-        title="Spearman 秩相关冗余检验",
-        outputs=(OutputSpec("Spearman 秩相关冗余检验", "figure", "plot_corr_redundancy"),),
-        accent="#B9CAE8",
-    ),
+    # Spearman redundancy module disabled per current FactorTest workflow.
+#     ModuleSpec(
+#         key="spearman",
+#         title="Spearman 秩相关冗余检验",
+#         outputs=(OutputSpec("Spearman 秩相关冗余检验", "figure", "plot_corr_redundancy"),),
+#         accent="#B9CAE8",
+#     ),
     ModuleSpec(
         key="regime_online",
         title="上下线模型检验",
@@ -235,6 +230,9 @@ def init_state() -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+    st.session_state.active_modules = [
+        key for key in st.session_state.active_modules if key in MODULE_BY_KEY
+    ]
 
 
 # 中文说明：`inject_css`：执行该名称对应的业务计算，并返回调用方所需结果。
@@ -606,6 +604,7 @@ def render_report_body() -> None:
         return
 
     render_status(analyzer)
+    render_info_table(analyzer.info_table)
     render_active_score_summary(analyzer)
     for module_key in st.session_state.active_modules:
         render_module(analyzer, MODULE_BY_KEY[module_key])
@@ -768,7 +767,8 @@ def compute_output(analyzer: Any, module_key: str, spec: OutputSpec) -> Any:
 # 中文说明：`get_callable`：执行该名称对应的业务计算，并返回调用方所需结果。
 def get_callable(analyzer: Any, func_name: str) -> Callable[[], Any]:
     aliases = {
-        "plot_corr_redundancy": ("plot_corr_redundancy", "plot_spearman_redundancy"),
+        # Spearman redundancy check disabled; keep alias here for future restoration.
+        # "plot_corr_redundancy": ("plot_corr_redundancy", "plot_spearman_redundancy"),
     }
     for candidate in aliases.get(func_name, (func_name,)):
         if hasattr(analyzer, candidate):
@@ -821,7 +821,7 @@ SCORE_FUNC_BY_OUTPUT = {
     "table_barra_exposure_stats": "score_barra_exposure_stats",
     "plot_barra_exposure": "score_barra_exposure_bar",
     "plot_barra_exposure_ret": "score_barra_exposure_return",
-    "plot_corr_redundancy": "score_redundancy",
+    # "plot_corr_redundancy": "score_redundancy",  # Spearman redundancy check disabled.
     "table_regime_stats": "score_regime_stats",
     "plot_regime_cumret": "score_regime_curve",
     "table_shadow_capacity_test": "score_shadow_capacity",
@@ -965,6 +965,8 @@ def render_table(value: Any, spec: OutputSpec) -> None:
 
 # 中文说明：`format_display_table`：执行该名称对应的业务计算，并返回调用方所需结果。
 def format_display_table(df: pd.DataFrame, spec: OutputSpec) -> pd.DataFrame:
+    if spec.func_name == "table_monthly_ret":
+        return df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
     if spec.func_name != "table_shadow_capacity_test":
         return df
     result = df.copy()

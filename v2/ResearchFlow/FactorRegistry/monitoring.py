@@ -18,9 +18,9 @@ from .registry import FactorStatus
 
 @dataclass(frozen=True)
 class FactorMonitorConfig:
-    n_groups: int = 5
-    top_quantile: float = 0.2
-    bottom_quantile: float = 0.2
+    n_groups: int = 10
+    top_quantile: float = 0.1
+    bottom_quantile: float = 0.1
     min_obs: int = 50
     rolling_windows: tuple[int, ...] = (20, 60, 120, 250)
     extreme_mad_multiple: float = 5.0

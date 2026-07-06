@@ -11,6 +11,7 @@ import numpy.typing as npt
 
 
 MemmapMode = Literal["r", "r+", "w+", "c"]
+AxisSelector = object | Sequence[object] | None
 
 
 @dataclass(frozen=True)
@@ -30,10 +31,10 @@ class MatrixStore:
         self.root = Path(root)
         self.default_dtype = np.dtype(dtype)
 
-    def load_axis(self, *, mmap_mode: str | None = "r") -> MatrixAxis:
+    def load_axis(self) -> MatrixAxis:
         return MatrixAxis(
-            dates=self._load_axis("date", mmap_mode=mmap_mode),
-            ticks=self._load_axis("tick", mmap_mode=mmap_mode),
+            dates=self._load_axis("date"),
+            ticks=self._load_axis("tick"),
         )
 
     def open_matrix(
@@ -97,8 +98,45 @@ class MatrixStore:
         out.flush()
         return path
 
-    def path(self, category: str, field: str) -> Path:
-        return self.root / category / f"{field}.bin"
+    def read_slice(
+        self,
+        category: str,
+        field: str,
+        *,
+        dates: AxisSelector = None,
+        ticks: AxisSelector = None,
+        dtype: npt.DTypeLike | None = None,
+        paired: bool = False,
+    ) -> np.ndarray:
+        axis = self.load_axis()
+        matrix = self.open_matrix(category, field, dtype=dtype, mode="r", shape=axis.shape)
+        index = self._matrix_index(self._loc(axis.dates, dates), self._loc(axis.ticks, ticks), paired=paired)
+        return np.asarray(matrix[index]).copy()
+
+    def update_slice(
+        self,
+        category: str,
+        field: str,
+        values: npt.ArrayLike,
+        *,
+        dates: AxisSelector = None,
+        ticks: AxisSelector = None,
+        dtype: npt.DTypeLike | None = None,
+        fill_value: float | int | None = np.nan,
+        paired: bool = False,
+    ) -> Path:
+        axis = self.load_axis()
+        final_dtype = np.dtype(dtype or self.default_dtype)
+        path = self.ensure_matrix(category, field, dtype=final_dtype, fill_value=fill_value)
+        matrix = np.memmap(path, dtype=final_dtype, mode="r+", shape=axis.shape)
+        index = self._matrix_index(self._loc(axis.dates, dates), self._loc(axis.ticks, ticks), paired=paired)
+        arr = np.asarray(values, dtype=final_dtype)
+        expected = matrix[index].shape
+        if arr.shape != expected:
+            raise ValueError(f"expected slice shape {expected}, got {arr.shape}")
+        matrix[index] = arr
+        matrix.flush()
+        return path
 
     def positions(self, axis_values: Sequence[object], labels: Sequence[object]) -> np.ndarray:
         lookup = {str(value): i for i, value in enumerate(axis_values)}
@@ -107,12 +145,42 @@ class MatrixStore:
             raise KeyError(f"labels not found in axis: {missing[:10]}")
         return np.asarray([lookup[str(label)] for label in labels], dtype=np.int64)
 
-    def _load_axis(self, stem: str, *, mmap_mode: str | None) -> npt.NDArray[np.generic]:
+    def _loc(self, axis_values: Sequence[object], labels: AxisSelector) -> slice | int | np.ndarray:
+        if labels is None:
+            return slice(None)
+        if self._is_scalar_label(labels):
+            return int(self.positions(axis_values, [labels])[0])
+        return self.positions(axis_values, list(labels))
+
+    def _matrix_index(
+        self,
+        rows: slice | int | np.ndarray,
+        cols: slice | int | np.ndarray,
+        *,
+        paired: bool,
+    ) -> tuple[object, object]:
+        if paired:
+            if not isinstance(rows, np.ndarray) or not isinstance(cols, np.ndarray):
+                raise ValueError("paired=True requires sequence dates and sequence ticks")
+            if len(rows) != len(cols):
+                raise ValueError("dates and ticks must have the same length for paired access")
+            return rows, cols
+        if isinstance(rows, np.ndarray) and isinstance(cols, np.ndarray):
+            return np.ix_(rows, cols)
+        return rows, cols
+
+    @staticmethod
+    def _is_scalar_label(value: object) -> bool:
+        if isinstance(value, (str, bytes, np.datetime64, np.integer, np.floating)):
+            return True
+        return np.ndim(value) == 0
+
+    def _load_axis(self, stem: str) -> npt.NDArray[np.generic]:
         axis_dir = self.root / "axis"
         candidates = (axis_dir / f"{stem}.npy", axis_dir / f"{stem}s.npy")
         for path in candidates:
             if path.exists():
-                return np.load(path, mmap_mode=mmap_mode, allow_pickle=False)
+                return np.load(path, allow_pickle=True)
         raise FileNotFoundError(f"axis file not found, tried: {', '.join(map(str, candidates))}")
 
     @staticmethod
@@ -124,4 +192,6 @@ class MatrixStore:
                 f"unexpected matrix size for {path}: expected {expected} bytes "
                 f"for shape={shape}, dtype={np.dtype(dtype)}, got {actual} bytes"
             )
-
+        
+    def path(self, category: str, field: str) -> Path:
+            return self.root / category / f"{field}.bin"

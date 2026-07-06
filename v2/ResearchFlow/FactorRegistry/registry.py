@@ -24,9 +24,9 @@ class FactorStatus(str, Enum):
 ALLOWED_TRANSITIONS: dict[FactorStatus, set[FactorStatus]] = {
     FactorStatus.RESEARCH: {FactorStatus.RESEARCH, FactorStatus.CANDIDATE, FactorStatus.RETIRED},
     FactorStatus.CANDIDATE: {FactorStatus.RESEARCH, FactorStatus.CANDIDATE, FactorStatus.SHADOW, FactorStatus.RETIRED},
-    FactorStatus.SHADOW: {FactorStatus.CANDIDATE, FactorStatus.SHADOW, FactorStatus.PRODUCTION, FactorStatus.RETIRED},
+    FactorStatus.SHADOW: {FactorStatus.RESEARCH, FactorStatus.CANDIDATE, FactorStatus.SHADOW, FactorStatus.PRODUCTION, FactorStatus.RETIRED},
     FactorStatus.PRODUCTION: {FactorStatus.SHADOW, FactorStatus.PRODUCTION, FactorStatus.RETIRED},
-    FactorStatus.RETIRED: {FactorStatus.RETIRED},
+    FactorStatus.RETIRED: {FactorStatus.RESEARCH, FactorStatus.RETIRED},
 }
 
 
@@ -129,7 +129,9 @@ class FactorRegistry:
             raise ValueError(f"factor version already exists: {item.key}")
         item = replace(item, created_at=item.created_at or utc_now(), updated_at=utc_now())
         self._records[item.key] = item
-        self._status_log.append(FactorLifecycleEvent(item.factor_id, item.version, item.status, item.status, reason, decision_by))
+        self._status_log.append(FactorLifecycleEvent(
+            item.factor_id, item.version, item.status, item.status, reason, decision_by
+        ))
 
     def upsert(self, metadata: FactorMetadata) -> None:
         item = metadata.validate()

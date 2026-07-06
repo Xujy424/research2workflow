@@ -9,3 +9,9 @@ dist/
 .coverage
 htmlcov/
 *.log
+
+v2/ResearchFlow/examples/GRU.csv
+
+v2/ResearchFlow/examples/*.csv
+
+v2/ResearchFlow/examples/*.csv

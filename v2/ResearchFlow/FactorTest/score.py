@@ -139,7 +139,7 @@ def score_analyzer(analyzer: Any, template_path: str | Path = DEFAULT_TEMPLATE_P
         "Barra因子暴露表现": score_barra_exposure_stats,
         "Barra因子暴露": score_barra_exposure_bar,
         "Barra因子暴露收益时序图": score_barra_exposure_return,
-        "Spearman秩相关冗余检验": score_redundancy,
+        # "Spearman秩相关冗余检验": score_redundancy,  # Disabled per current FactorTest workflow.
         "上下线模型检验": score_regime_stats,
         "上下线状态检验": score_regime_stats,
         "Regime检验": score_regime_stats,
@@ -275,17 +275,19 @@ def score_monthly_return(analyzer: Any) -> ScoreResult:
 
 # 中文说明：`score_annual_stats`：计算评分或监控指标。
 def score_annual_stats(analyzer: Any) -> ScoreResult:
-    ret = as_series(analyzer.cache["ret_df"])
-    annret = calc_annret(ret)
-    annvol = calc_annvol(ret)
-    sharpe = annret / annvol if annvol > 0 else 0.0
-    maxdd = abs(calc_maxdrawdown(ret))
-    year_sharpes = []
-    years = pd.DatetimeIndex(ret.index).year
-    for _, sub in ret.groupby(years):
-        vol = calc_annvol(sub)
-        year_sharpes.append(calc_annret(sub) / vol if vol > 0 else 0.0)
-    worst_year_sharpe = min(year_sharpes, default=0.0)
+    annual = analyzer.table_annual_stats()
+    annual_numeric = annual.apply(pd.to_numeric, errors="coerce")
+    overall_key = "Overall" if "Overall" in annual_numeric.index else annual_numeric.index[-1]
+    overall = annual_numeric.loc[overall_key]
+
+    annret = float(overall.iloc[0])
+    annvol = float(overall.iloc[1])
+    sharpe = float(overall.iloc[2])
+    maxdd = abs(float(overall.iloc[3]))
+
+    year_rows = annual_numeric.drop(index=overall_key, errors="ignore")
+    worst_year_sharpe = float(year_rows.iloc[:, 2].min()) if not year_rows.empty else sharpe
+
     hard = sharpe < 0.5 or worst_year_sharpe < 0
     score, level = grade_all([(sharpe, 1.0, 1.25, 1.5), (annret, 0.10, 0.15, 0.20)], lower_better=[(maxdd, 0.20, 0.15, 0.10)])
     return result(
@@ -709,19 +711,20 @@ def score_barra_exposure_return(analyzer: Any) -> ScoreResult:
     return result(f"最大单Barra收益贡献={max_contrib:.2%}", level, 0 if hard else score, hard, "最大单Barra收益贡献>50%")
 
 
-# 中文说明：`score_redundancy`：计算评分或监控指标。
-def score_redundancy(analyzer: Any) -> ScoreResult:
-    try:
-        corr_df = calc_pool_corr_summary(analyzer)
-    except Exception as exc:
-        return ScoreResult(f"冗余检验依赖因子池，自动计算失败: {exc}", "待复核", 50, "请根据 plot_corr_redundancy 热图人工复核。")
-    max_corr = float(corr_df["abs_corr"].max())
-    avg_corr = float(corr_df["abs_corr"].mean())
-    hard = max_corr >= 0.60
-    score, level = grade_all([], lower_better=[(max_corr, 0.70, 0.60, 0.50), (avg_corr, 0.30, 0.25, 0.20)])
-    return result(f"最大相关={max_corr:.3f}; 平均相关={avg_corr:.3f}", level, 0 if hard else score, hard, "最大相关>=0.60")
-
-
+# Spearman redundancy score disabled per current FactorTest workflow; kept for future restoration.
+# # 中文说明：`score_redundancy`：计算评分或监控指标。
+# def score_redundancy(analyzer: Any) -> ScoreResult:
+#     try:
+#         corr_df = calc_pool_corr_summary(analyzer)
+#     except Exception as exc:
+#         return ScoreResult(f"冗余检验依赖因子池，自动计算失败: {exc}", "待复核", 50, "请根据 plot_corr_redundancy 热图人工复核。")
+#     max_corr = float(corr_df["abs_corr"].max())
+#     avg_corr = float(corr_df["abs_corr"].mean())
+#     hard = max_corr >= 0.60
+#     score, level = grade_all([], lower_better=[(max_corr, 0.70, 0.60, 0.50), (avg_corr, 0.30, 0.25, 0.20)])
+#     return result(f"最大相关={max_corr:.3f}; 平均相关={avg_corr:.3f}", level, 0 if hard else score, hard, "最大相关>=0.60")
+#
+#
 # 中文说明：`score_regime_stats`：计算评分或监控指标。
 def score_regime_stats(analyzer: Any) -> ScoreResult:
     df = analyzer.table_regime_stats()
@@ -1301,28 +1304,29 @@ def exposure_contribution(long_pct: pd.DataFrame, short_pct: pd.DataFrame, ret_d
     return float(np.nanmax(contributions)) if contributions else np.nan
 
 
-# 中文说明：`calc_pool_corr_summary`：计算研究或生产指标。
-def calc_pool_corr_summary(analyzer: Any) -> pd.DataFrame:
-    from metrics import IC, rankIC  # type: ignore
-
-    valid_dates = np.intersect1d(pd.to_datetime(analyzer.poolfactor_dates), analyzer.cache["dates"])
-    valid_pooldates_idx = np.searchsorted(pd.to_datetime(analyzer.poolfactor_dates), valid_dates)
-    valid_alphadates_idx = np.searchsorted(analyzer.cache["dates"], valid_dates)
-    alpha_arr = analyzer.cache["alpha_df"].values[valid_alphadates_idx]
-    poolfactors = analyzer.poolfactors[valid_pooldates_idx]
-    valid_pool = analyzer.cache["pool_mask"][valid_alphadates_idx]
-    rows, cols = np.nonzero(valid_pool)
-    _, valid_poolticks_idx, sub_idx = np.intersect1d(analyzer.poolfactor_ticks, analyzer.ticks[cols], return_indices=True)
-    valid_alphaticks_idx = cols[sub_idx]
-    alpha_arr = alpha_arr[:, valid_alphaticks_idx]
-    poolfactors = poolfactors.transpose(2, 0, 1)[valid_poolticks_idx].transpose(1, 0, 2)
-
-    records = []
-    for i, name in enumerate(analyzer.poolfactor_names):
-        ic = float(np.nanmean(IC(poolfactors[:, :, i], alpha_arr)))
-        ric = float(np.nanmean(rankIC(poolfactors[:, :, i], alpha_arr)))
-        records.append({"factor": name, "ic": ic, "rankic": ric, "abs_corr": max(abs(ic), abs(ric))})
-    return pd.DataFrame(records).sort_values("abs_corr", ascending=False)
+# Spearman redundancy pool-correlation helper disabled per current FactorTest workflow; kept for future restoration.
+# # 中文说明：`calc_pool_corr_summary`：计算研究或生产指标。
+# def calc_pool_corr_summary(analyzer: Any) -> pd.DataFrame:
+#     from metrics import IC, rankIC  # type: ignore
+#
+#     valid_dates = np.intersect1d(pd.to_datetime(analyzer.poolfactor_dates), analyzer.cache["dates"])
+#     valid_pooldates_idx = np.searchsorted(pd.to_datetime(analyzer.poolfactor_dates), valid_dates)
+#     valid_alphadates_idx = np.searchsorted(analyzer.cache["dates"], valid_dates)
+#     alpha_arr = analyzer.cache["alpha_df"].values[valid_alphadates_idx]
+#     poolfactors = analyzer.poolfactors[valid_pooldates_idx]
+#     valid_pool = analyzer.cache["pool_mask"][valid_alphadates_idx]
+#     rows, cols = np.nonzero(valid_pool)
+#     _, valid_poolticks_idx, sub_idx = np.intersect1d(analyzer.poolfactor_ticks, analyzer.ticks[cols], return_indices=True)
+#     valid_alphaticks_idx = cols[sub_idx]
+#     alpha_arr = alpha_arr[:, valid_alphaticks_idx]
+#     poolfactors = poolfactors.transpose(2, 0, 1)[valid_poolticks_idx].transpose(1, 0, 2)
+#
+#     records = []
+#     for i, name in enumerate(analyzer.poolfactor_names):
+#         ic = float(np.nanmean(IC(poolfactors[:, :, i], alpha_arr)))
+#         ric = float(np.nanmean(rankIC(poolfactors[:, :, i], alpha_arr)))
+#         records.append({"factor": name, "ic": ic, "rankic": ric, "abs_corr": max(abs(ic), abs(ric))})
+#     return pd.DataFrame(records).sort_values("abs_corr", ascending=False)
 
 
 if __name__ == "__main__":

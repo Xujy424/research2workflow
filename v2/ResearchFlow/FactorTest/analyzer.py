@@ -28,7 +28,7 @@ plt.rcParams['axes.unicode_minus']=False
 # 中文说明：定义 `FactorAnalyzer`，封装本模块对应的数据、配置与行为。
 class FactorAnalyzer:
 
-    root = Path('/data/xujiayi/end2end/')
+    root = Path("D:/data")
     loader = Loader(root)
 
     direct_variables = [
@@ -40,7 +40,17 @@ class FactorAnalyzer:
         'ics_df', 'rankics_df', 'groupret_df', 'longshort_holds', 'ret_df', 'hold_df', 'turnover_df'
     ]
 
-    poolfactor_dates, poolfactor_names, poolfactor_ticks, poolfactors = loader.load_factorpool()  # T,K,N
+    # Spearman redundancy check is disabled in FactorTest UI; avoid loading external factorpool at import time.
+    # poolfactor_dates, poolfactor_names, poolfactor_ticks, poolfactors = loader.load_factorpool()  # T,K,N
+    poolfactor_dates, poolfactor_names, poolfactor_ticks, poolfactors = None, None, None, None
+
+    pool_regime_specs = (
+        ("HS300", "hs300_mask"),
+        ("ZZ500", "zz500_mask"),
+        ("A500", "a500_mask"),
+        ("ZZ1000", "zz1000_mask"),
+        ("ZZ2000", "zz2000_mask"),
+    )
 
     # 中文说明：`__init__`：初始化对象及其运行依赖。
     def __init__(self, info, alpha_df):
@@ -682,7 +692,7 @@ class FactorAnalyzer:
         for i, ind in enumerate(self.loader.id_to_industry.values(), start=1):
             ind_weight = self.cache['long_ind_pct_df'][ind] - self.cache['short_ind_pct_df'][ind] if self.factor_type=='longshort' else self.cache['long_ind_pct_df'][ind]
             ind_exposure_ret = ind_weight * self.cache['ind_ret_df'][ind]
-            ax.plot(self.cache['dates'], np.nancumprod(ind_exposure_ret+1)-1, linewidth=1.5, label=f'Industry {i}')
+            ax.plot(self.cache['dates'], np.nancumprod(ind_exposure_ret+1)-1, linewidth=1.5, label=str(ind))
         ax.legend()
         ax.set_xlabel('Date')
         ax.set_ylabel('Cumulative Return')
@@ -782,7 +792,7 @@ class FactorAnalyzer:
         for i, sec in enumerate(self.loader.id_to_sector.values(), start=1):
             sec_weight = self.cache['long_sec_pct_df'][sec] - self.cache['short_sec_pct_df'][sec] if self.factor_type=='longshort' else self.cache['long_sec_pct_df'][sec]
             sec_exposure_ret = sec_weight * self.cache['sec_ret_df'][sec]
-            ax.plot(self.cache['dates'], np.nancumsum(sec_exposure_ret), linewidth=1.7, label=f'Sector {i}')
+            ax.plot(self.cache['dates'], np.nancumsum(sec_exposure_ret), linewidth=1.7, label=str(sec))
         ax.legend()
         ax.set_xlabel('Date')
         ax.set_ylabel('Cumulative Return')
@@ -811,7 +821,7 @@ class FactorAnalyzer:
 
         x = long_pct.index
         # 多头向上
-        display_labels = [f'Category {i + 1}' for i in range(len(all_cats))]
+        display_labels = [str(cat) for cat in all_cats]
         ax.stackplot(x, long_pct.values.T, labels=display_labels, colors=colors[:len(all_cats)], alpha=0.85)
         # 空头向下
         ax.stackplot(x, (-short_pct).values.T, colors=colors[:len(all_cats)], alpha=0.85)
@@ -882,85 +892,86 @@ class FactorAnalyzer:
         return fig
     
 
-    # 中文说明：`calc_pair_corr`：计算研究或生产指标。
-    def calc_pair_corr(self, X, y, i):
-        ic = np.nanmean(IC(X[:,:,i], y))
-        rankic = np.nanmean(rankIC(X[:,:,i], y))
-        return i, ic, rankic
-
-    # 中文说明：`plot_corr_redundancy`：绘制诊断图表。
-    def plot_corr_redundancy(self, threshold=0.7):
-        # 数据对齐
-        K = len(self.poolfactor_names)
-
-        valid_dates = np.intersect1d(pd.to_datetime(self.poolfactor_dates), self.cache['dates'])
-        valid_pooldates_idx = np.searchsorted(pd.to_datetime(self.poolfactor_dates), valid_dates)
-        valid_alphadates_idx = np.searchsorted(self.cache['dates'], valid_dates)
-        
-        alpha_arr = self.cache['alpha_df'].values[valid_alphadates_idx]
-        poolfactors = self.poolfactors[valid_pooldates_idx]  # T,K,N
-        valid_pool = self.cache['pool_mask'][valid_alphadates_idx]
-
-        rows, cols = np.nonzero(valid_pool)
-        valid_ticks, valid_poolticks_idx, sub_idx = np.intersect1d(
-            self.poolfactor_ticks, self.ticks[cols], return_indices=True
-        )
-        valid_alphaticks_idx = cols[sub_idx]
-        
-        # 因子
-        alpha_arr = alpha_arr[:,valid_alphaticks_idx]
-        poolfactors = poolfactors.transpose(2,0,1)[valid_poolticks_idx,...].transpose(1,0,2)  # N,T,K -> T,N,K
-
-        T, N, K = poolfactors.shape
-        corr_res = Parallel(n_jobs=-1, batch_size=100)(
-            delayed(self.calc_pair_corr)(poolfactors, alpha_arr, i) for i in range(K)
-        )
-        ic_vals = np.array([r[1] for r in corr_res])
-        rankic_vals = np.array([r[2] for r in corr_res])
-        names = self.poolfactor_names
-
-        # -------------------- 取出绝对值最大的10个因子（分别对IC和RankIC）--------------------
-        top10_ic_idx = np.argsort(np.abs(ic_vals))[-10:][::-1]
-        top10_rankic_idx = np.argsort(np.abs(rankic_vals))[-10:][::-1]
-
-        # 构建 2×10 热力图数据
-        heatmap_data = np.array([
-            ic_vals[top10_ic_idx],
-            rankic_vals[top10_rankic_idx]
-        ])
-        xlabels_ic = [names[i] for i in top10_ic_idx]
-        xlabels_rankic = [names[i] for i in top10_rankic_idx]
-
-        # -------------------- 绘图 --------------------
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=DEFAULT_FIGSIZE)
-        cmap = plt.cm.RdBu_r
-        norm = plt.Normalize(-1, 1)
-
-        # 第一行：IC
-        im1 = ax1.imshow(heatmap_data[0:1, :], cmap=cmap, norm=norm, aspect='auto')
-        ax1.set_yticks([0])
-        ax1.set_yticklabels(['IC'])
-        ax1.set_xticks(range(10))
-        ax1.set_xticklabels(xlabels_ic, rotation=45, ha='right', fontsize=9)
-        for j, val in enumerate(heatmap_data[0]):
-            color = 'white' if abs(val) > 0.5 else 'black'
-            ax1.text(j, 0, f'{val:.3f}', ha='center', va='center', color=color, fontsize=9)
-
-        # 第二行：RankIC
-        ax2.imshow(heatmap_data[1:2, :], cmap=cmap, norm=norm, aspect='auto')
-        ax2.set_yticks([0])
-        ax2.set_yticklabels(['RankIC'])
-        ax2.set_xticks(range(10))
-        ax2.set_xticklabels(xlabels_rankic, rotation=45, ha='right', fontsize=9)
-        for j, val in enumerate(heatmap_data[1]):
-            color = 'white' if abs(val) > 0.5 else 'black'
-            ax2.text(j, 0, f'{val:.3f}', ha='center', va='center', color=color, fontsize=9)
-
-        fig.colorbar(im1, ax=[ax1, ax2], orientation='horizontal', pad=0.15, fraction=0.02, label='Correlation')
-        fig.suptitle('Top Redundant Factors', fontsize=13, fontweight='bold')
-        return fig
-    
-
+    # Spearman redundancy analyzer methods disabled per current FactorTest workflow; kept for future restoration.
+#     # 中文说明：`calc_pair_corr`：计算研究或生产指标。
+#     def calc_pair_corr(self, X, y, i):
+#         ic = np.nanmean(IC(X[:,:,i], y))
+#         rankic = np.nanmean(rankIC(X[:,:,i], y))
+#         return i, ic, rankic
+#
+#     # 中文说明：`plot_corr_redundancy`：绘制诊断图表。
+#     def plot_corr_redundancy(self, threshold=0.7):
+#         # 数据对齐
+#         K = len(self.poolfactor_names)
+#
+#         valid_dates = np.intersect1d(pd.to_datetime(self.poolfactor_dates), self.cache['dates'])
+#         valid_pooldates_idx = np.searchsorted(pd.to_datetime(self.poolfactor_dates), valid_dates)
+#         valid_alphadates_idx = np.searchsorted(self.cache['dates'], valid_dates)
+#
+#         alpha_arr = self.cache['alpha_df'].values[valid_alphadates_idx]
+#         poolfactors = self.poolfactors[valid_pooldates_idx]  # T,K,N
+#         valid_pool = self.cache['pool_mask'][valid_alphadates_idx]
+#
+#         rows, cols = np.nonzero(valid_pool)
+#         valid_ticks, valid_poolticks_idx, sub_idx = np.intersect1d(
+#             self.poolfactor_ticks, self.ticks[cols], return_indices=True
+#         )
+#         valid_alphaticks_idx = cols[sub_idx]
+#
+#         # 因子
+#         alpha_arr = alpha_arr[:,valid_alphaticks_idx]
+#         poolfactors = poolfactors.transpose(2,0,1)[valid_poolticks_idx,...].transpose(1,0,2)  # N,T,K -> T,N,K
+#
+#         T, N, K = poolfactors.shape
+#         corr_res = Parallel(n_jobs=-1, batch_size=100)(
+#             delayed(self.calc_pair_corr)(poolfactors, alpha_arr, i) for i in range(K)
+#         )
+#         ic_vals = np.array([r[1] for r in corr_res])
+#         rankic_vals = np.array([r[2] for r in corr_res])
+#         names = self.poolfactor_names
+#
+#         # -------------------- 取出绝对值最大的10个因子（分别对IC和RankIC）--------------------
+#         top10_ic_idx = np.argsort(np.abs(ic_vals))[-10:][::-1]
+#         top10_rankic_idx = np.argsort(np.abs(rankic_vals))[-10:][::-1]
+#
+#         # 构建 2×10 热力图数据
+#         heatmap_data = np.array([
+#             ic_vals[top10_ic_idx],
+#             rankic_vals[top10_rankic_idx]
+#         ])
+#         xlabels_ic = [names[i] for i in top10_ic_idx]
+#         xlabels_rankic = [names[i] for i in top10_rankic_idx]
+#
+#         # -------------------- 绘图 --------------------
+#         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=DEFAULT_FIGSIZE)
+#         cmap = plt.cm.RdBu_r
+#         norm = plt.Normalize(-1, 1)
+#
+#         # 第一行：IC
+#         im1 = ax1.imshow(heatmap_data[0:1, :], cmap=cmap, norm=norm, aspect='auto')
+#         ax1.set_yticks([0])
+#         ax1.set_yticklabels(['IC'])
+#         ax1.set_xticks(range(10))
+#         ax1.set_xticklabels(xlabels_ic, rotation=45, ha='right', fontsize=9)
+#         for j, val in enumerate(heatmap_data[0]):
+#             color = 'white' if abs(val) > 0.5 else 'black'
+#             ax1.text(j, 0, f'{val:.3f}', ha='center', va='center', color=color, fontsize=9)
+#
+#         # 第二行：RankIC
+#         ax2.imshow(heatmap_data[1:2, :], cmap=cmap, norm=norm, aspect='auto')
+#         ax2.set_yticks([0])
+#         ax2.set_yticklabels(['RankIC'])
+#         ax2.set_xticks(range(10))
+#         ax2.set_xticklabels(xlabels_rankic, rotation=45, ha='right', fontsize=9)
+#         for j, val in enumerate(heatmap_data[1]):
+#             color = 'white' if abs(val) > 0.5 else 'black'
+#             ax2.text(j, 0, f'{val:.3f}', ha='center', va='center', color=color, fontsize=9)
+#
+#         fig.colorbar(im1, ax=[ax1, ax2], orientation='horizontal', pad=0.15, fraction=0.02, label='Correlation')
+#         fig.suptitle('Top Redundant Factors', fontsize=13, fontweight='bold')
+#         return fig
+#
+#
     # 中文说明：`table_regime_stats`：生成诊断表格。
     def table_regime_stats(self, benchmark_ret=None, vol_window=20):
         dates = self.cache['dates']
@@ -983,47 +994,41 @@ class FactorAnalyzer:
         vol_regime = pd.Series("低波动", index=dates)
         vol_regime[vol > vol.median()] = "高波动"
 
-        size_names = ["小市值", "中市值", "大市值"]
-        size_ic_dict = {name: [] for name in size_names}
-        size_rankic_dict = {name: [] for name in size_names}
-        self.size_excessret_dict = {name: [] for name in size_names}
+        mask_data = self.loader.load_masks()
+        pool_masks = {
+            name: mask_data[key][self.cache['dates_idx']].astype(bool)
+            for name, key in self.pool_regime_specs
+            if key in mask_data
+        }
+        pool_ic_dict = {name: [] for name in pool_masks}
+        pool_rankic_dict = {name: [] for name in pool_masks}
+        self.pool_excessret_dict = {name: [] for name in pool_masks}
 
-        mv = pd.DataFrame(self.cache['mv_arr'], index=dates, columns=self.cache['alpha_df'].columns)
         alpha_df = self.cache['alpha_df']
         label_arr = self.cache['label_arr']
 
         for t, dt in enumerate(dates):
             a = alpha_df.iloc[t].values
             y = label_arr[t]
-            m = mv.iloc[t].values
-            valid = np.isfinite(a) & np.isfinite(y) & np.isfinite(m)
+            finite = np.isfinite(a) & np.isfinite(y)
 
-            day_values = {name: (np.nan, np.nan, np.nan) for name in size_names}
-            if valid.sum() >= 30:
-                a_valid, y_valid, m_valid = a[valid], y[valid], m[valid]
-                q1, q2 = np.nanquantile(m_valid, [1 / 3, 2 / 3])
-                masks = {
-                    "小市值": m_valid <= q1,
-                    "中市值": (m_valid > q1) & (m_valid <= q2),
-                    "大市值": m_valid > q2,
-                }
-                for name, mask in masks.items():
-                    if mask.sum() < 5:
-                        continue
-                    xx = a_valid[mask]
-                    yy = y_valid[mask]
+            for name, pool_mask in pool_masks.items():
+                valid = finite & pool_mask[t]
+                ic_val = rankic_val = excess_ret = np.nan
+                if valid.sum() >= 30:
+                    xx = a[valid]
+                    yy = y[valid]
                     bench_ret = float(np.nanmean(yy))
-                    one_row_alpha = pd.DataFrame([xx], index=[dt], columns=np.asarray(alpha_df.columns)[valid][mask])
+                    one_row_alpha = pd.DataFrame([xx], index=[dt], columns=np.asarray(alpha_df.columns)[valid])
                     holds = calc_holdings(one_row_alpha)
                     hold_arr = holds.where(holds == 1, 0).values if self.factor_type == 'long' else holds.values
                     ret = float(np.nanmean(yy * hold_arr.reshape(-1)))
-                    day_values[name] = (self._safe_pearson(xx, yy), self._safe_rank_corr(xx, yy), ret - bench_ret)
-
-            for name in size_names:
-                ic_val, rankic_val, excess_ret = day_values[name]
-                size_ic_dict[name].append(ic_val)
-                size_rankic_dict[name].append(rankic_val)
-                self.size_excessret_dict[name].append(excess_ret)
+                    ic_val = self._safe_pearson(xx, yy)
+                    rankic_val = self._safe_rank_corr(xx, yy)
+                    excess_ret = ret - bench_ret
+                pool_ic_dict[name].append(ic_val)
+                pool_rankic_dict[name].append(rankic_val)
+                self.pool_excessret_dict[name].append(excess_ret)
 
         # 中文说明：`calc_sub_stats`：计算研究或生产指标。
         def calc_sub_stats(mask, name):
@@ -1054,10 +1059,10 @@ class FactorAnalyzer:
             if mask.sum() > 20:
                 rows.append(calc_sub_stats(mask, name))
 
-        for name in size_names:
-            sub_ic = pd.Series(size_ic_dict[name], index=dates)
-            sub_rankic = pd.Series(size_rankic_dict[name], index=dates)
-            excess_ret = pd.Series(self.size_excessret_dict[name], index=dates)
+        for name in pool_masks:
+            sub_ic = pd.Series(pool_ic_dict[name], index=dates)
+            sub_rankic = pd.Series(pool_rankic_dict[name], index=dates)
+            excess_ret = pd.Series(self.pool_excessret_dict[name], index=dates)
             rows.append({
                 "Regime": name,
                 "Days": int(excess_ret.notna().sum()),
@@ -1080,7 +1085,7 @@ class FactorAnalyzer:
         dates = self.cache['dates']
         ret = self.cache['ret_df']['ret']
 
-        if not hasattr(self, 'size_excessret_dict'):
+        if not hasattr(self, 'pool_excessret_dict'):
             self.table_regime_stats(benchmark_ret=benchmark_ret)
 
         if benchmark_ret is None:
@@ -1108,9 +1113,9 @@ class FactorAnalyzer:
             sub_ret = ret.where(vol_regime == name, 0)
             ax.plot(dates, np.nancumsum(sub_ret), label=name, linestyle='dashed', linewidth=1.8)
 
-        for size_name, values in getattr(self, 'size_excessret_dict', {}).items():
+        for pool_name, values in getattr(self, 'pool_excessret_dict', {}).items():
             if len(values) == len(dates):
-                ax.plot(dates, np.nancumsum(values), label=size_name, linestyle='dotted', linewidth=1.8)
+                ax.plot(dates, np.nancumsum(values), label=pool_name, linestyle='dotted', linewidth=1.8)
 
         ax.set_title("Factor Cumulative Return by Market Regime")
         ax.set_xlabel("Date")

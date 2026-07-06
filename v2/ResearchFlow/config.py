@@ -11,6 +11,12 @@ class PortfolioRoute(str, Enum):
     UNIFIED_ALPHA = "unified_alpha"
 
 
+class StrategyType(str, Enum):
+    LONG_ONLY = "long_only"
+    INDEX_ENHANCED = "index_enhanced"
+    MARKET_NEUTRAL = "market_neutral"
+
+
 @dataclass(frozen=True)
 class PreprocessConfig:
     winsor_method: str = "mad"
@@ -20,8 +26,8 @@ class PreprocessConfig:
 
 @dataclass(frozen=True)
 class FamilyConfig:
-    corr_threshold: float = 0.85
-    ic_corr_threshold: float = 0.80
+    corr_threshold: float = 0.70
+    ic_corr_threshold: float = 0.70
     min_ic_obs: int = 60
     representative_metric: str = "icir"
     clustering_method: str = "greedy"
@@ -56,6 +62,17 @@ class SleeveConfig:
 
 
 @dataclass(frozen=True)
+class RiskConfig:
+    factor_halflife: float = 60.0
+    specific_halflife: float = 60.0
+    newey_west_lags: int = 5
+    covariance_shrinkage: float = 0.20
+    specific_shrinkage: float = 0.20
+    variance_floor: float = 1e-8
+    annualization: float = 252.0
+
+
+@dataclass(frozen=True)
 class OptimizerConfig:
     max_stock_weight: float = 0.02
     max_turnover: float | None = 0.40
@@ -64,6 +81,23 @@ class OptimizerConfig:
     industry_lower: float | None = None
     benchmark_blend: float = 0.0
     turnover_penalty: float = 0.0
+
+    strategy: StrategyType = StrategyType.LONG_ONLY
+    min_weight: float = 0.0
+    max_weight: float = 0.05
+    max_active_weight: float = 0.02
+    net_exposure: float = 0.0
+    gross_exposure: float = 1.0
+    risk_aversion: float = 8.0
+    linear_cost_penalty: float = 1.0
+    impact_cost_penalty: float = 1.0
+    tracking_error_limit: float | None = None
+    benchmark_constituents_only: bool = False
+    benchmark_weight_tolerance: float = 1e-8
+    exposure_lower: dict[int, float] = field(default_factory=dict)
+    exposure_upper: dict[int, float] = field(default_factory=dict)
+    solver: str = "CLARABEL"
+    solver_options: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -91,4 +125,5 @@ class ResearchFlowV2Config:
     family: FamilyConfig = field(default_factory=FamilyConfig)
     alpha: AlphaConfig = field(default_factory=AlphaConfig)
     sleeve: SleeveConfig = field(default_factory=SleeveConfig)
+    risk: RiskConfig = field(default_factory=RiskConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)

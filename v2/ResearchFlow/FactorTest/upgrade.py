@@ -170,12 +170,13 @@ CAUSE_ACTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("总收益对单风格较敏感", "降低该风格在因子中的载荷"),
         ("风格中性收益尚未验证", "使用风格中性残差因子"),
     ),
-    "plot_corr_redundancy": (
-        ("与存量因子最大相关偏高", "对最高相关因子残差化"),
-        ("整体平均相关偏高", "对高相关因子逐一残差化"),
-        ("独立信息占比不足", "仅保留对存量因子的正交残差"),
-        ("相关性控制不足", "用正交化重构因子"),
-    ),
+    # Spearman redundancy upgrade mapping disabled per current FactorTest workflow.
+#     "plot_corr_redundancy": (
+#         ("与存量因子最大相关偏高", "对最高相关因子残差化"),
+#         ("整体平均相关偏高", "对高相关因子逐一残差化"),
+#         ("独立信息占比不足", "仅保留对存量因子的正交残差"),
+#         ("相关性控制不足", "用正交化重构因子"),
+#     ),
     "table_regime_stats": (
         ("Sharpe为正的状态覆盖不足", "按状态标准化因子尺度"),
         ("状态间收益稳定性不足", "加入状态条件的因子权重"),
@@ -352,12 +353,13 @@ SOURCE_INFERENCES: dict[str, tuple[str, ...]] = {
         "总收益对单风格依赖较高",
         "风格中性Alpha尚不明确",
     ),
-    "plot_corr_redundancy": (
-        "收益可能来自存量因子的共性信息",
-        "收益独立来源占比偏低",
-        "新增Alpha信息有限",
-        "收益来源与存量因子重叠",
-    ),
+    # Spearman redundancy upgrade mapping disabled per current FactorTest workflow.
+#     "plot_corr_redundancy": (
+#         "收益可能来自存量因子的共性信息",
+#         "收益独立来源占比偏低",
+#         "新增Alpha信息有限",
+#         "收益来源与存量因子重叠",
+#     ),
     "table_regime_stats": (
         "收益集中于少数市场状态",
         "收益来源具有状态依赖",
@@ -477,7 +479,7 @@ def _diagnose_metrics(func_name: str, actual: str) -> list[tuple[str, int]]:
         sharpe = _metric(metrics, "sharpe")
         annret = _metric(metrics, "annret")
         maxdd = _metric(metrics, "maxdd")
-        worst_year_sharpe = _metric(metrics, "最差年度sharpe")
+        worst_year_sharpe = _metric(metrics, "最差年度sharpe", "worst_year_sharpe", "������sharpe")
         _add_issue(found, sharpe is not None and sharpe < 1.0, f"Sharpe仅为{sharpe:.2f}", 0)
         _add_issue(found, annret is not None and annret < 0.10, f"年化收益仅为{annret:.2%}", 1)
         _add_issue(found, maxdd is not None and maxdd > 0.20, f"最大回撤达到{maxdd:.2%}", 3)
@@ -589,11 +591,12 @@ def _diagnose_metrics(func_name: str, actual: str) -> list[tuple[str, int]]:
     elif func_name == "plot_barra_exposure_ret":
         contribution = _metric(metrics, "最大单barra收益贡献")
         _add_issue(found, contribution is not None and contribution > 0.30, f"最大单Barra收益贡献达到{contribution:.2%}", 0)
-    elif func_name == "plot_corr_redundancy":
-        max_corr = _metric(metrics, "最大相关")
-        avg_corr = _metric(metrics, "平均相关")
-        _add_issue(found, max_corr is not None and max_corr >= 0.60, f"最大相关达到{max_corr:.3f}", 0)
-        _add_issue(found, avg_corr is not None and avg_corr > 0.30, f"平均相关达到{avg_corr:.3f}", 1)
+    # Spearman redundancy diagnose branch disabled per current FactorTest workflow.
+#     elif func_name == "plot_corr_redundancy":
+#         max_corr = _metric(metrics, "最大相关")
+#         avg_corr = _metric(metrics, "平均相关")
+#         _add_issue(found, max_corr is not None and max_corr >= 0.60, f"最大相关达到{max_corr:.3f}", 0)
+#         _add_issue(found, avg_corr is not None and avg_corr > 0.30, f"平均相关达到{avg_corr:.3f}", 1)
     elif func_name == "table_regime_stats":
         sharpe_ratio = _metric(metrics, "sharpe>0占比")
         ic_ratio = _metric(metrics, "ic>0占比")

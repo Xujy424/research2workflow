@@ -1,4 +1,4 @@
-﻿"""Launch the FactorTest Streamlit report.
+"""Launch or serve the FactorTest Streamlit report.
 
 Examples
 --------
@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+_STREAMLIT_APP_ENV = "RESEARCHFLOW_FACTORTEST_STREAMLIT_APP"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the FactorTest factor report web app.")
@@ -26,14 +28,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def launch() -> int:
     args = parse_args()
-    script = Path(__file__).with_name("report_app.py").resolve()
-    v2_root = Path(__file__).resolve().parents[2]
+    script = Path(__file__).resolve()   # 当前脚本自己的绝对路径
+    v2_root = script.parents[2]         # v2目录路径
 
     env = os.environ.copy()
-    old_pythonpath = env.get("PYTHONPATH", "")
+    old_pythonpath = env.get("PYTHONPATH", "")    # 把v2加到PYTHONPATH里面这样子进程可以import
     env["PYTHONPATH"] = str(v2_root) if not old_pythonpath else f"{v2_root}{os.pathsep}{old_pythonpath}"
+    env[_STREAMLIT_APP_ENV] = "1"
 
     passthrough = list(args.streamlit_args)
     if passthrough and passthrough[0] == "--":
@@ -56,12 +59,20 @@ def main() -> int:
         *passthrough,
     ]
     try:
-        return subprocess.call(command, env=env)
+        return subprocess.call(command, env=env)   # 启动Streamlit子进程，并把刚才配置好的环境变量传进去
     except ModuleNotFoundError:
         print("streamlit is not installed in the current Python environment.", file=sys.stderr)
         print("Install it or switch to the environment used by FactorTest, then rerun this script.", file=sys.stderr)
         return 1
 
 
+def serve() -> None:
+    from ResearchFlow.FactorTest.web import main
+    main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if os.environ.get(_STREAMLIT_APP_ENV) == "1":
+        serve()
+    else:
+        raise SystemExit(launch())
