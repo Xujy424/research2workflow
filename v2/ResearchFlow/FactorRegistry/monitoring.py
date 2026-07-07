@@ -13,6 +13,13 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from ..matrix_math import (
+    IC,
+    rankIC,
+    calc_group_ret,
+    calc_maxdrawdown,
+    robust_extreme_ratio_by_row,
+)
 from .registry import FactorStatus
 
 
@@ -79,44 +86,51 @@ class FactorMonitor:
             if valid_mask.shape != x.shape:
                 raise ValueError(f"mask shape mismatch: {valid_mask.shape} vs {x.shape}")
 
+        factor_valid = valid_mask & np.isfinite(x)
+        valid = factor_valid & np.isfinite(y)
+        n_total = valid_mask.sum(axis=1)
+        n_valid = valid.sum(axis=1)
         date_index = list(dates) if dates is not None else list(range(x.shape[0]))
-        records: list[dict[str, Any]] = []
-        for i, dt in enumerate(date_index):
-            xi = x[i]
-            yi = y[i]
-            row_mask = valid_mask[i]
-            factor_valid = row_mask & np.isfinite(xi)
-            valid = factor_valid & np.isfinite(yi)
-            base = {
-                "date": dt,
-                "n_total": int(row_mask.sum()),
-                "n_valid": int(valid.sum()),
-                "coverage": _safe_ratio(valid.sum(), row_mask.sum()),
-                "nan_ratio": 1.0 - _safe_ratio(factor_valid.sum(), row_mask.sum()),
-                "extreme_ratio": robust_extreme_ratio(xi[row_mask], self.config.extreme_mad_multiple),
-            }
-            if valid.sum() < self.config.min_obs:
-                records.append({
-                    **base,
-                    "ic": np.nan,
-                    "rank_ic": np.nan,
-                    "long_short_return": np.nan,
-                    "top_return": np.nan,
-                    "bottom_return": np.nan,
-                    "group_monotonicity": np.nan,
-                    "group_spread_return": np.nan,
-                })
-                continue
 
-            xv = xi[valid]
-            yv = yi[valid]
-            records.append({
-                **base,
-                "ic": corr_1d(xv, yv),
-                "rank_ic": corr_1d(rank_1d(xv), rank_1d(yv)),
-                **long_short_metrics(xv, yv, self.config),
-            })
-        return pd.DataFrame(records).sort_values("date").reset_index(drop=True)
+        ic = IC(np.where(valid_mask, x, np.nan), y)
+        rank_ic = rankIC(np.where(valid_mask, x, np.nan), y)
+        alpha_df = pd.DataFrame(np.where(valid_mask, x, np.nan), index=date_index)
+        group_ret_df = calc_group_ret(alpha_df, y, num_group=self.config.n_groups)
+        group_ret = group_ret_df.to_numpy(dtype=float)
+        group_axis = np.broadcast_to(group_ret_df.columns.to_numpy(dtype=float), group_ret.shape)
+        monotonicity = IC(group_axis, group_ret)
+        bottom_ret = group_ret_df[10].to_numpy(dtype=float)
+        top_ret = group_ret_df[1].to_numpy(dtype=float)
+        ls_ret = top_ret - bottom_ret
+        group_spread = ls_ret.copy()
+
+        out = pd.DataFrame({
+            "date": date_index,
+            "n_total": n_total.astype(int),
+            "n_valid": n_valid.astype(int),
+            "coverage": np.divide(n_valid, n_total, out=np.full(x.shape[0], np.nan, dtype=float), where=n_total > 0),
+            "nan_ratio": 1.0 - np.divide(factor_valid.sum(axis=1), n_total, out=np.full(x.shape[0], np.nan, dtype=float), where=n_total > 0),
+            "extreme_ratio": robust_extreme_ratio_by_row(x, mad_multiple=self.config.extreme_mad_multiple, mask=valid_mask),
+            "ic": ic,
+            "rank_ic": rank_ic,
+            "long_short_return": ls_ret,
+            "top_return": top_ret,
+            "bottom_return": bottom_ret,
+            "group_monotonicity": monotonicity,
+            "group_spread_return": group_spread,
+        })
+        insufficient = n_valid < self.config.min_obs
+        metric_cols = [
+            "ic",
+            "rank_ic",
+            "long_short_return",
+            "top_return",
+            "bottom_return",
+            "group_monotonicity",
+            "group_spread_return",
+        ]
+        out.loc[insufficient, metric_cols] = np.nan
+        return out.sort_values("date").reset_index(drop=True)
 
     def add_rolling_metrics(self, daily_perf: pd.DataFrame) -> pd.DataFrame:
         out = daily_perf.sort_values("date").copy()
@@ -134,7 +148,7 @@ class FactorMonitor:
             out[f"ic_hit_rate_{window}"] = ric.gt(0.0).rolling(window).mean()
             out[f"ls_ret_mean_{window}"] = ls_mean
             out[f"ls_ret_sharpe_{window}"] = ls_mean / ls_std.replace(0.0, np.nan)
-            out[f"ls_max_drawdown_{window}"] = ls_ret.rolling(window).apply(max_drawdown, raw=False)
+            out[f"ls_max_drawdown_{window}"] = ls_ret.rolling(window).apply(calc_maxdrawdown, raw=False)
             out[f"monotonicity_mean_{window}"] = mono.rolling(window).mean()
         return out
 
@@ -254,87 +268,6 @@ class FactorMonitor:
             max_corr_with_production=max_corr_with_production,
         )
         return rolling, summary, decision
-
-
-def long_short_metrics(x: np.ndarray, y: np.ndarray, config: FactorMonitorConfig) -> dict[str, float]:
-    top_cut = np.nanquantile(x, 1.0 - config.top_quantile)
-    bottom_cut = np.nanquantile(x, config.bottom_quantile)
-    top = y[x >= top_cut]
-    bottom = y[x <= bottom_cut]
-    top_return = float(np.nanmean(top)) if top.size else np.nan
-    bottom_return = float(np.nanmean(bottom)) if bottom.size else np.nan
-    ls_return = top_return - bottom_return if np.isfinite(top_return) and np.isfinite(bottom_return) else np.nan
-
-    order = np.argsort(x, kind="mergesort")
-    groups = np.array_split(order, max(2, config.n_groups))
-    group_ret = np.array([np.nanmean(y[idx]) if len(idx) else np.nan for idx in groups], dtype=float)
-    mono = corr_1d(np.arange(group_ret.size, dtype=float), group_ret) if np.isfinite(group_ret).sum() >= 2 else np.nan
-    spread = group_ret[-1] - group_ret[0] if np.isfinite(group_ret[[0, -1]]).all() else np.nan
-    return {
-        "long_short_return": float(ls_return),
-        "top_return": top_return,
-        "bottom_return": bottom_return,
-        "group_monotonicity": float(mono),
-        "group_spread_return": float(spread),
-    }
-
-
-def calc_factor_correlation_snapshot(target: np.ndarray, production_factors: Mapping[str, np.ndarray], *, min_obs: int = 30) -> pd.DataFrame:
-    x = np.asarray(target, dtype=float)
-    rows: list[dict[str, Any]] = []
-    for t in range(x.shape[0]):
-        row: dict[str, Any] = {"row": t}
-        for name, values in production_factors.items():
-            y = np.asarray(values, dtype=float)
-            if y.shape != x.shape:
-                raise ValueError(f"production factor {name} shape mismatch: {y.shape} vs {x.shape}")
-            valid = np.isfinite(x[t]) & np.isfinite(y[t])
-            row[f"corr_{name}"] = corr_1d(rank_1d(x[t, valid]), rank_1d(y[t, valid])) if valid.sum() >= min_obs else np.nan
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def rank_1d(x: np.ndarray) -> np.ndarray:
-    values = np.asarray(x, dtype=float)
-    order = np.argsort(values, kind="mergesort")
-    ranks = np.empty(values.size, dtype=float)
-    ranks[order] = np.arange(values.size, dtype=float)
-    return ranks
-
-
-def corr_1d(x: np.ndarray, y: np.ndarray) -> float:
-    valid = np.isfinite(x) & np.isfinite(y)
-    if valid.sum() < 2:
-        return np.nan
-    xv = x[valid] - np.nanmean(x[valid])
-    yv = y[valid] - np.nanmean(y[valid])
-    denom = np.sqrt(np.sum(xv * xv) * np.sum(yv * yv))
-    return float(np.sum(xv * yv) / denom) if denom > 1e-12 else np.nan
-
-
-def robust_extreme_ratio(x: np.ndarray, mad_multiple: float = 5.0) -> float:
-    valid = np.asarray(x, dtype=float)
-    valid = valid[np.isfinite(valid)]
-    if valid.size == 0:
-        return np.nan
-    median = np.nanmedian(valid)
-    mad = np.nanmedian(np.abs(valid - median))
-    if not np.isfinite(mad) or mad <= 1e-12:
-        return float(np.mean(np.abs(valid - median) > 1e-12))
-    return float(np.mean(np.abs(valid - median) > mad_multiple * mad))
-
-
-def max_drawdown(ret: pd.Series) -> float:
-    arr = ret.fillna(0.0).astype(float).to_numpy()
-    if arr.size == 0:
-        return np.nan
-    nav = np.cumprod(1.0 + arr)
-    peak = np.maximum.accumulate(nav)
-    return float(np.nanmin(nav / peak - 1.0))
-
-
-def _safe_ratio(num: int | float, den: int | float) -> float:
-    return float(num / den) if den else np.nan
 
 
 def _get(metrics: Mapping[str, Any], key: str, default: float) -> float:
