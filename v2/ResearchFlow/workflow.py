@@ -13,7 +13,6 @@ from .matrix_store import MatrixStore
 from .FactorComb.alpha import UnifiedAlphaPath, UnifiedAlphaResult
 from .FactorComb.family import FactorFamilyBuilder, FamilyBuildResult
 from .Portfolio import PortfolioProjectionResult, StockWeightProjector
-from .FactorComb.preprocess import FactorPoolPreprocessor
 from .FactorComb.sleeve import SleevePath, SleeveResult
 
 
@@ -52,12 +51,10 @@ class ResearchToPortfolioWorkflow:
             raise ValueError("no production or shadow factors are registered")
         names = tuple(meta.storage_field for meta in metas)
         families = {meta.storage_field: meta.family for meta in metas}
-        raw = self._load_factor_cube(metas)
+        factors = self._load_factor_cube(metas)
         tradable = self._read_or_default(self.config.tradable_category, self.config.tradable_field, True).astype(bool)
         industry = self._read_or_default(self.config.industry_category, self.config.industry_field, np.nan)
-        market_cap = self._read_or_default(self.config.market_cap_category, self.config.market_cap_field, np.nan)
         labels = self._read_or_default(self.config.label_category, self.config.label_field, np.nan)
-        factors = self._preprocess(raw, tradable, industry, market_cap)
 
         family = FactorFamilyBuilder(self.config.family).build(
             factors,
@@ -99,22 +96,12 @@ class ResearchToPortfolioWorkflow:
 
     def _load_factor_cube(self, metas: list[object]) -> np.ndarray:
         arrays = [
-            np.asarray(self.store.open_matrix(meta.category, meta.storage_field, dtype=meta.dtype), dtype=float)
+            np.asarray(self.store.open_matrix(
+                meta.category, meta.storage_field, dtype=meta.dtype
+                ), dtype=float)
             for meta in metas
         ]
         return np.stack(arrays, axis=2)
-
-    def _preprocess(self, raw: np.ndarray, tradable: np.ndarray, industry: np.ndarray, market_cap: np.ndarray) -> np.ndarray:
-        return FactorPoolPreprocessor(
-            winsor_method=self.config.preprocess.winsor_method,
-            standardize=self.config.preprocess.standardize,
-            neutralize=self.config.preprocess.neutralize,
-        ).transform(
-            raw,
-            tradable=tradable,
-            industry=industry,
-            market_cap=market_cap,
-        )
 
     def _read_or_default(self, category: str, field: str, default: float | bool) -> np.ndarray:
         axis = self.store.load_axis()

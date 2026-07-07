@@ -1,4 +1,4 @@
-﻿from .monitoring import FactorMonitor, FactorMonitorConfig, LifecycleDecision, calc_factor_correlation_snapshot
+﻿from .monitoring import FactorMonitor, FactorMonitorConfig, LifecycleDecision
 from .registry import (
     FactorDecisionLog,
     FactorLifecycleEvent,
@@ -18,5 +18,4 @@ __all__ = [
     "FactorRegistry",
     "FactorStatus",
     "LifecycleDecision",
-    "calc_factor_correlation_snapshot",
 ]

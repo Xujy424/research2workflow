@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..config import AlphaConfig
-from ..matrix_math import cap_and_renormalize, cross_sectional_zscore, nan_corr_by_row
+from ..matrix_math import cap_and_renormalize, cross_sectional_zscore, rankIC
 from ..Portfolio.risk import nearest_psd
 from .alpha_models import DynamicLinearAlpha, WalkForwardSklearnAlpha
 
@@ -94,7 +94,10 @@ class UnifiedAlphaPath:
         out = np.full((family_scores.shape[0], family_scores.shape[2]), np.nan, dtype=float)
         y = np.where(mask, labels, np.nan)
         for k in range(family_scores.shape[2]):
-            out[:, k] = nan_corr_by_row(family_scores[:, :, k], y, rank=True)
+            x = np.where(mask, family_scores[:, :, k], np.nan)
+            ic = rankIC(x, y)
+            valid_count = np.sum(np.isfinite(x) & np.isfinite(y), axis=1)
+            out[:, k] = np.where(valid_count >= 20, ic, np.nan)
         return out
 
     def _weights(self, family_ic: np.ndarray) -> np.ndarray:

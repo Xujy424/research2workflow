@@ -18,20 +18,21 @@ class StrategyType(str, Enum):
 
 
 @dataclass(frozen=True)
-class PreprocessConfig:
-    winsor_method: str = "mad"
-    standardize: bool = True
-    neutralize: bool = True
-
-
-@dataclass(frozen=True)
 class FamilyConfig:
     corr_threshold: float = 0.70
     ic_corr_threshold: float = 0.70
     min_ic_obs: int = 60
     representative_metric: str = "icir"
     clustering_method: str = "greedy"
+    distance_threshold: float = 0.30
+    transform_method: str = "raw"
+    orthogonalization: str = "symmetric"
+    transform_ridge: float = 1e-6
+    n_components: int = 3
+    min_component_abs_ic: float = 0.0
+    min_component_abs_icir: float = 0.0
     composite_method: str = "icir"
+    lookback: int = 252
     max_member_weight: float = 0.50
 
 
@@ -121,7 +122,6 @@ class ResearchFlowV2Config:
     output_weight_field: str = "target_weight"
     output_alpha_category: str = "factorpool"
     output_alpha_field: str = "composite_alpha"
-    preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     family: FamilyConfig = field(default_factory=FamilyConfig)
     alpha: AlphaConfig = field(default_factory=AlphaConfig)
     sleeve: SleeveConfig = field(default_factory=SleeveConfig)

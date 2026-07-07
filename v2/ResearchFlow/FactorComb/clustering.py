@@ -56,8 +56,9 @@ class FactorClusterer:
         corr_threshold: float = 0.85,
         ic_corr_threshold: float = 0.80,
     ) -> ClusterResult:
-        n = len(quality)
-        ordered = sorted(range(n), key=lambda i: quality[i], reverse=True)
+        score = np.nan_to_num(np.asarray(quality, dtype=float), nan=-np.inf)
+        n = len(score)
+        ordered = sorted(range(n), key=lambda i: score[i], reverse=True)
         selected: list[int] = []
         labels = np.zeros(n, dtype=int)
         for i in ordered:
@@ -75,7 +76,7 @@ class FactorClusterer:
             else:
                 labels[i] = duplicate_of
         if not selected and n:
-            selected = [int(np.nanargmax(quality))]
+            selected = [int(np.nanargmax(score))]
             labels[selected[0]] = 1
         return ClusterResult(
             labels=labels,
@@ -90,7 +91,8 @@ class FactorClusterer:
         *,
         distance_threshold: float = 0.30,
     ) -> ClusterResult:
-        n = len(quality)
+        score = np.nan_to_num(np.asarray(quality, dtype=float), nan=-np.inf)
+        n = len(score)
         if n == 0:
             return ClusterResult(np.array([], dtype=int), np.array([], dtype=int), "hierarchical")
         if n == 1:
@@ -102,35 +104,10 @@ class FactorClusterer:
         reps = []
         for cluster_id in sorted(np.unique(labels)):
             idx = np.flatnonzero(labels == cluster_id)
-            reps.append(idx[np.nanargmax(quality[idx])])
+            reps.append(idx[np.nanargmax(score[idx])])
         return ClusterResult(
             labels=labels.astype(int),
             representatives=np.asarray(reps, dtype=int),
             method="hierarchical",
             linkage_matrix=z,
         )
-
-
-def factor_correlation(factors: np.ndarray, *, mask: np.ndarray | None = None) -> np.ndarray:
-    if factors.ndim != 3:
-        raise ValueError("factors must have shape T x N x K")
-    k = factors.shape[2]
-    flat = factors.reshape(-1, k)
-    if mask is not None:
-        flat = np.where(mask.reshape(-1, 1), flat, np.nan)
-    out = np.eye(k, dtype=float)
-    for i in range(k):
-        for j in range(i + 1, k):
-            valid = np.isfinite(flat[:, i]) & np.isfinite(flat[:, j])
-            out[i, j] = out[j, i] = np.corrcoef(flat[valid, i], flat[valid, j])[0, 1] if valid.sum() >= 20 else 0.0
-    return out
-
-
-def time_series_corr(values: np.ndarray) -> np.ndarray:
-    k = values.shape[1]
-    out = np.eye(k, dtype=float)
-    for i in range(k):
-        for j in range(i + 1, k):
-            valid = np.isfinite(values[:, i]) & np.isfinite(values[:, j])
-            out[i, j] = out[j, i] = np.corrcoef(values[valid, i], values[valid, j])[0, 1] if valid.sum() >= 20 else 0.0
-    return out

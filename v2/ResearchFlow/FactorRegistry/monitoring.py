@@ -99,8 +99,8 @@ class FactorMonitor:
         group_ret = group_ret_df.to_numpy(dtype=float)
         group_axis = np.broadcast_to(group_ret_df.columns.to_numpy(dtype=float), group_ret.shape)
         monotonicity = IC(group_axis, group_ret)
-        bottom_ret = group_ret_df[10].to_numpy(dtype=float)
-        top_ret = group_ret_df[1].to_numpy(dtype=float)
+        bottom_ret = group_ret_df.iloc[:, 0].to_numpy(dtype=float)
+        top_ret = group_ret_df.iloc[:, -1].to_numpy(dtype=float)
         ls_ret = top_ret - bottom_ret
         group_spread = ls_ret.copy()
 

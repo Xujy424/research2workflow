@@ -19,7 +19,8 @@ def rolling_icir_weights(
     out = np.full((n_dates, n_items), 1.0 / n_items, dtype=float)
     for t in range(n_dates):
         hist = ic[max(0, t - lookback):t]
-        if len(hist) < min_periods:
+        valid_count = np.isfinite(hist).sum(axis=0)
+        if len(hist) < min_periods or valid_count.max(initial=0) < min_periods:
             continue
         mean = np.nanmean(hist, axis=0)
         std = np.nanstd(hist, axis=0)

@@ -102,34 +102,6 @@ def rankIC(y_, y):
     return rank_ics
 
 
-def nan_corr_by_row(x: np.ndarray, y: np.ndarray, *, rank: bool = False, min_obs: int = 20) -> np.ndarray:
-    left = np.asarray(x, dtype=float)
-    right = np.asarray(y, dtype=float)
-    out = rankIC(left, right) if rank else IC(left, right)
-    valid_count = np.sum(np.isfinite(left) & np.isfinite(right), axis=-1)
-    return np.where(valid_count >= min_obs, out, np.nan)
-
-
-def rank_1d(x: np.ndarray) -> np.ndarray:
-    values = np.asarray(x, dtype=float)
-    out = np.full(values.shape, np.nan, dtype=float)
-    valid = np.isfinite(values)
-    if valid.sum() == 0:
-        return out
-    out[valid] = bn.nanrankdata(values[valid], axis=-1)
-    return out
-
-
-def corr_1d(x: np.ndarray, y: np.ndarray, *, min_obs: int = 2) -> float:
-    left = np.asarray(x, dtype=float)
-    right = np.asarray(y, dtype=float)
-    valid = np.isfinite(left) & np.isfinite(right)
-    if valid.sum() < min_obs:
-        return np.nan
-    value = corr(left[valid], right[valid], axis=0)
-    return float(value) if np.isfinite(value) else np.nan
-
-
 # ---------------------------------------------------------------------------
 # Neutralization
 # ---------------------------------------------------------------------------
@@ -141,6 +113,7 @@ def neutralize_by_exposures(
     weights: np.ndarray | None = None,
     add_intercept: bool = True,
     min_obs: int | None = None,
+    ridge: float = 1e-8,
 ) -> np.ndarray:
     target = np.asarray(y, dtype=float)
     x = np.asarray(exposures, dtype=float)
@@ -165,10 +138,19 @@ def neutralize_by_exposures(
             design = np.column_stack([np.ones(ok.sum()), design])
         yy = target[t, ok]
         if weights is None:
-            beta = np.linalg.lstsq(design, yy, rcond=None)[0]
+            xtx = design.T @ design
+            xty = design.T @ yy
         else:
-            sqrt_w = np.sqrt(w_all[t, ok])
-            beta = np.linalg.lstsq(design * sqrt_w[:, None], yy * sqrt_w, rcond=None)[0]
+            ww = w_all[t, ok]
+            xtx = design.T @ (design * ww[:, None])
+            xty = design.T @ (yy * ww)
+        penalty = ridge * np.eye(xtx.shape[0], dtype=float)
+        if add_intercept:
+            penalty[0, 0] = 0.0
+        try:
+            beta = np.linalg.solve(xtx + penalty, xty)
+        except np.linalg.LinAlgError:
+            beta = np.linalg.pinv(xtx + penalty) @ xty
         out[t, ok] = yy - design @ beta
     return out
 
