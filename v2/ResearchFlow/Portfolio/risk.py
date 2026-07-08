@@ -1,4 +1,4 @@
-﻿"""Lightweight matrix risk helpers for portfolio construction."""
+﻿"""Factor risk helpers for portfolio construction."""
 
 from __future__ import annotations
 
@@ -6,48 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
-@dataclass(frozen=True)
-class RiskEstimate:
-    covariance: np.ndarray
-    specific_var: np.ndarray
-    diagnostics: dict[str, float]
-
-
-def nearest_psd(matrix: np.ndarray, floor: float = 1e-10) -> np.ndarray:
-    symmetric = (matrix + matrix.T) / 2
-    values, vectors = np.linalg.eigh(symmetric)
-    values = np.maximum(values, floor)
-    repaired = (vectors * values) @ vectors.T
-    return (repaired + repaired.T) / 2
-
-
-class MatrixRiskModel:
-    """Estimate stock covariance from returns with diagonal shrinkage."""
-
-    def __init__(self, *, shrinkage: float = 0.30, variance_floor: float = 1e-8) -> None:
-        self.shrinkage = shrinkage
-        self.variance_floor = variance_floor
-
-    def fit(self, returns: np.ndarray, *, lookback: int | None = None) -> RiskEstimate:
-        hist = np.asarray(returns[-lookback:] if lookback else returns, dtype=float)
-        hist = hist[np.isfinite(hist).all(axis=1)]
-        if len(hist) < 2:
-            raise ValueError("insufficient clean return history")
-        cov = np.cov(hist, rowvar=False)
-        diag = np.diag(np.diag(cov))
-        cov = (1.0 - self.shrinkage) * cov + self.shrinkage * diag
-        cov = nearest_psd(cov, self.variance_floor)
-        return RiskEstimate(
-            covariance=cov,
-            specific_var=np.maximum(np.diag(cov), self.variance_floor),
-            diagnostics={
-                "condition_number": float(np.linalg.cond(cov)),
-                "min_eigenvalue": float(np.linalg.eigvalsh(cov).min()),
-            },
-        )
-
-
+from ..matrix_math import nearest_psd
 
 
 @dataclass(frozen=True)
@@ -60,7 +19,7 @@ class FactorRiskEstimate:
     diagnostics: dict[str, float]
 
 
-class MatrixFactorRiskModel:
+class FactorRiskModel:
     """Barra-style factor risk model on matrix inputs."""
 
     def __init__(
@@ -201,21 +160,3 @@ def exponential_weights(length: int, halflife: float) -> np.ndarray:
     weights = np.power(0.5, ages / max(float(halflife), 1e-12))
     return weights / weights.sum()
 
-
-def risk_attribution(weights: np.ndarray, exposures: np.ndarray, factor_covariance: np.ndarray, specific_var: np.ndarray) -> dict[str, np.ndarray | float]:
-    w = np.asarray(weights, dtype=float).reshape(-1)
-    x = np.asarray(exposures, dtype=float)
-    factor_cov = np.asarray(factor_covariance, dtype=float)
-    spec = np.asarray(specific_var, dtype=float).reshape(-1)
-    factor_exposure = x.T @ w
-    factor_contribution = factor_exposure * (factor_cov @ factor_exposure)
-    specific_contribution = float(np.sum((w * w) * spec))
-    total = float(factor_contribution.sum() + specific_contribution)
-    return {
-        "factor_exposure": factor_exposure,
-        "factor_variance_contribution": factor_contribution,
-        "specific_variance_contribution": specific_contribution,
-        "total_variance": total,
-        "factor_share": factor_contribution / total if total > 1e-12 else np.full_like(factor_contribution, np.nan),
-        "specific_share": specific_contribution / total if total > 1e-12 else np.nan,
-    }

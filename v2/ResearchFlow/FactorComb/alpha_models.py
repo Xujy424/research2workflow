@@ -110,7 +110,10 @@ class WalkForwardSklearnAlpha:
 
 
 class DynamicLinearAlpha:
-    """Recursive least squares alpha with drifting coefficients."""
+    """
+    递推最小二乘：Recursive least squares alpha with drifting coefficients.
+    适合因子收益结构缓慢变化、需要日频自适应的场景
+    """
 
     def __init__(self, config: AlphaConfig, *, forgetting_factor: float = 0.99, initial_uncertainty: float = 100.0) -> None:
         self.config = config
@@ -136,6 +139,19 @@ class DynamicLinearAlpha:
                 beta = beta + gain * (y - x @ beta)
                 covariance = (covariance - np.outer(gain, x) @ covariance) / self.forgetting_factor
         return AlphaModelResult(cross_sectional_zscore(alpha, mask=mask), coef)
+
+
+def simple_rank_target(values: np.ndarray) -> np.ndarray:
+    target = np.asarray(values, dtype=float).reshape(-1)
+    finite = np.isfinite(target)
+    out = np.zeros_like(target, dtype=float)
+    if finite.sum() <= 1:
+        return out
+    order = np.argsort(target[finite], kind="mergesort")
+    ranks = np.empty(finite.sum(), dtype=float)
+    ranks[order] = (np.arange(finite.sum(), dtype=float) + 0.5) / finite.sum() - 0.5
+    out[finite] = ranks
+    return out
 
 
 def model_importance(model: object, n_features: int) -> np.ndarray:

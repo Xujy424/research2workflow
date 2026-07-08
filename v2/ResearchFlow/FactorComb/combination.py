@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..matrix_math import cap_and_renormalize
+from ..matrix_math import calc_icir, cap_and_renormalize
 
 
 def rolling_icir_weights(
@@ -22,9 +22,7 @@ def rolling_icir_weights(
         valid_count = np.isfinite(hist).sum(axis=0)
         if len(hist) < min_periods or valid_count.max(initial=0) < min_periods:
             continue
-        mean = np.nanmean(hist, axis=0)
-        std = np.nanstd(hist, axis=0)
-        score = np.divide(mean, std, out=np.zeros(n_items), where=std > 1e-12)
+        score = calc_icir(hist)
         if not allow_negative:
             score = np.maximum(score, 0.0)
         scale = np.abs(score).sum() if allow_negative else score.sum()

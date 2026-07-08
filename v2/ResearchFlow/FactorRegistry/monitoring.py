@@ -15,9 +15,9 @@ import pandas as pd
 
 from ..matrix_math import (
     IC,
-    rankIC,
     calc_group_ret,
     calc_maxdrawdown,
+    factor_ic_history,
     robust_extreme_ratio_by_row,
 )
 from .registry import FactorStatus
@@ -92,8 +92,8 @@ class FactorMonitor:
         n_valid = valid.sum(axis=1)
         date_index = list(dates) if dates is not None else list(range(x.shape[0]))
 
-        ic = IC(np.where(valid_mask, x, np.nan), y)
-        rank_ic = rankIC(np.where(valid_mask, x, np.nan), y)
+        ic = factor_ic_history(x[:, :, None], y, mask=valid_mask, rank=False, min_obs=1)[:, 0]
+        rank_ic = factor_ic_history(x[:, :, None], y, mask=valid_mask, rank=True, min_obs=1)[:, 0]
         alpha_df = pd.DataFrame(np.where(valid_mask, x, np.nan), index=date_index)
         group_ret_df = calc_group_ret(alpha_df, y, num_group=self.config.n_groups)
         group_ret = group_ret_df.to_numpy(dtype=float)

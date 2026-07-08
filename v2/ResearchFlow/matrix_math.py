@@ -1,4 +1,4 @@
-"""Vectorized numerical primitives for factor matrices.
+﻿"""Vectorized numerical primitives for factor matrices.
 
 This module is the shared numerical layer for FactorTest, FactorRegistry,
 FactorComb, and Portfolio.  Functions here operate on numpy arrays and avoid
@@ -13,6 +13,14 @@ import pandas as pd
 
 
 EPS = 1e-12
+
+
+def nearest_psd(matrix: np.ndarray, floor: float = 1e-10) -> np.ndarray:
+    symmetric = (matrix + matrix.T) / 2
+    values, vectors = np.linalg.eigh(symmetric)
+    values = np.maximum(values, floor)
+    repaired = (vectors * values) @ vectors.T
+    return (repaired + repaired.T) / 2
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +110,37 @@ def rankIC(y_, y):
     return rank_ics
 
 
+def factor_ic_history(
+    factors: np.ndarray,
+    labels: np.ndarray,
+    *,
+    mask: np.ndarray | None = None,
+    rank: bool = True,
+    min_obs: int = 20,
+) -> np.ndarray:
+    x_all = np.asarray(factors, dtype=float)
+    y_all = np.asarray(labels, dtype=float)
+    if x_all.ndim != 3 or y_all.shape != x_all.shape[:2]:
+        raise ValueError("factors must be T x N x K and labels must be T x N")
+    valid_mask = np.ones(x_all.shape[:2], dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+    y = np.where(valid_mask, y_all, np.nan)
+    out = np.full((x_all.shape[0], x_all.shape[2]), np.nan, dtype=float)
+    corr_fn = rankIC if rank else IC
+    for k in range(x_all.shape[2]):
+        x = np.where(valid_mask, x_all[:, :, k], np.nan)
+        value = corr_fn(x, y)
+        valid_count = np.sum(np.isfinite(x) & np.isfinite(y), axis=1)
+        out[:, k] = np.where(valid_count >= min_obs, value, np.nan)
+    return out
+
+
+def calc_icir(ic: np.ndarray) -> np.ndarray:
+    values = np.asarray(ic, dtype=float)
+    mean = np.nanmean(values, axis=0)
+    std = np.nanstd(values, axis=0)
+    return np.divide(mean, std, out=np.zeros_like(mean), where=std > EPS)
+
+
 # ---------------------------------------------------------------------------
 # Neutralization
 # ---------------------------------------------------------------------------
@@ -175,30 +214,54 @@ def industry_size_neutralize(
 # ---------------------------------------------------------------------------
 # Group, return, and drawdown diagnostics
 # ---------------------------------------------------------------------------
-# 中文说明：`calc_group_ret`：计算研究或生产指标。
-def calc_group_ret(alpha, label, num_group=10):
-    rank = bn.nanrankdata(alpha, axis=-1)
+def _as_matrix(values) -> np.ndarray:
+    return values.values if isinstance(values, pd.DataFrame) else np.asarray(values, dtype=float)
+
+
+def group_membership(alpha, num_group: int = 10) -> np.ndarray:
+    alpha_values = _as_matrix(alpha)
+    rank = bn.nanrankdata(alpha_values, axis=-1)
     num_signal = np.nanmax(rank, axis=-1)
     stock_each_group = num_signal // num_group
-    group_ret = np.full((num_group, num_signal.shape[0]), np.nan)
+    groups = np.zeros((num_group, alpha_values.shape[0], alpha_values.shape[1]), dtype=bool)
     for i in range(num_group):
-        if i==num_group-1:
-            group_ix = (rank.T > stock_each_group * i) & (rank.T <= num_signal)
+        if i == num_group - 1:
+            groups[i] = (rank.T > stock_each_group * i).T & (rank <= num_signal[:, None])
         else:
-            group_ix = (rank.T > stock_each_group * i) & (rank.T <= stock_each_group * (i + 1)) # n_stock, n_date
-        temp_ret = label.copy()
-        temp_ret[~group_ix.T] = np.nan
-        group_ret[i] = np.nanmean(temp_ret, axis=-1)
-    group_ret = group_ret - np.nanmean(group_ret, axis=0)
-    col_list = list(range(1, num_group + 1))[::-1]
-    group_ret = pd.DataFrame(
-        group_ret.T,
-        columns=col_list,
-        index=alpha.index,
-    )
-    return group_ret
+            groups[i] = (rank > stock_each_group[:, None] * i) & (rank <= stock_each_group[:, None] * (i + 1))
+    return groups
 
-# 中文说明：`calc_annret`：计算研究或生产指标。
+
+def calc_group_weights(alpha, *, num_group: int = 5, long_only: bool = True) -> np.ndarray:
+    groups = group_membership(alpha, num_group=num_group)
+    top = groups[-1]
+    top_count = top.sum(axis=1, keepdims=True)
+    weights = np.divide(top.astype(float), top_count, out=np.zeros_like(top, dtype=float), where=top_count > 0)
+    if long_only:
+        return weights
+    bottom = groups[0]
+    bottom_count = bottom.sum(axis=1, keepdims=True)
+    short = np.divide(bottom.astype(float), bottom_count, out=np.zeros_like(bottom, dtype=float), where=bottom_count > 0)
+    return 0.5 * weights - 0.5 * short
+
+
+def calc_group_ret(alpha, label, num_group=10, *, demean: bool = True):
+    alpha_values = _as_matrix(alpha)
+    label_values = _as_matrix(label)
+    groups = group_membership(alpha_values, num_group=num_group)
+    group_ret = np.full((num_group, alpha_values.shape[0]), np.nan, dtype=float)
+    for i in range(num_group):
+        count = groups[i].sum(axis=1)
+        total = np.nansum(np.where(groups[i], label_values, 0.0), axis=1)
+        group_ret[i] = np.divide(total, count, out=np.full(alpha_values.shape[0], np.nan), where=count > 0)
+    if demean:
+        group_ret = group_ret - np.nanmean(group_ret, axis=0)
+    if isinstance(alpha, pd.DataFrame):
+        col_list = list(range(1, num_group + 1))[::-1]
+        return pd.DataFrame(group_ret.T, columns=col_list, index=alpha.index)
+    return group_ret.T
+
+
 def calc_annret(ret_df):
     nav = np.nancumprod(1+ret_df.values)
     years = (ret_df.index[-1] - ret_df.index[0]).days / 242
@@ -206,37 +269,37 @@ def calc_annret(ret_df):
     annret = (1+total_ret)**(1/years) - 1
     return annret
 
-# 中文说明：`calc_annvol`：计算研究或生产指标。
+
 def calc_annvol(ret_df):
     annvol = np.nanstd(ret_df.values) * np.sqrt(242)
     return annvol
 
-# 中文说明：`calc_sharpe`：计算研究或生产指标。
+
 def calc_sharpe(ret_df):
     annret = calc_annret(ret_df)
     annvol = calc_annvol(ret_df)
     sharpe = annret / annvol if annvol>0 else 0
     return sharpe
 
-# 中文说明：`calc_maxdrawdown`：计算研究或生产指标。
+
 def calc_maxdrawdown(ret_df):
     nav = np.nancumprod(1+ret_df.values)
     return ((nav - np.maximum.accumulate(nav)) / np.maximum.accumulate(nav)).min()
 
-# 中文说明：`calc_calmar`：计算研究或生产指标。
+
 def calc_calmar(ret_df):
     annret = calc_annret(ret_df)
     max_dd = calc_maxdrawdown(ret_df)
     calmar = annret / abs(max_dd) if max_dd<0 else np.nan
     return calmar
 
-# 中文说明：`calc_weekly_bps`：计算研究或生产指标。
+
 def calc_weekly_bps(ret_df):
     weekly_rets = ret_df.resample('W').apply(lambda x: (1+x).prod()-1).dropna()
     weekly_avg_bps = weekly_rets.mean() * 10000
     return weekly_avg_bps
 
-# 中文说明：`calc_holdings`：计算研究或生产指标。
+
 def calc_holdings(alpha: pd.DataFrame, num_group: int = 10) -> pd.DataFrame:
     rank = bn.nanrankdata(alpha.values, axis=-1)   # (n_dates, n_stocks)
     n_valid = np.nansum(~np.isnan(alpha.values), axis=-1)
@@ -250,24 +313,22 @@ def calc_holdings(alpha: pd.DataFrame, num_group: int = 10) -> pd.DataFrame:
     holds[short_holds.values] = -1
     return holds
 
-# 中文说明：`calc_turnover`：计算研究或生产指标。
+
 def calc_turnover(holds,  freq: str = 'D') -> pd.Series:
-    # 1. 生成调仓日期列表
     if freq == 'D':
-        rebalance_dates = holds.index.sort_values()  # 所有交易日
+        rebalance_dates = holds.index.sort_values()  
     elif freq == 'W':
         rebalance_dates = pd.Series(holds.index).groupby(holds.index.to_period('W-MON')).first().values
     elif freq == 'M':
         rebalance_dates = pd.Series(holds.index).groupby(holds.index.to_period('M')).first().values
     else:
-        raise ValueError("freq 必须是 'D', 'W', 'M'")
+        raise ValueError("freq must be: 'D', 'W', 'M'")
     
     #holdings = calc_top_holdings(alpha)
     curr = holds.loc[rebalance_dates].astype(int)
     prev = curr.shift(1).fillna(0).astype(int)
     
-    # 双边平均换手率 = (买入+卖出) / (前总持仓+现总持仓)
-    change = (curr - prev).abs().sum(axis=1)          # 操作次数加权和
+    change = (curr - prev).abs().sum(axis=1)          
     total = prev.abs().sum(axis=1) + curr.abs().sum(axis=1)
     turnover = change / total
     turnover = turnover.fillna(0.0)
@@ -314,3 +375,5 @@ def normalize_long_only(score: np.ndarray, *, mask: np.ndarray | None = None, ma
         w = row / row.sum() if row.sum() > EPS else row
         out[t] = cap_and_renormalize(w, max_weight=max_weight) if max_weight > 0 else w
     return out
+
+

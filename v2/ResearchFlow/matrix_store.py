@@ -1,4 +1,4 @@
-"""Binary matrix storage for the local ``D:/data`` layout."""
+﻿"""Binary matrix storage for the local ``D:/data`` layout."""
 
 from __future__ import annotations
 
@@ -97,6 +97,29 @@ class MatrixStore:
         out[...] = arr
         out.flush()
         return path
+
+    def open_cube(
+        self,
+        category: str,
+        field: str,
+        *,
+        dtype: npt.DTypeLike | None = None,
+        fields: Sequence[str] | None = None,
+    ) -> np.ndarray:
+        axis = self.load_axis()
+        final_dtype = np.dtype(dtype or self.default_dtype)
+        directory = self.root / category / field
+        paths = [directory / f"{name}.bin" for name in fields] if fields is not None else sorted(directory.glob("*.bin")) if directory.is_dir() else []
+        if not paths:
+            directory = self.root / category
+            paths = [directory / f"{name}.bin" for name in fields] if fields is not None else sorted(directory.glob("*.bin")) if directory.is_dir() else []
+        if not paths:
+            raise FileNotFoundError(self.root / category / field)
+        arrays = []
+        for path in paths:
+            self._validate_size(path, dtype=final_dtype, shape=axis.shape)
+            arrays.append(np.asarray(np.memmap(path, dtype=final_dtype, mode="r", shape=axis.shape), dtype=final_dtype))
+        return np.stack(arrays, axis=2)
 
     def read_slice(
         self,

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..config import AlphaConfig
-from ..matrix_math import cap_and_renormalize, cross_sectional_zscore, rankIC
-from ..Portfolio.risk import nearest_psd
+from ..matrix_math import cap_and_renormalize, cross_sectional_zscore, factor_ic_history
+from .allocation import AllocationParams, CapitalAllocator
 from .alpha_models import DynamicLinearAlpha, WalkForwardSklearnAlpha
 
 
@@ -57,10 +57,18 @@ class UnifiedAlphaPath:
         self.min_periods = self.config.min_periods
         self.max_family_weight = self.config.max_family_weight
         self.ridge_lambda = self.config.ridge_lambda
+        self.allocator = CapitalAllocator(
+            AllocationParams(
+                method=self.method,
+                lookback=self.lookback,
+                min_periods=self.min_periods,
+                max_weight=self.max_family_weight,
+            )
+        )
 
     def run(self, family_scores: np.ndarray, labels: np.ndarray, *, tradable: np.ndarray | None = None) -> UnifiedAlphaResult:
         mask = np.ones(family_scores.shape[:2], dtype=bool) if tradable is None else tradable.astype(bool)
-        family_ic = self._family_ic(family_scores, labels, mask)
+        family_ic = factor_ic_history(family_scores, labels, mask=mask)
         if self.method in {"equal", "icir", "correlation_adjusted"}:
             weights = self._weights(family_ic)
             alpha = self._combine(family_scores, weights, mask)
@@ -89,38 +97,8 @@ class UnifiedAlphaPath:
             diagnostics={"method": self.method, "lookback": float(self.lookback)},
         )
 
-    @staticmethod
-    def _family_ic(family_scores: np.ndarray, labels: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        out = np.full((family_scores.shape[0], family_scores.shape[2]), np.nan, dtype=float)
-        y = np.where(mask, labels, np.nan)
-        for k in range(family_scores.shape[2]):
-            x = np.where(mask, family_scores[:, :, k], np.nan)
-            ic = rankIC(x, y)
-            valid_count = np.sum(np.isfinite(x) & np.isfinite(y), axis=1)
-            out[:, k] = np.where(valid_count >= 20, ic, np.nan)
-        return out
-
     def _weights(self, family_ic: np.ndarray) -> np.ndarray:
-        n_dates, n_family = family_ic.shape
-        if self.method == "equal":
-            return np.full((n_dates, n_family), 1.0 / n_family, dtype=float)
-        out = np.full((n_dates, n_family), 1.0 / n_family, dtype=float)
-        for t in range(n_dates):
-            hist = family_ic[max(0, t - self.lookback):t]
-            if len(hist) < self.min_periods:
-                continue
-            mean = np.nanmean(hist, axis=0)
-            if self.method == "correlation_adjusted":
-                clean = np.nan_to_num(hist, nan=0.0)
-                cov = nearest_psd(np.cov(clean, rowvar=False), 1e-8)
-                raw = np.linalg.pinv(cov) @ np.maximum(mean, 0.0)
-            else:
-                std = np.nanstd(hist, axis=0)
-                raw = np.divide(mean, std, out=np.zeros(n_family), where=std > 1e-12)
-            raw = np.maximum(raw, 0.0)
-            if raw.sum() > 1e-12:
-                out[t] = cap_and_renormalize(raw / raw.sum(), max_weight=self.max_family_weight)
-        return out
+        return self.allocator.allocate(family_ic, family_ic.shape[0], family_ic.shape[1])
 
     @staticmethod
     def _combine(family_scores: np.ndarray, weights: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -131,6 +109,10 @@ class UnifiedAlphaPath:
         return cross_sectional_zscore(alpha, mask=mask)
 
     def _rolling_ridge_alpha(self, family_scores: np.ndarray, labels: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        '''
+        多变量回归 + L2 正则
+        适合 family 较多、相关性较强
+        '''
         t_count, _, n_family = family_scores.shape
         alpha = np.full(family_scores.shape[:2], np.nan, dtype=float)
         weights = np.full((t_count, n_family), 1.0 / n_family, dtype=float)
@@ -154,6 +136,10 @@ class UnifiedAlphaPath:
         return cross_sectional_zscore(alpha, mask=mask), weights
 
     def _fama_macbeth_alpha(self, family_scores: np.ndarray, labels: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        '''
+        每日横截面回归 beta，再滚动平均 beta
+        适合需要解释每类因子收益贡献
+        '''
         t_count, _, n_family = family_scores.shape
         daily_beta = np.full((t_count, n_family), np.nan, dtype=float)
         for t in range(t_count):
@@ -176,6 +162,10 @@ class UnifiedAlphaPath:
         return cross_sectional_zscore(alpha, mask=mask), weights
 
     def _score_slope_alpha(self, score: np.ndarray, labels: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        '''
+        先合成 score，再用单变量斜率校准
+        适合保留已有组合逻辑，只调整信号强度
+        '''
         out = np.full_like(score, np.nan, dtype=float)
         for t in range(score.shape[0]):
             hist_score = score[max(0, t - self.lookback):t].reshape(-1)

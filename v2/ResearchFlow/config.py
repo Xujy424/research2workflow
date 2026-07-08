@@ -17,6 +17,11 @@ class StrategyType(str, Enum):
     MARKET_NEUTRAL = "market_neutral"
 
 
+class PortfolioMethod(str, Enum):
+    PROJECT = "project"
+    OPTIMIZE = "optimize"
+
+
 @dataclass(frozen=True)
 class FamilyConfig:
     corr_threshold: float = 0.70
@@ -28,6 +33,7 @@ class FamilyConfig:
     transform_method: str = "raw"
     orthogonalization: str = "symmetric"
     transform_ridge: float = 1e-6
+    transform_fit: str = "walk_forward"
     n_components: int = 3
     min_component_abs_ic: float = 0.0
     min_component_abs_icir: float = 0.0
@@ -60,6 +66,10 @@ class SleeveConfig:
     min_periods: int = 60
     max_sleeve_weight: float = 0.60
     smoothing: float = 0.80
+    return_shrinkage: float = 0.70
+    covariance_shrinkage: float = 0.30
+    turnover_penalty: float = 0.05
+    risk_aversion: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,7 @@ class RiskConfig:
 
 @dataclass(frozen=True)
 class OptimizerConfig:
+    method: PortfolioMethod = PortfolioMethod.PROJECT
     max_stock_weight: float = 0.02
     max_turnover: float | None = 0.40
     max_adv_participation: float | None = 0.10
@@ -94,7 +105,6 @@ class OptimizerConfig:
     impact_cost_penalty: float = 1.0
     tracking_error_limit: float | None = None
     benchmark_constituents_only: bool = False
-    benchmark_weight_tolerance: float = 1e-8
     exposure_lower: dict[int, float] = field(default_factory=dict)
     exposure_upper: dict[int, float] = field(default_factory=dict)
     solver: str = "CLARABEL"
@@ -118,6 +128,12 @@ class ResearchFlowV2Config:
     adv_field: str = "amount"
     current_weight_category: str = "position"
     current_weight_field: str = "current_weight"
+    benchmark_category: str = "mask"
+    benchmark_field: str = "hs300_weight"
+    benchmark_member_category: str = "mask"
+    benchmark_member_field: str = "hs300_mask"
+    exposure_category: str = "barra"
+    exposure_field: str = "exposure"
     output_category: str = "position"
     output_weight_field: str = "target_weight"
     output_alpha_category: str = "factorpool"
@@ -127,3 +143,5 @@ class ResearchFlowV2Config:
     sleeve: SleeveConfig = field(default_factory=SleeveConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+
+

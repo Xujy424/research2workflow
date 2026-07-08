@@ -3,28 +3,34 @@
 from .cost import CostEstimate, HoldingCostEstimate, HoldingCostModel, TransactionCostModel
 from .portfolio import CvxPortfolioOptimizer, OptimizationResult, PortfolioProjectionResult, StockWeightProjector
 from .regime import MixtureOfExperts, ObservableRegimeModel, RegimeProbabilityResult, RegimeResult, RegimeWeightController
-from .risk import FactorRiskEstimate, MatrixFactorRiskModel, MatrixRiskModel, RiskEstimate, risk_attribution
+from .risk import FactorRiskEstimate, FactorRiskModel
 from .stress import StressResult, StressTester
+from .strategy import IndexEnhancedStrategy, LongOnlyStrategy, MarketNeutralStrategy, PortfolioStrategy, StrategyInputs, make_strategy
 
 __all__ = [
-    "risk_attribution",
+    "make_strategy",
+    "StrategyInputs",
+    "PortfolioStrategy",
+    "MarketNeutralStrategy",
+    "LongOnlyStrategy",
+    "IndexEnhancedStrategy",
     "OptimizationResult",
-    "MatrixFactorRiskModel",
     "HoldingCostModel",
     "HoldingCostEstimate",
+    "FactorRiskModel",
     "FactorRiskEstimate",
     "CvxPortfolioOptimizer",
     "CostEstimate",
-    "MatrixRiskModel",
     "MixtureOfExperts",
     "ObservableRegimeModel",
     "PortfolioProjectionResult",
     "RegimeProbabilityResult",
     "RegimeResult",
     "RegimeWeightController",
-    "RiskEstimate",
     "StockWeightProjector",
     "StressResult",
     "StressTester",
     "TransactionCostModel",
 ]
+
+

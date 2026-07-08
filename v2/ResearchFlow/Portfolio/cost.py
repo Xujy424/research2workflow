@@ -1,8 +1,9 @@
-"""Transaction-cost and capacity helpers."""
+﻿"""Transaction, impact, and holding-cost models."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -11,10 +12,15 @@ import numpy as np
 class CostEstimate:
     linear: np.ndarray
     impact: np.ndarray
-    total: np.ndarray
+
+    @property
+    def total(self) -> np.ndarray:
+        return self.linear + self.impact
 
 
 class TransactionCostModel:
+    """Linear spread/fees plus square-root market impact in weight space."""
+
     def __init__(
         self,
         *,
@@ -23,30 +29,35 @@ class TransactionCostModel:
         adv_floor: float = 1e-5,
         sell_tax_rate: float = 0.0,
     ) -> None:
-        self.linear_rate = linear_rate
-        self.impact_coef = impact_coef
-        self.adv_floor = adv_floor
-        self.sell_tax_rate = sell_tax_rate
+        self.linear_rate = float(linear_rate)
+        self.impact_coef = float(impact_coef)
+        self.adv_floor = float(adv_floor)
+        self.sell_tax_rate = float(sell_tax_rate)
 
     def component_arrays(self, n_assets: int, *, adv_weight: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-        linear = np.full(n_assets, float(self.linear_rate), dtype=float)
+        linear = np.full(n_assets, self.linear_rate, dtype=float)
         if adv_weight is None:
-            adv = np.ones(n_assets, dtype=float)
-        else:
-            adv = np.clip(np.nan_to_num(np.asarray(adv_weight, dtype=float), nan=self.adv_floor), self.adv_floor, None)
-        impact = self.impact_coef / np.sqrt(adv)
-        return linear, impact
+            return linear, np.zeros(n_assets, dtype=float)
+        adv = np.clip(np.nan_to_num(np.asarray(adv_weight, dtype=float), nan=self.adv_floor), self.adv_floor, None)
+        return linear, self.impact_coef / np.sqrt(adv)
+
+    def component_expressions(self, cp: Any, trades, n_assets: int, *, adv_weight: np.ndarray | None = None):
+        linear, impact = self.component_arrays(n_assets, adv_weight=adv_weight)
+        linear_cost = linear @ cp.abs(trades)
+        if self.sell_tax_rate > 0:
+            linear_cost += self.sell_tax_rate * cp.sum(cp.pos(-trades))
+        impact_cost = impact @ cp.power(cp.abs(trades), 1.5)
+        return linear_cost, impact_cost
 
     def estimate(self, trade_weight: np.ndarray, *, adv_weight: np.ndarray | None = None) -> CostEstimate:
-        trade = np.abs(np.nan_to_num(trade_weight, nan=0.0))
-        linear = self.linear_rate * trade.sum(axis=1) + self.sell_tax_rate * np.maximum(-np.nan_to_num(trade_weight, nan=0.0), 0.0).sum(axis=1)
-        if adv_weight is None:
-            impact = np.zeros(trade.shape[0], dtype=float)
-        else:
-            adv = np.clip(np.nan_to_num(adv_weight, nan=self.adv_floor), self.adv_floor, None)
-            participation = np.divide(trade, adv, out=np.zeros_like(trade), where=adv > 1e-12)
-            impact = self.impact_coef * np.nansum(trade * np.sqrt(np.clip(participation, 0.0, None)), axis=1)
-        return CostEstimate(linear=linear, impact=impact, total=linear + impact)
+        trade = np.nan_to_num(np.asarray(trade_weight, dtype=float), nan=0.0)
+        if trade.ndim != 1:
+            raise ValueError("trade_weight must be a 1D daily cross-section")
+        linear, impact = self.component_arrays(trade.size, adv_weight=adv_weight)
+        abs_trade = np.abs(trade)
+        linear_cost = linear @ abs_trade + self.sell_tax_rate * np.maximum(-trade, 0.0).sum()
+        impact_cost = impact @ np.power(abs_trade, 1.5)
+        return CostEstimate(np.asarray(linear_cost), np.asarray(impact_cost))
 
 
 @dataclass(frozen=True)
@@ -80,4 +91,5 @@ class HoldingCostModel:
         if annual_carry_rate is not None:
             carry = float(np.nansum(np.abs(w) * np.nan_to_num(annual_carry_rate, nan=0.0) * holding_days / day_count))
         return HoldingCostEstimate(borrow=borrow, carry=carry)
+
 

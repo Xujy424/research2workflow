@@ -1,4 +1,4 @@
-"""Classify, transform, re-test, and combine approved factors inside families."""
+﻿"""Classify, transform, re-test, and combine approved factors inside families."""
 
 from __future__ import annotations
 
@@ -8,11 +8,10 @@ from typing import Mapping
 import numpy as np
 
 from ..config import FamilyConfig
-from ..matrix_math import cross_sectional_zscore, rankIC
+from ..matrix_math import calc_icir, cross_sectional_zscore, factor_ic_history
 from .clustering import FactorClusterer
 from .combination import equal_weights, rolling_icir_weights
-from .orthogonal import FactorOrthogonalizer
-from .transforms import FactorTransformer
+from .family_transform import FamilyTransform, FamilyTransformResult
 
 
 @dataclass(frozen=True)
@@ -22,6 +21,7 @@ class FamilyBuildResult:
     representatives: dict[str, tuple[str, ...]]
     factor_to_family: dict[str, str]
     member_weights: dict[str, np.ndarray]
+    transform_diagnostics: dict[str, dict[str, object]]
     family_scores: np.ndarray
     ic_history: np.ndarray
 
@@ -36,8 +36,7 @@ class FactorFamilyBuilder:
 
     def __init__(self, config: FamilyConfig | None = None) -> None:
         self.config = config or FamilyConfig()
-        self._orthogonalizer = FactorOrthogonalizer()
-        self._transformer = FactorTransformer()
+        self._transform = FamilyTransform(self.config)
 
     def build(
         self,
@@ -51,8 +50,8 @@ class FactorFamilyBuilder:
         self._validate_inputs(factors, factor_names, families)
         mask = np.ones(factors.shape[:2], dtype=bool) if tradable is None else tradable.astype(bool)
 
-        raw_ic = self._ic_history(factors, labels, mask)
-        raw_icir = self._icir(raw_ic)
+        raw_ic = factor_ic_history(factors, labels, mask=mask)
+        raw_icir = calc_icir(raw_ic)
         raw_quality = np.abs(raw_icir)
         factor_corr = self._factor_corr(factors, mask)  # K,K
         ic_corr = self._ic_corr(raw_ic)                 # K,K
@@ -61,6 +60,7 @@ class FactorFamilyBuilder:
         family_scores = np.full((factors.shape[0], factors.shape[1], len(family_names)), np.nan, dtype=float)
         reps: dict[str, tuple[str, ...]] = {}
         member_weights: dict[str, np.ndarray] = {}
+        transform_diagnostics: dict[str, dict[str, object]] = {}
 
         for j, family in enumerate(family_names):
             member_idx = [i for i, name in enumerate(factor_names) if families[name] == family]
@@ -68,8 +68,9 @@ class FactorFamilyBuilder:
             selected_names = tuple(factor_names[i] for i in selected)
             reps[family] = selected_names
 
-            candidates = self._transform_family(factors[:, :, selected], labels, mask, raw_icir[selected])
-            candidates, candidate_ic = self._keep_explanatory_candidates(candidates, labels, mask)
+            transform_result = self._transform_family(factors[:, :, selected], labels, mask, raw_icir[selected])
+            transform_diagnostics[family] = transform_result.diagnostics
+            candidates, candidate_ic = self._keep_explanatory_candidates(transform_result.values, labels, mask)
             weights = self._member_weights(candidate_ic)
 
             member_weights[family] = weights
@@ -85,6 +86,7 @@ class FactorFamilyBuilder:
             representatives=reps,
             factor_to_family=dict(families),
             member_weights=member_weights,
+            transform_diagnostics=transform_diagnostics,
             family_scores=family_scores,
             ic_history=raw_ic,
         )
@@ -98,23 +100,6 @@ class FactorFamilyBuilder:
         missing = [name for name in factor_names if name not in families]
         if missing:
             raise KeyError(f"missing family mapping for factors: {missing}")
-
-    @staticmethod
-    def _ic_history(factors: np.ndarray, labels: np.ndarray, mask: np.ndarray, min_obs: int = 20) -> np.ndarray:
-        ic = np.full((factors.shape[0], factors.shape[2]), np.nan, dtype=float)
-        y = np.where(mask, labels, np.nan)
-        for k in range(factors.shape[2]):
-            x = np.where(mask, factors[:, :, k], np.nan)
-            rank_ic = rankIC(x, y)
-            valid_count = np.sum(np.isfinite(x) & np.isfinite(y), axis=1)
-            ic[:, k] = np.where(valid_count >= min_obs, rank_ic, np.nan)
-        return ic
-
-    @staticmethod
-    def _icir(ic: np.ndarray) -> np.ndarray:
-        mean = np.nanmean(ic, axis=0)
-        std = np.nanstd(ic, axis=0)
-        return np.divide(mean, std, out=np.zeros_like(mean), where=std > 1e-12)
 
     @staticmethod
     def _corr_by_feature(values: np.ndarray, min_obs: int = 20) -> np.ndarray:
@@ -165,42 +150,14 @@ class FactorFamilyBuilder:
         )
         return [int(local[i]) for i in result.representatives]
 
-    def _transform_family(self, family_factors: np.ndarray, labels: np.ndarray, mask: np.ndarray, icir: np.ndarray) -> np.ndarray:
-        method = self.config.transform_method
-        if method == "raw":
-            return family_factors
-        if family_factors.shape[2] == 1:
-            return family_factors
-        if method == "orthogonal":
-            if self.config.orthogonalization == "ordered_residual":
-                order = np.argsort(-np.nan_to_num(np.abs(icir), nan=-np.inf))
-                return self._orthogonalizer.ordered_residualize(family_factors, mask=mask, order=order).residual
-            return self._orthogonalizer.orthogonalize(
-                family_factors,
-                mask=mask,
-                method=self.config.orthogonalization,
-                ridge=self.config.transform_ridge,
-            ).residual
-        if method == "pca":
-            n_components = min(self.config.n_components, family_factors.shape[2])
-            return self._transformer.walk_forward_pca(
-                family_factors,
-                n_components=n_components,
-                lookback=self.config.lookback,
-                min_periods=self.config.min_ic_obs,
-                mask=mask,
-            ).values
-        if method == "pls":
-            n_components = min(self.config.n_components, family_factors.shape[2])
-            return self._transformer.walk_forward_pls(
-                family_factors,
-                labels,
-                n_components=n_components,
-                lookback=self.config.lookback,
-                min_periods=self.config.min_ic_obs,
-                mask=mask,
-            ).values
-        raise ValueError(f"unsupported family transform_method: {method}")
+    def _transform_family(
+        self,
+        family_factors: np.ndarray,
+        labels: np.ndarray,
+        mask: np.ndarray,
+        icir: np.ndarray,
+    ) -> FamilyTransformResult:
+        return self._transform.run(family_factors, labels, mask=mask, quality=icir)
 
     def _keep_explanatory_candidates(
         self,
@@ -208,9 +165,9 @@ class FactorFamilyBuilder:
         labels: np.ndarray,
         mask: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        ic = self._ic_history(candidates, labels, mask)
+        ic = factor_ic_history(candidates, labels, mask=mask)
         mean_ic = np.nanmean(ic, axis=0)
-        icir = self._icir(ic)
+        icir = calc_icir(ic)
         enough_obs = np.isfinite(ic).sum(axis=0) >= self.config.min_ic_obs
         explanatory = (
             enough_obs
@@ -223,7 +180,7 @@ class FactorFamilyBuilder:
         kept = candidates[:, :, explanatory].copy()
         kept_ic = ic[:, explanatory].copy()
         direction = np.sign(np.nanmean(kept_ic, axis=0))
-        direction = np.where(direction == 0, 1.0, direction)
+        direction = np.where(direction==0, 1.0, direction)
         return kept * direction[None, None, :], kept_ic * direction[None, :]
 
     def _member_weights(self, ic: np.ndarray) -> np.ndarray:
@@ -245,3 +202,4 @@ def combine_factor_cube(factors: np.ndarray, weights: np.ndarray, *, mask: np.nd
     denom = np.where(valid, weights[:, None, :], 0.0).sum(axis=2)
     out = np.divide(weighted.sum(axis=2), denom, out=np.full(factors.shape[:2], np.nan), where=denom > 0)
     return cross_sectional_zscore(out, mask=mask)
+
