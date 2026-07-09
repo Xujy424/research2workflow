@@ -22,6 +22,15 @@ def nearest_psd(matrix: np.ndarray, floor: float = 1e-10) -> np.ndarray:
     repaired = (vectors * values) @ vectors.T
     return (repaired + repaired.T) / 2
 
+def cov_to_vol_corr(covariance: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    vol = np.sqrt(np.clip(np.diag(covariance), 0.0, None))
+    denom = np.outer(vol, vol)
+    corr = np.divide(covariance, denom, out=np.eye(covariance.shape[0]), where=denom > 1e-12)
+    corr = np.clip(corr, -0.999999, 0.999999)
+    corr = 0.5 * (corr + corr.T)
+    np.fill_diagonal(corr, 1.0)
+    return vol, corr
+
 
 # ---------------------------------------------------------------------------
 # Cross-sectional preprocessing

@@ -172,7 +172,7 @@ class CvxPortfolioOptimizer:
         w = cp.Variable(n, name="weights")
         trades = w - current
         active_weights = strategy.active_weights(w, benchmark)
-        linear_cost, impact_cost = self.cost_model.component_expressions(cp, trades, n, adv_weight=adv_weight)
+        linear_cost, impact_cost = self.cost_model.cost_expressions(cp, trades, n, adv_weight=adv_weight)
         objective = cp.Maximize(
             a @ w
             - 0.5 * cfg.risk_aversion * cp.quad_form(active_weights, cp.psd_wrap(sigma))
@@ -235,7 +235,6 @@ class CvxPortfolioOptimizer:
             if locked.any():
                 constraints.append(trades[locked] == 0.0)
         return constraints
-
 
     def _solve(self, cp, problem) -> tuple[str, str]:
         installed = set(cp.installed_solvers())

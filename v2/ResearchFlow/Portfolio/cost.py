@@ -34,15 +34,15 @@ class TransactionCostModel:
         self.adv_floor = float(adv_floor)
         self.sell_tax_rate = float(sell_tax_rate)
 
-    def component_arrays(self, n_assets: int, *, adv_weight: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    def calc_cost(self, n_assets: int, *, adv_weight: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         linear = np.full(n_assets, self.linear_rate, dtype=float)
         if adv_weight is None:
             return linear, np.zeros(n_assets, dtype=float)
         adv = np.clip(np.nan_to_num(np.asarray(adv_weight, dtype=float), nan=self.adv_floor), self.adv_floor, None)
         return linear, self.impact_coef / np.sqrt(adv)
 
-    def component_expressions(self, cp: Any, trades, n_assets: int, *, adv_weight: np.ndarray | None = None):
-        linear, impact = self.component_arrays(n_assets, adv_weight=adv_weight)
+    def cost_expressions(self, cp: Any, trades, n_assets: int, *, adv_weight: np.ndarray | None = None):
+        linear, impact = self.calc_cost(n_assets, adv_weight=adv_weight)
         linear_cost = linear @ cp.abs(trades)
         if self.sell_tax_rate > 0:
             linear_cost += self.sell_tax_rate * cp.sum(cp.pos(-trades))
@@ -53,7 +53,7 @@ class TransactionCostModel:
         trade = np.nan_to_num(np.asarray(trade_weight, dtype=float), nan=0.0)
         if trade.ndim != 1:
             raise ValueError("trade_weight must be a 1D daily cross-section")
-        linear, impact = self.component_arrays(trade.size, adv_weight=adv_weight)
+        linear, impact = self.calc_cost(trade.size, adv_weight=adv_weight)
         abs_trade = np.abs(trade)
         linear_cost = linear @ abs_trade + self.sell_tax_rate * np.maximum(-trade, 0.0).sum()
         impact_cost = impact @ np.power(abs_trade, 1.5)
