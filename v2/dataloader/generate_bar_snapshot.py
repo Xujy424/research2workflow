@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import heapq
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -119,63 +120,98 @@ def generate_bar_snapshots(
         key=str,
     )
 
-    remaining: dict[tuple, float] = {}
+    bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
+    level_deltas = (
+        events.sort("EventTime")
+        .join_asof(
+            bar_frame,
+            left_on="EventTime",
+            right_on="BarTime",
+            strategy="forward",
+        )
+        .filter(pl.col("BarTime").is_not_null())
+        .group_by(["BarTime", "SecurityID", "Side", "Price"])
+        .agg(pl.col("QtyDelta").sum())
+        .sort(["BarTime", "SecurityID", "Side", "Price"])
+    )
+
     levels: dict[object, dict[int, dict[object, float]]] = defaultdict(
         lambda: {1: defaultdict(float), -1: defaultdict(float)}
     )
     top_cache: dict[object, tuple[list[tuple], list[tuple]]] = {}
-    rows: list[dict] = []
-    event_iter = iter(events.iter_rows(named=False))
-    event = next(event_iter, None)
+    if wide:
+        output: dict[str, list] = {"BarTime": [], "SecurityID": []}
+        for level in range(1, topn + 1):
+            for column in ("BidPrice", "BidQty", "AskPrice", "AskQty"):
+                output[f"{column}{level}"] = []
+    else:
+        output = {column: [] for column in (
+            "BarTime", "SecurityID", "Level", "BidPrice", "BidQty", "AskPrice", "AskQty"
+        )}
+
+    delta_iter = iter(level_deltas.iter_rows(named=False))
+    delta_event = next(delta_iter, None)
+    negative_level_count = 0
     for bar in tqdm(bars):
         changed_securities: set[object] = set()
-        while event is not None and event[0] <= bar:
-            _, kind, channel, security, side, seq, price, delta = event
-            key = (channel, security, side, seq)
-            if kind == 0:
-                applied = max(float(delta), 0.0)
-                remaining[key] = remaining.get(key, 0.0) + applied
-            else:
-                applied = -min(-float(delta), remaining.get(key, 0.0))
-                remaining[key] = remaining.get(key, 0.0) + applied
+        while delta_event is not None and delta_event[0] <= bar:
+            _, security, side, price, delta = delta_event
             side_levels = levels[security][side]
-            side_levels[price] += applied
-            if abs(side_levels[price]) < 1e-12:
+            updated_qty = side_levels[price] + float(delta)
+            if updated_qty < -1e-9:
+                negative_level_count += 1
+                updated_qty = 0.0
+            if abs(updated_qty) < 1e-12:
                 side_levels.pop(price, None)
+            else:
+                side_levels[price] = updated_qty
             changed_securities.add(security)
-            event = next(event_iter, None)
+            delta_event = next(delta_iter, None)
 
         for security in changed_securities:
-            bids = sorted(
+            bids = heapq.nlargest(
+                topn,
                 ((price, qty) for price, qty in levels[security][1].items() if qty > 0),
-                reverse=True,
-            )[:topn]
-            asks = sorted(
-                ((price, qty) for price, qty in levels[security][-1].items() if qty > 0)
-            )[:topn]
+                key=lambda item: item[0],
+            )
+            asks = heapq.nsmallest(
+                topn,
+                ((price, qty) for price, qty in levels[security][-1].items() if qty > 0),
+                key=lambda item: item[0],
+            )
             top_cache[security] = (bids, asks)
 
         for security in all_securities:
             bids, asks = top_cache.get(security, ([], []))
             if wide:
-                row = {"BarTime": bar, "SecurityID": security}
+                output["BarTime"].append(bar)
+                output["SecurityID"].append(security)
                 for level in range(1, topn + 1):
                     bid = bids[level - 1] if level <= len(bids) else (None, None)
                     ask = asks[level - 1] if level <= len(asks) else (None, None)
-                    row[f"BidPrice{level}"] = bid[0]
-                    row[f"BidQty{level}"] = bid[1]
-                    row[f"AskPrice{level}"] = ask[0]
-                    row[f"AskQty{level}"] = ask[1]
-                rows.append(row)
+                    output[f"BidPrice{level}"].append(bid[0])
+                    output[f"BidQty{level}"].append(bid[1])
+                    output[f"AskPrice{level}"].append(ask[0])
+                    output[f"AskQty{level}"].append(ask[1])
             else:
                 for level in range(1, topn + 1):
                     bid = bids[level - 1] if level <= len(bids) else (None, None)
                     ask = asks[level - 1] if level <= len(asks) else (None, None)
-                    rows.append({"BarTime": bar, "SecurityID": security, "Level": level,
-                                 "BidPrice": bid[0], "BidQty": bid[1],
-                                 "AskPrice": ask[0], "AskQty": ask[1]})
+                    for column, value in (
+                        ("BarTime", bar), ("SecurityID", security), ("Level", level),
+                        ("BidPrice", bid[0]), ("BidQty", bid[1]),
+                        ("AskPrice", ask[0]), ("AskQty", ask[1]),
+                    ):
+                        output[column].append(value)
 
-    return pl.DataFrame(rows).sort(["SecurityID", "BarTime"])
+    if negative_level_count:
+        warnings.warn(
+            f"{negative_level_count} aggregated price levels became negative and were clamped to zero; "
+            "check restored order quantities and reduction matching.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return pl.DataFrame(output).sort(["SecurityID", "BarTime"])
 
 
 def generate_from_proc(
