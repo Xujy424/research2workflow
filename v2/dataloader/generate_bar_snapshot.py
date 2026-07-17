@@ -14,6 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Sequence
 from tqdm import tqdm
+import warnings
 
 import polars as pl
 
@@ -122,7 +123,7 @@ def generate_bar_snapshots(
 
     bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
     level_deltas = (
-        events.sort("EventTime")
+        events
         .join_asof(
             bar_frame,
             left_on="EventTime",
