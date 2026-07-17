@@ -77,7 +77,7 @@ def prepare_events(
             ).filter(pl.col("ApplSeqNum").is_not_null() & (pl.col("ApplSeqNum") != 0))
         )
     reduce_events = pl.concat(legs, how="diagonal_relaxed").join(
-        order_info.select(ORDER_KEY + ["Price"]), on=ORDER_KEY, how="inner"
+        order_info.select(ORDER_KEY + ["Price"]), on=ORDER_KEY, how="left"
     ).select(
         "EventTime",
         pl.lit(1).cast(pl.Int8).alias("EventType"),
