@@ -12,6 +12,7 @@ import datetime as dt
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Sequence
+from tqdm import tqdm
 
 import polars as pl
 
@@ -126,7 +127,7 @@ def generate_bar_snapshots(
     rows: list[dict] = []
     event_iter = iter(events.iter_rows(named=False))
     event = next(event_iter, None)
-    for bar in bars:
+    for bar in tqdm(bars):
         changed_securities: set[object] = set()
         while event is not None and event[0] <= bar:
             _, kind, channel, security, side, seq, price, delta = event
@@ -202,10 +203,10 @@ if __name__ == "__main__":
     # 保持为 False 时，仍然使用下方 argparse 命令行参数。
     USE_MANUAL_CONFIG = True
     MANUAL_CONFIG = {
-        "root": "D:/data/l2",
-        "date": "20260625",
-        "exchange": "sh",       # "sh" 或 "sz"
-        "interval": "5m",       # 例如 "30s"、"1m"、"5m"
+        "root": "/data/xujiayi/xjy/l2",
+        "date": "20260624",
+        "exchange": "sz",       # "sh" 或 "sz"
+        "interval": "1m",       # 例如 "30s"、"1m"、"5m"
         "topn": 10,
         "output": None,          # None 表示保存到默认路径
     }
