@@ -59,12 +59,10 @@ def prepare_events(
     orders: pl.DataFrame,
     trades: pl.DataFrame,
     cancels: pl.DataFrame,
-) -> list[tuple]:
-    """Return order-level add/reduce events sorted in exchange time order."""
+) -> pl.DataFrame:
+    """Return a normalized order-level event table in exchange-time order."""
     reductions = pl.concat([trades, cancels], how="diagonal_relaxed")
-    order_info = orders.select(
-        ORDER_KEY + ["Price", "OrderQty", "TransactTime"]
-    ).rename({"TransactTime": "OrderTime"})
+    order_info = orders.select(ORDER_KEY + ["Price", "OrderQty", "TransactTime"])
 
     legs: list[pl.DataFrame] = []
     for side, seq_col in ((1, "BidApplSeqNum"), (-1, "OfferApplSeqNum")):
@@ -74,25 +72,28 @@ def prepare_events(
                 "SecurityID",
                 pl.lit(side).cast(pl.Int8).alias("Side"),
                 pl.col(seq_col).alias("ApplSeqNum"),
-                pl.col("OrderQty").alias("ReduceQty"),
+                pl.col("OrderQty").alias("QtyDelta"),
                 pl.col("TransactTime").alias("EventTime"),
             ).filter(pl.col("ApplSeqNum").is_not_null() & (pl.col("ApplSeqNum") != 0))
         )
     reduce_events = pl.concat(legs, how="diagonal_relaxed").join(
         order_info.select(ORDER_KEY + ["Price"]), on=ORDER_KEY, how="inner"
+    ).select(
+        "EventTime",
+        pl.lit(1).cast(pl.Int8).alias("EventType"),
+        "ChannelNo", "SecurityID", "Side", "ApplSeqNum", "Price",
+        (-pl.col("QtyDelta")).alias("QtyDelta"),
     )
 
-    adds = order_info.with_columns(pl.col("OrderTime").alias("EventTime"))
-
-    events: list[tuple] = []
-    for row in adds.iter_rows(named=True):
-        events.append((row["EventTime"], 0, row["ChannelNo"], row["SecurityID"],
-                       row["Side"], row["ApplSeqNum"], row["Price"], row["OrderQty"]))
-    for row in reduce_events.iter_rows(named=True):
-        events.append((row["EventTime"], 1, row["ChannelNo"], row["SecurityID"],
-                       row["Side"], row["ApplSeqNum"], row["Price"], -row["ReduceQty"]))
-    events.sort(key=lambda x: (x[0], x[1], x[2], x[5]))
-    return events
+    add_events = order_info.select(
+        pl.col("TransactTime").alias("EventTime"),
+        pl.lit(0).cast(pl.Int8).alias("EventType"),
+        "ChannelNo", "SecurityID", "Side", "ApplSeqNum", "Price",
+        pl.col("OrderQty").alias("QtyDelta"),
+    )
+    return pl.concat([add_events, reduce_events], how="vertical_relaxed").sort(
+        ["EventTime", "EventType", "ChannelNo", "ApplSeqNum"]
+    )
 
 
 def generate_bar_snapshots(
@@ -110,66 +111,70 @@ def generate_bar_snapshots(
 
     events = prepare_events(orders, trades, cancels)
     wanted = set(securities) if securities is not None else None
+    if wanted is not None:
+        events = events.filter(pl.col("SecurityID").is_in(list(wanted)))
     all_securities = sorted(
-        {event[3] for event in events if wanted is None or event[3] in wanted},
+        events.get_column("SecurityID").unique().to_list(),
         key=str,
     )
 
     remaining: dict[tuple, float] = {}
-    levels: dict[tuple, float] = defaultdict(float)
+    levels: dict[object, dict[int, dict[object, float]]] = defaultdict(
+        lambda: {1: defaultdict(float), -1: defaultdict(float)}
+    )
+    top_cache: dict[object, tuple[list[tuple], list[tuple]]] = {}
     rows: list[dict] = []
-    cursor = 0
+    event_iter = iter(events.iter_rows(named=False))
+    event = next(event_iter, None)
     for bar in bars:
-        while cursor < len(events) and events[cursor][0] <= bar:
-            _, kind, channel, security, side, seq, price, delta = events[cursor]
-            cursor += 1
-            if wanted is not None and security not in wanted:
-                continue
+        changed_securities: set[object] = set()
+        while event is not None and event[0] <= bar:
+            _, kind, channel, security, side, seq, price, delta = event
             key = (channel, security, side, seq)
-            level_key = (security, side, price)
             if kind == 0:
                 applied = max(float(delta), 0.0)
                 remaining[key] = remaining.get(key, 0.0) + applied
             else:
                 applied = -min(-float(delta), remaining.get(key, 0.0))
                 remaining[key] = remaining.get(key, 0.0) + applied
-            levels[level_key] += applied
-            if abs(levels[level_key]) < 1e-12:
-                levels.pop(level_key, None)
+            side_levels = levels[security][side]
+            side_levels[price] += applied
+            if abs(side_levels[price]) < 1e-12:
+                side_levels.pop(price, None)
+            changed_securities.add(security)
+            event = next(event_iter, None)
 
-        for security in all_securities:
+        for security in changed_securities:
             bids = sorted(
-                ((price, qty) for (sid, side, price), qty in levels.items()
-                 if sid == security and side == 1 and qty > 0), reverse=True
+                ((price, qty) for price, qty in levels[security][1].items() if qty > 0),
+                reverse=True,
             )[:topn]
             asks = sorted(
-                ((price, qty) for (sid, side, price), qty in levels.items()
-                 if sid == security and side == -1 and qty > 0)
+                ((price, qty) for price, qty in levels[security][-1].items() if qty > 0)
             )[:topn]
-            for level in range(1, topn + 1):
-                bid = bids[level - 1] if level <= len(bids) else (None, None)
-                ask = asks[level - 1] if level <= len(asks) else (None, None)
-                rows.append({"BarTime": bar, "SecurityID": security, "Level": level,
-                             "BidPrice": bid[0], "BidQty": bid[1],
-                             "AskPrice": ask[0], "AskQty": ask[1]})
-    long_book = pl.DataFrame(rows)
-    if not wide: return long_book
+            top_cache[security] = (bids, asks)
 
-    key_columns = long_book.columns[:2]
-    level_column = long_book.columns[2]
-    value_columns = tuple(long_book.columns[3:])
-    parts = [
-        long_book.filter(pl.col(level_column) == level).select(
-            *key_columns,
-            *[pl.col(column).alias(column + str(level)) for column in value_columns],
-        )
-        for level in range(1, topn + 1)
-    ]
-    wide_book = parts[0]
-    for part in parts[1:]:
-        wide_book = wide_book.join(part, on=key_columns)
-    ordered_values = [column + str(level) for level in range(1, topn + 1) for column in value_columns]
-    return wide_book.select(*key_columns, *ordered_values).sort(key_columns)
+        for security in all_securities:
+            bids, asks = top_cache.get(security, ([], []))
+            if wide:
+                row = {"BarTime": bar, "SecurityID": security}
+                for level in range(1, topn + 1):
+                    bid = bids[level - 1] if level <= len(bids) else (None, None)
+                    ask = asks[level - 1] if level <= len(asks) else (None, None)
+                    row[f"BidPrice{level}"] = bid[0]
+                    row[f"BidQty{level}"] = bid[1]
+                    row[f"AskPrice{level}"] = ask[0]
+                    row[f"AskQty{level}"] = ask[1]
+                rows.append(row)
+            else:
+                for level in range(1, topn + 1):
+                    bid = bids[level - 1] if level <= len(bids) else (None, None)
+                    ask = asks[level - 1] if level <= len(asks) else (None, None)
+                    rows.append({"BarTime": bar, "SecurityID": security, "Level": level,
+                                 "BidPrice": bid[0], "BidQty": bid[1],
+                                 "AskPrice": ask[0], "AskQty": ask[1]})
+
+    return pl.DataFrame(rows).sort(["SecurityID", "BarTime"])
 
 
 def generate_from_proc(
