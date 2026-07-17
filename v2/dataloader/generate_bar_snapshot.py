@@ -200,7 +200,7 @@ def generate_from_proc(
 if __name__ == "__main__":
     # IDE 手动运行配置：改为 True 后，直接修改下面参数并点击“运行”。
     # 保持为 False 时，仍然使用下方 argparse 命令行参数。
-    USE_MANUAL_CONFIG = False
+    USE_MANUAL_CONFIG = True
     MANUAL_CONFIG = {
         "root": "D:/data/l2",
         "date": "20260625",
