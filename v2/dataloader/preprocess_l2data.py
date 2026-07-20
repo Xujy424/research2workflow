@@ -18,13 +18,16 @@ def generate_path(root, date):
     return rawpath, outpath
 
 
-def process_SZ_level2(rawpath, savefile, outpath):
+def process_SZ_level2(rawpath, savefile, outpath, securities=None):
 
-    szcj_merged = pl.read_parquet(rawpath/'szcj.pq')
+    szcj_scan = pl.scan_parquet(rawpath/'szcj.pq')
+    if securities is not None:
+        szcj_scan = szcj_scan.filter(pl.col('SecurityID').is_in(list(securities)))
+    szcj_merged = szcj_scan.collect()
     szcj_merged = szcj_merged.filter(
         pl.col('MDStreamID')==11
     ).drop(
-        ['MDStreamID','SecurityIDSource','LocalTime','SeqNo']
+        ['MDStreamID','SecurityIDSource']
     ).rename({
         'LastPx':'Price',
         'LastQty':'OrderQty'
@@ -35,11 +38,14 @@ def process_SZ_level2(rawpath, savefile, outpath):
     szcj = szcj_merged.filter(pl.col('ExecType')==70).drop('ExecType')
     szcancel = szcj_merged.filter(pl.col('ExecType')==52).drop('ExecType')
 
-    szwt = pl.read_parquet(rawpath/'szwt.pq')
+    szwt_scan = pl.scan_parquet(rawpath/'szwt.pq')
+    if securities is not None:
+        szwt_scan = szwt_scan.filter(pl.col('SecurityID').is_in(list(securities)))
+    szwt = szwt_scan.collect()
     szwt = szwt.filter(
         pl.col('MDStreamID')==11
     ).drop(
-        ['MDStreamID','SecurityIDSource','LocalTime','SeqNo','OrdType']
+        ['MDStreamID','SecurityIDSource']
     ).with_columns([
         pl.col('Side').replace(49,1).replace(50,-1).cast(pl.Int8),
         pl.col('TransactTime').str.to_time(format="%H:%M:%S%.3f")
@@ -130,7 +136,7 @@ def restoreSHorder(wt, cj):
     new = new.select(partial.columns)
 
     # 3. 合并所有订单
-    init_order = pl.concat([partial, untouched, new])
+    init_order = pl.concat([partial, untouched, new], how="vertical_relaxed")
     return init_order
 
 def restoreSHorder_v2(wt, cj):
@@ -198,7 +204,7 @@ def restoreSHorder_v2(wt, cj):
         .agg([
             pl.sum("OrderQty").alias("PreDealQty"),
             pl.last("Price"),
-            pl.last("TransactTime"),
+            pl.min("TransactTime").alias("FirstTransactTime"),
         ])
     )
 
@@ -211,15 +217,17 @@ def restoreSHorder_v2(wt, cj):
                 "SecurityID",
                 "Side",
                 "PreDealQty",
+                "FirstTransactTime",
             ]),
             on=["ChannelNo", "ApplSeqNum", "SecurityID", "Side"],
             how="inner",
         )
         .with_columns([
             (pl.col("OrderQty") + pl.col("PreDealQty")).alias("OrderQty"),
+            pl.col("FirstTransactTime").alias("TransactTime"),
             pl.lit("主动部分成交").alias("OrderStatus"),
         ])
-        .drop("PreDealQty")
+        .drop(["PreDealQty", "FirstTransactTime"])
     )
 
     # 3. 普通新增挂单
@@ -251,7 +259,7 @@ def restoreSHorder_v2(wt, cj):
         .agg([
             pl.sum("OrderQty"),
             pl.last("Price"),
-            pl.last("TransactTime"),
+            pl.min("TransactTime"),
         ])
     )
     new = (
@@ -265,14 +273,17 @@ def restoreSHorder_v2(wt, cj):
     )
     new = new.select(partial.columns)
 
-    init_order = pl.concat([partial, untouched, new])
+    init_order = pl.concat([partial, untouched, new], how="vertical_relaxed")
     return init_order
 
 
-def process_SH_level2(rawpath, savefile, outpath):
-    sh = pl.read_parquet(rawpath/'sh.pq')
+def process_SH_level2(rawpath, savefile, outpath, securities=None):
+    sh_scan = pl.scan_parquet(rawpath/'sh.pq')
+    if securities is not None:
+        sh_scan = sh_scan.filter(pl.col('SecurityID').is_in(list(securities)))
+    sh = sh_scan.collect()
     sh = sh.drop(
-        ['TradeMoney','LocalTime','SeqNo','TickBSFlag']
+        ['TradeMoney']
     ).rename({
         'BizIndex':'ApplSeqNum',
         'Channel':'ChannelNo',
@@ -282,10 +293,21 @@ def process_SH_level2(rawpath, savefile, outpath):
         pl.col('TransactTime').str.to_time(format="%H:%M:%S%.3f"),
     ])
 
+    # Type=S carries per-security trading-phase changes (START/TRADE/SUSP/...).
+    # Keep it separately so snapshot replay can clear/mask a halted book.
+    shstatus = sh.filter(pl.col('Type')=='S').select([
+        'ChannelNo', 'SecurityID', 'ApplSeqNum', 'TransactTime',
+        pl.col('TickBSFlag').alias('TradingPhaseCode'),
+        'LocalTime', 'SeqNo',
+    ])
+    sh = sh.filter(pl.col('Type')!='S')
+
     shwt_added = sh.filter(pl.col('Type')=='A').drop('Type').with_columns([
         pl.when(pl.col('BuyOrderNO')!=0).then(pl.col('BuyOrderNO')).otherwise(pl.col('SellOrderNO')).alias('OrderNo'),
         pl.when(pl.col('BuyOrderNO')!=0).then(pl.lit(1)).otherwise(pl.lit(-1)).alias('Side'),
-    ]).drop(['BuyOrderNO','SellOrderNO'])
+    ]).drop([
+        'BuyOrderNO', 'SellOrderNO', 'TickBSFlag', 'LocalTime', 'SeqNo'
+    ])
 
     shcj = sh.filter(
         (pl.col('Type')=='T') | (pl.col('Type')=='D')
@@ -314,12 +336,13 @@ def process_SH_level2(rawpath, savefile, outpath):
     shcancel = shcj.filter(pl.col('Type')=='D').drop('Type')
     shcj = shcj.filter(pl.col('Type')=='T').drop('Type')
     shwt_added = shwt_added.drop('OrderNo')
-    shwt = restoreSHorder(shwt_added, shcj).drop('OrderStatus')
+    shwt = restoreSHorder_v2(shwt_added, shcj)
 
     if savefile:
         shcancel.write_parquet(outpath/'shcancel.pq',compression="gzip")
         shcj.write_parquet(outpath/'shcj.pq',compression="gzip")
         shwt.write_parquet(outpath/'shwt.pq',compression="gzip")
+        shstatus.write_parquet(outpath/'shstatus.pq',compression="gzip")
     
     return shwt, shcj, shcancel
 

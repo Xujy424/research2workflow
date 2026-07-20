@@ -65,7 +65,17 @@ def prepare_events(
 ) -> pl.DataFrame:
     """Return normalized visible add/reduce events sorted by event time."""
     reductions = pl.concat([trades, cancels], how="diagonal_relaxed")
-    order_info = orders.select(ORDER_KEY + ["Price", "OrderQty", "TransactTime"])
+    optional_order_columns = [
+        column for column in ("OrdType", "OrderStatus", "SeqNo")
+        if column in orders.columns
+    ]
+    order_info = orders.select(
+        ORDER_KEY + ["Price", "OrderQty", "TransactTime"] + optional_order_columns
+    )
+    if "OrdType" not in order_info.columns:
+        order_info = order_info.with_columns(pl.lit(None).alias("OrdType"))
+    if "OrderStatus" not in order_info.columns:
+        order_info = order_info.with_columns(pl.lit(None).alias("OrderStatus"))
 
     duplicate_keys = order_info.group_by(ORDER_KEY).len().filter(pl.col("len") > 1).height
     if duplicate_keys:
@@ -75,8 +85,10 @@ def prepare_events(
     for side, seq_col in ((1, "BidApplSeqNum"), (-1, "OfferApplSeqNum")):
         legs.append(
             reductions.select(
+                pl.col("ApplSeqNum").alias("SortNo"),
                 "ChannelNo",
                 "SecurityID",
+                pl.col("Side").alias("_AggressorSide"),
                 pl.lit(side).cast(pl.Int8).alias("Side"),
                 pl.col(seq_col).alias("ApplSeqNum"),
                 pl.col("OrderQty").alias("QtyDelta"),
@@ -85,16 +97,20 @@ def prepare_events(
         )
     reduction_legs = pl.concat(legs, how="diagonal_relaxed")
     joined_reductions = reduction_legs.join(
-        order_info.select(ORDER_KEY + ["Price", pl.lit(True).alias("_OrderMatched")]),
+        order_info.select(
+            ORDER_KEY + ["Price", "OrdType", "OrderStatus",
+                         pl.lit(True).alias("_OrderMatched")]
+        ),
         on=ORDER_KEY,
         how="left",
     )
     unusable_count = joined_reductions.filter(
-        pl.col("_OrderMatched").is_null() | pl.col("Price").is_null()
+        (pl.col("_OrderMatched").is_null() | pl.col("Price").is_null())
+        & (pl.col("Side") != pl.col("_AggressorSide"))
     ).height
     if unusable_count:
         warnings.warn(
-            f"{unusable_count} reduction legs cannot be mapped to an order price and are excluded",
+            f"{unusable_count} passive reduction legs cannot be mapped to an order price",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -105,8 +121,10 @@ def prepare_events(
         & (pl.col("Price") > 0)
     ).select(
         "EventTime",
+        "SortNo",
         pl.lit(1).cast(pl.Int8).alias("EventType"),
         "ChannelNo", "SecurityID", "Side", "ApplSeqNum", "Price",
+        "OrdType", "OrderStatus",
         (-pl.col("QtyDelta")).alias("QtyDelta"),
     )
 
@@ -116,12 +134,14 @@ def prepare_events(
         & (pl.col("OrderQty") > 0)
     ).select(
         pl.col("TransactTime").alias("EventTime"),
+        pl.col("ApplSeqNum").alias("SortNo"),
         pl.lit(0).cast(pl.Int8).alias("EventType"),
         "ChannelNo", "SecurityID", "Side", "ApplSeqNum", "Price",
+        "OrdType", "OrderStatus",
         pl.col("OrderQty").alias("QtyDelta"),
     )
     return pl.concat([add_events, reduce_events], how="vertical_relaxed").sort(
-        ["EventTime", "EventType", "ChannelNo", "ApplSeqNum"]
+        ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
     )
 
 
@@ -133,37 +153,60 @@ def generate_bar_snapshots(
     topn: int = 10,
     securities: Iterable[int | str] | None = None,
     wide: bool = True,
+    status_events: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     if topn <= 0: raise ValueError("topn must be positive")
     bars = sorted({_as_time(t) for t in bar_times})
     if not bars: raise ValueError("bar_times cannot be empty")
 
-    events = prepare_events(orders, trades, cancels)
     wanted = set(securities) if securities is not None else None
     if wanted is not None:
-        events = events.filter(pl.col("SecurityID").is_in(list(wanted)))
+        wanted_list = list(wanted)
+        orders = orders.filter(pl.col("SecurityID").is_in(wanted_list))
+        trades = trades.filter(pl.col("SecurityID").is_in(wanted_list))
+        cancels = cancels.filter(pl.col("SecurityID").is_in(wanted_list))
+        if status_events is not None:
+            status_events = status_events.filter(
+                pl.col("SecurityID").is_in(wanted_list)
+            )
+
+    events = prepare_events(orders, trades, cancels)
+    if status_events is not None and status_events.height:
+        status_code_column = (
+            "TradingPhaseCode"
+            if "TradingPhaseCode" in status_events.columns
+            else "TickBSFlag"
+        )
+        status_rows = status_events.select(
+            pl.col("TransactTime").alias("EventTime"),
+            pl.col("ApplSeqNum").alias("SortNo"),
+            pl.lit(2).cast(pl.Int8).alias("EventType"),
+            "ChannelNo", "SecurityID",
+            pl.lit(None).cast(pl.Int8).alias("Side"),
+            pl.lit(None).alias("ApplSeqNum"),
+            pl.lit(None).alias("Price"),
+            pl.lit(None).alias("OrdType"),
+            pl.col(status_code_column).alias("OrderStatus"),
+            pl.lit(0.0).alias("QtyDelta"),
+        )
+        events = pl.concat([events, status_rows], how="vertical_relaxed").sort(
+            ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
+        )
     all_securities = sorted(
         events.get_column("SecurityID").unique().to_list(),
         key=str,
     )
 
-    bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
-    level_deltas = (
-        events.join_asof(
-            bar_frame,
-            left_on="EventTime",
-            right_on="BarTime",
-            strategy="forward",
-        )
-        .filter(pl.col("BarTime").is_not_null())
-        .group_by(["BarTime", "SecurityID", "Side", "Price"])
-        .agg(pl.col("QtyDelta").sum())
-        .sort(["BarTime", "SecurityID", "Side", "Price"])
-    )
+    # Keep order-level events.  A Shenzhen U order has to be repriced to the
+    # same-side best price that exists exactly when that order arrives, so
+    # grouping deltas by the raw Price before replay is not valid.
+    level_deltas = events
 
     levels: dict[object, dict[int, dict[object, float]]] = defaultdict(
         lambda: {1: defaultdict(float), -1: defaultdict(float)}
     )
+    remaining: dict[tuple, float] = {}
+    effective_prices: dict[tuple, object] = {}
     top_cache: dict[object, tuple[list[tuple], list[tuple]]] = {}
     if wide:
         output: dict[str, list] = {"BarTime": [], "SecurityID": []}
@@ -182,9 +225,67 @@ def generate_bar_snapshots(
     for bar in tqdm(bars):
         changed_securities: set[object] = set()
         while delta_event is not None and delta_event[0] <= bar:
-            _, security, side, price, delta = delta_event
+            (
+                _, _, event_type, channel, security, side, appl_seq_num, price,
+                ord_type, order_status, delta,
+            ) = delta_event
+            if event_type == 2:
+                phase = (
+                    order_status.decode(errors="ignore")
+                    if isinstance(order_status, bytes)
+                    else str(order_status)
+                ).strip()
+                if phase in {"SUSP", "CLOSE", "ENDTR"}:
+                    levels.pop(security, None)
+                    top_cache[security] = ([], [])
+                    stale_keys = [key for key in remaining if key[1] == security]
+                    for stale_key in stale_keys:
+                        remaining.pop(stale_key, None)
+                        effective_prices.pop(stale_key, None)
+                    changed_securities.add(security)
+                delta_event = next(delta_iter, None)
+                continue
+            key = (channel, security, side, appl_seq_num)
+            normalized_ord_type = (
+                ord_type.decode(errors="ignore") if isinstance(ord_type, bytes)
+                else str(ord_type)
+            )
+
+            if event_type == 0:
+                # Shenzhen 1/ASCII-49 is a market order and never rests at its
+                # raw protection price.  U/ASCII-85 rests at the current
+                # same-side best, not at the raw Price field.
+                if normalized_ord_type in {"1", "49"}:
+                    applied = 0.0
+                else:
+                    effective_price = price
+                    if normalized_ord_type in {"U", "85"}:
+                        visible_prices = [
+                            level_price
+                            for level_price, level_qty in levels[security][side].items()
+                            if level_qty > 0
+                        ]
+                        if visible_prices:
+                            effective_price = (
+                                max(visible_prices) if side == 1 else min(visible_prices)
+                            )
+                        else:
+                            effective_price = None
+                    applied = max(float(delta), 0.0) if effective_price is not None else 0.0
+                    if applied:
+                        effective_prices[key] = effective_price
+                remaining[key] = applied
+            else:
+                available = remaining.get(key, 0.0)
+                applied = -min(max(-float(delta), 0.0), available)
+                remaining[key] = available + applied
+
+            price = effective_prices.get(key)
+            if price is None or abs(applied) < 1e-12:
+                delta_event = next(delta_iter, None)
+                continue
             side_levels = levels[security][side]
-            updated_qty = side_levels[price] + float(delta)
+            updated_qty = side_levels[price] + applied
             if updated_qty < -1e-9:
                 negative_level_count += 1
                 updated_qty = 0.0
@@ -263,12 +364,14 @@ def generate_from_proc(
     if exchange not in {"sh", "sz"}:
         raise ValueError("exchange must be 'sh' or 'sz'")
     folder = Path(root) / "proc" / date.replace("-", "")
+    status_path = folder / f"{exchange}status.pq"
     return generate_bar_snapshots(
         pl.read_parquet(folder / f"{exchange}wt.pq"),
         pl.read_parquet(folder / f"{exchange}cj.pq"),
         pl.read_parquet(folder / f"{exchange}cancel.pq"),
         make_bar_times(interval),
         topn=topn,
+        status_events=pl.read_parquet(status_path) if status_path.exists() else None,
     )
 
 
