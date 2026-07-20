@@ -518,8 +518,8 @@ def generate_closebook(
 
 if __name__ == '__main__':
 
-    L2DATA_PATH = "D:/data/l2/"
-    rawpath, outpath = generate_path(L2DATA_PATH, '20260625')
+    L2DATA_PATH = "/data/xujiayi/xjy/l2"
+    rawpath, outpath = generate_path(L2DATA_PATH, '20260624')
 
     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
 
