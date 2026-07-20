@@ -63,9 +63,13 @@ def prepare_events(
     trades: pl.DataFrame,
     cancels: pl.DataFrame,
 ) -> pl.DataFrame:
-    """Return a normalized order-level event table in exchange-time order."""
+    """Return normalized visible add/reduce events sorted by event time."""
     reductions = pl.concat([trades, cancels], how="diagonal_relaxed")
     order_info = orders.select(ORDER_KEY + ["Price", "OrderQty", "TransactTime"])
+
+    duplicate_keys = order_info.group_by(ORDER_KEY).len().filter(pl.col("len") > 1).height
+    if duplicate_keys:
+        raise ValueError(f"order table contains {duplicate_keys} duplicated ORDER_KEY values")
 
     legs: list[pl.DataFrame] = []
     for side, seq_col in ((1, "BidApplSeqNum"), (-1, "OfferApplSeqNum")):
@@ -79,8 +83,26 @@ def prepare_events(
                 pl.col("TransactTime").alias("EventTime"),
             ).filter(pl.col("ApplSeqNum").is_not_null() & (pl.col("ApplSeqNum") != 0))
         )
-    reduce_events = pl.concat(legs, how="diagonal_relaxed").join(
-        order_info.select(ORDER_KEY + ["Price"]), on=ORDER_KEY, how="left"
+    reduction_legs = pl.concat(legs, how="diagonal_relaxed")
+    joined_reductions = reduction_legs.join(
+        order_info.select(ORDER_KEY + ["Price", pl.lit(True).alias("_OrderMatched")]),
+        on=ORDER_KEY,
+        how="left",
+    )
+    unusable_count = joined_reductions.filter(
+        pl.col("_OrderMatched").is_null() | pl.col("Price").is_null()
+    ).height
+    if unusable_count:
+        warnings.warn(
+            f"{unusable_count} reduction legs cannot be mapped to an order price and are excluded",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    reduce_events = joined_reductions.filter(
+        pl.col("_OrderMatched").is_not_null()
+        & pl.col("Price").is_not_null()
+        & (pl.col("Price") > 0)
     ).select(
         "EventTime",
         pl.lit(1).cast(pl.Int8).alias("EventType"),
@@ -88,7 +110,11 @@ def prepare_events(
         (-pl.col("QtyDelta")).alias("QtyDelta"),
     )
 
-    add_events = order_info.select(
+    add_events = order_info.filter(
+        pl.col("Price").is_not_null()
+        & (pl.col("Price") > 0)
+        & (pl.col("OrderQty") > 0)
+    ).select(
         pl.col("TransactTime").alias("EventTime"),
         pl.lit(0).cast(pl.Int8).alias("EventType"),
         "ChannelNo", "SecurityID", "Side", "ApplSeqNum", "Price",
@@ -123,8 +149,7 @@ def generate_bar_snapshots(
 
     bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
     level_deltas = (
-        events
-        .join_asof(
+        events.join_asof(
             bar_frame,
             left_on="EventTime",
             right_on="BarTime",
@@ -153,6 +178,7 @@ def generate_bar_snapshots(
     delta_iter = iter(level_deltas.iter_rows(named=False))
     delta_event = next(delta_iter, None)
     negative_level_count = 0
+    crossed_samples: list[tuple] = []
     for bar in tqdm(bars):
         changed_securities: set[object] = set()
         while delta_event is not None and delta_event[0] <= bar:
@@ -181,6 +207,12 @@ def generate_bar_snapshots(
                 key=lambda item: item[0],
             )
             top_cache[security] = (bids, asks)
+            if (
+                dt.time(9, 30) <= bar < dt.time(14, 57)
+                and bids and asks and bids[0][0] >= asks[0][0]
+                and len(crossed_samples) < 20
+            ):
+                crossed_samples.append((bar, security, bids[0][0], asks[0][0]))
 
         for security in all_securities:
             bids, asks = top_cache.get(security, ([], []))
@@ -207,8 +239,13 @@ def generate_bar_snapshots(
 
     if negative_level_count:
         warnings.warn(
-            f"{negative_level_count} aggregated price levels became negative and were clamped to zero; "
-            "check restored order quantities and reduction matching.",
+            f"{negative_level_count} price-level quantities became negative and were clamped to zero",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if crossed_samples:
+        warnings.warn(
+            f"crossed books detected during continuous auction; first samples: {crossed_samples}",
             RuntimeWarning,
             stacklevel=2,
         )
