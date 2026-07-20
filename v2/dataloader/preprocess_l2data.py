@@ -336,7 +336,7 @@ def process_SH_level2(rawpath, savefile, outpath, securities=None):
     shcancel = shcj.filter(pl.col('Type')=='D').drop('Type')
     shcj = shcj.filter(pl.col('Type')=='T').drop('Type')
     shwt_added = shwt_added.drop('OrderNo')
-    shwt = restoreSHorder_v2(shwt_added, shcj)
+    shwt = restoreSHorder(shwt_added, shcj)
 
     if savefile:
         shcancel.write_parquet(outpath/'shcancel.pq',compression="gzip")
