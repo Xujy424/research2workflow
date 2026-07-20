@@ -526,7 +526,7 @@ if __name__ == '__main__':
     sh_closebook, sh_aliveorders = generate_closebook(shwt, shcj, shcd, topn=10)
     print(sh_closebook.filter(pl.col('SecurityID')==600000))
 
-    sh_closebook_correct = get_closebook('sh', L2DATA_PATH, '20260625')
+    sh_closebook_correct = get_closebook('sh', L2DATA_PATH, '20260624')
     print(sh_closebook_correct.filter(pl.col('SecurityID')==600000))
 
 
