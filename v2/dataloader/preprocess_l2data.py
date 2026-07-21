@@ -521,21 +521,21 @@ if __name__ == '__main__':
     L2DATA_PATH = "/data/xujiayi/xjy/l2"
     rawpath, outpath = generate_path(L2DATA_PATH, '20260624')
 
-    # shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
+    shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
 
-    # sh_closebook, sh_aliveorders = generate_closebook(shwt, shcj, shcd, topn=10)
-    # print(sh_closebook.filter(pl.col('SecurityID')==600000))
+    sh_closebook, sh_aliveorders = generate_closebook(shwt, shcj, shcd, topn=10)
+    print(sh_closebook.filter(pl.col('SecurityID')==600000))
 
-    # sh_closebook_correct = get_closebook('sh', L2DATA_PATH, '20260624')
-    # print(sh_closebook_correct.filter(pl.col('SecurityID')==600000))
+    sh_closebook_correct = get_closebook('sh', L2DATA_PATH, '20260624')
+    print(sh_closebook_correct.filter(pl.col('SecurityID')==600000))
 
-    szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
+    # szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
-    sz_closebook, sz_aliveorders = generate_closebook(szwt, szcj, szcd, topn=10)
-    print(sz_closebook.filter(pl.col('SecurityID')==600000))
+    # sz_closebook, sz_aliveorders = generate_closebook(szwt, szcj, szcd, topn=10)
+    # print(sz_closebook.filter(pl.col('SecurityID')==600000))
 
-    sz_closebook_correct = get_closebook('sz', L2DATA_PATH, '20260624')
-    print(sz_closebook_correct.filter(pl.col('SecurityID')==600000))
+    # sz_closebook_correct = get_closebook('sz', L2DATA_PATH, '20260624')
+    # print(sz_closebook_correct.filter(pl.col('SecurityID')==600000))
 
 
 
