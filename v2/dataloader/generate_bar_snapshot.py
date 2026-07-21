@@ -20,6 +20,7 @@ import polars as pl
 
 
 ORDER_KEY = ["ChannelNo", "SecurityID", "Side", "ApplSeqNum"]
+CLEAR_PHASES = ["SUSP", "CLOSE", "ENDTR"]
 
 
 def _as_time(value: dt.time | dt.datetime | str) -> dt.time:
@@ -62,6 +63,7 @@ def prepare_events(
     orders: pl.DataFrame,
     trades: pl.DataFrame,
     cancels: pl.DataFrame,
+    sort_events: bool = True,
 ) -> pl.DataFrame:
     """Return normalized visible add/reduce events sorted by event time."""
     reductions = pl.concat([trades, cancels], how="diagonal_relaxed")
@@ -140,8 +142,108 @@ def prepare_events(
         "OrdType", "OrderStatus",
         pl.col("OrderQty").alias("QtyDelta"),
     )
-    return pl.concat([add_events, reduce_events], how="vertical_relaxed").sort(
+    events = pl.concat([add_events, reduce_events], how="vertical_relaxed")
+    return events.sort(
         ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
+    ) if sort_events else events
+
+
+def _prepare_bar_actions(
+    events: pl.DataFrame,
+    bars: list[dt.time],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Vectorize fixed-price events; retain only state-dependent events."""
+    ord_type = pl.col("OrdType").cast(pl.String, strict=False).fill_null("")
+    phase = (
+        pl.col("OrderStatus")
+        .cast(pl.String, strict=False)
+        .fill_null("")
+        .str.strip_chars()
+    )
+    dynamic_ids = events.filter(
+        ((pl.col("EventType") == 0) & ord_type.is_in(["U", "85"]))
+        | ((pl.col("EventType") == 2) & (phase == "SUSP"))
+    ).get_column("SecurityID").unique().to_list()
+
+    parts = (
+        events.with_columns(
+            pl.col("SecurityID").is_in(dynamic_ids).alias("_Dynamic")
+        )
+        .partition_by("_Dynamic", as_dict=True, include_key=False)
+    )
+    static_events = parts.get((False,), events.head(0))
+    dynamic_events = parts.get((True,), events.head(0)).sort(
+        ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
+    )
+    bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
+
+    level_actions = (
+        static_events.filter(
+            (pl.col("EventType") != 2)
+            & ~ord_type.is_in(["1", "49"])
+        )
+        .sort("EventTime")
+        .join_asof(
+            bar_frame,
+            left_on="EventTime",
+            right_on="BarTime",
+            strategy="forward",
+        )
+        .filter(pl.col("BarTime").is_not_null())
+        .group_by(["BarTime", "SecurityID", "Side", "Price"])
+        .agg(pl.col("QtyDelta").sum())
+        .filter(pl.col("QtyDelta").abs() > 1e-12)
+        .select(
+            "BarTime",
+            pl.lit(0).cast(pl.Int8).alias("ActionType"),
+            "SecurityID", "Side", "Price", "QtyDelta",
+        )
+    )
+    clear_actions = (
+        static_events.filter(
+            (pl.col("EventType") == 2) & phase.is_in(CLEAR_PHASES)
+        )
+        .sort("EventTime")
+        .join_asof(
+            bar_frame,
+            left_on="EventTime",
+            right_on="BarTime",
+            strategy="forward",
+        )
+        .filter(pl.col("BarTime").is_not_null())
+        .select(
+            "BarTime",
+            pl.lit(1).cast(pl.Int8).alias("ActionType"),
+            "SecurityID",
+            pl.lit(None).cast(pl.Int8).alias("Side"),
+            pl.lit(None).alias("Price"),
+            pl.lit(0.0).alias("QtyDelta"),
+        )
+    )
+    bar_actions = pl.concat(
+        [level_actions, clear_actions], how="vertical_relaxed"
+    ).select(
+        pl.col("BarTime").alias("EventTime"),
+        pl.lit(None).alias("SortNo"),
+        pl.when(pl.col("ActionType") == 0)
+        .then(pl.lit(3))
+        .otherwise(pl.lit(2))
+        .cast(pl.Int8)
+        .alias("EventType"),
+        pl.lit(None).alias("ChannelNo"),
+        "SecurityID", "Side",
+        pl.lit(None).alias("ApplSeqNum"),
+        "Price",
+        pl.lit(None).alias("OrdType"),
+        pl.when(pl.col("ActionType") == 1)
+        .then(pl.lit("CLEAR"))
+        .otherwise(pl.lit(None))
+        .alias("OrderStatus"),
+        "QtyDelta",
+    )
+    return (
+        bar_actions.sort(["EventTime", "EventType", "SecurityID"]),
+        dynamic_events,
     )
 
 
@@ -170,7 +272,7 @@ def generate_bar_snapshots(
                 pl.col("SecurityID").is_in(wanted_list)
             )
 
-    events = prepare_events(orders, trades, cancels)
+    events = prepare_events(orders, trades, cancels, sort_events=False)
     if status_events is not None and status_events.height:
         status_code_column = (
             "TradingPhaseCode"
@@ -189,18 +291,14 @@ def generate_bar_snapshots(
             pl.col(status_code_column).alias("OrderStatus"),
             pl.lit(0.0).alias("QtyDelta"),
         )
-        events = pl.concat([events, status_rows], how="vertical_relaxed").sort(
-            ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
-        )
+        events = pl.concat([events, status_rows], how="vertical_relaxed")
     all_securities = sorted(
         events.get_column("SecurityID").unique().to_list(),
         key=str,
     )
 
-    # Keep order-level events.  A Shenzhen U order has to be repriced to the
-    # same-side best price that exists exactly when that order arrives, so
-    # grouping deltas by the raw Price before replay is not valid.
-    level_deltas = events
+    bar_actions, dynamic_events = _prepare_bar_actions(events, bars)
+    del events
 
     levels: dict[object, dict[int, dict[object, float]]] = defaultdict(
         lambda: {1: defaultdict(float), -1: defaultdict(float)}
@@ -218,7 +316,12 @@ def generate_bar_snapshots(
             "BarTime", "SecurityID", "Level", "BidPrice", "BidQty", "AskPrice", "AskQty"
         )}
 
-    delta_iter = iter(level_deltas.iter_rows(named=False))
+    delta_iter = heapq.merge(
+        bar_actions.iter_rows(named=False),
+        dynamic_events.iter_rows(named=False),
+        key=lambda row: row[0],
+    )
+    del bar_actions, dynamic_events
     delta_event = next(delta_iter, None)
     negative_level_count = 0
     crossed_samples: list[tuple] = []
@@ -235,7 +338,7 @@ def generate_bar_snapshots(
                     if isinstance(order_status, bytes)
                     else str(order_status)
                 ).strip()
-                if phase in {"SUSP", "CLOSE", "ENDTR"}:
+                if phase == "CLEAR" or phase in CLEAR_PHASES:
                     levels.pop(security, None)
                     top_cache[security] = ([], [])
                     stale_keys = [key for key in remaining if key[1] == security]
@@ -245,42 +348,47 @@ def generate_bar_snapshots(
                     changed_securities.add(security)
                 delta_event = next(delta_iter, None)
                 continue
-            key = (channel, security, side, appl_seq_num)
-            normalized_ord_type = (
-                ord_type.decode(errors="ignore") if isinstance(ord_type, bytes)
-                else str(ord_type)
-            )
-
-            if event_type == 0:
-                # Shenzhen 1/ASCII-49 is a market order and never rests at its
-                # raw protection price.  U/ASCII-85 rests at the current
-                # same-side best, not at the raw Price field.
-                if normalized_ord_type in {"1", "49"}:
-                    applied = 0.0
-                else:
-                    effective_price = price
-                    if normalized_ord_type in {"U", "85"}:
-                        visible_prices = [
-                            level_price
-                            for level_price, level_qty in levels[security][side].items()
-                            if level_qty > 0
-                        ]
-                        if visible_prices:
-                            effective_price = (
-                                max(visible_prices) if side == 1 else min(visible_prices)
-                            )
-                        else:
-                            effective_price = None
-                    applied = max(float(delta), 0.0) if effective_price is not None else 0.0
-                    if applied:
-                        effective_prices[key] = effective_price
-                remaining[key] = applied
+            if event_type == 3:
+                applied = float(delta)
             else:
-                available = remaining.get(key, 0.0)
-                applied = -min(max(-float(delta), 0.0), available)
-                remaining[key] = available + applied
-
-            price = effective_prices.get(key)
+                key = (channel, security, side, appl_seq_num)
+                normalized_ord_type = (
+                    ord_type.decode(errors="ignore") if isinstance(ord_type, bytes)
+                    else str(ord_type)
+                )
+                if event_type == 0:
+                    # Market orders do not rest; U orders use the current
+                    # same-side best price.
+                    if normalized_ord_type in {"1", "49"}:
+                        applied = 0.0
+                    else:
+                        effective_price = price
+                        if normalized_ord_type in {"U", "85"}:
+                            visible_prices = [
+                                level_price
+                                for level_price, level_qty
+                                in levels[security][side].items()
+                                if level_qty > 0
+                            ]
+                            if visible_prices:
+                                effective_price = (
+                                    max(visible_prices)
+                                    if side == 1 else min(visible_prices)
+                                )
+                            else:
+                                effective_price = None
+                        applied = (
+                            max(float(delta), 0.0)
+                            if effective_price is not None else 0.0
+                        )
+                        if applied:
+                            effective_prices[key] = effective_price
+                    remaining[key] = applied
+                else:
+                    available = remaining.get(key, 0.0)
+                    applied = -min(max(-float(delta), 0.0), available)
+                    remaining[key] = available + applied
+                price = effective_prices.get(key)
             if price is None or abs(applied) < 1e-12:
                 delta_event = next(delta_iter, None)
                 continue
