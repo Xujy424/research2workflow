@@ -144,7 +144,9 @@ def prepare_events(
     )
     events = pl.concat([add_events, reduce_events], how="vertical_relaxed")
     return events.sort(
-        ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
+        # SH NOTE: for equal timestamps, add events must precede reductions
+        # from the restored order so its full quantity can be deducted.
+        ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
     ) if sort_events else events
 
 
@@ -160,9 +162,11 @@ def _prepare_bar_actions(
         .fill_null("")
         .str.strip_chars()
     )
+    # SH NOTE: a later SUSP status must not send the security's entire day
+    # through order-by-order replay. SUSP is already converted to a CLEAR
+    # action below; only U orders genuinely require state-dependent pricing.
     dynamic_ids = events.filter(
-        ((pl.col("EventType") == 0) & ord_type.is_in(["U", "85"]))
-        | ((pl.col("EventType") == 2) & (phase == "SUSP"))
+        (pl.col("EventType") == 0) & ord_type.is_in(["U", "85"])
     ).get_column("SecurityID").unique().to_list()
 
     parts = (
@@ -173,7 +177,9 @@ def _prepare_bar_actions(
     )
     static_events = parts.get((False,), events.head(0))
     dynamic_events = parts.get((True,), events.head(0)).sort(
-        ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
+        # SH NOTE: restored orders are synthetic add events. At the same
+        # timestamp they must enter the book before their trade/cancel legs.
+        ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
     )
     bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
 

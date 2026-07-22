@@ -101,18 +101,21 @@ def restoreSHorder(wt, cj):
     cj_summary = cj_all.group_by(["ChannelNo", "ApplSeqNum", "SecurityID", "Side"]).agg([
         pl.sum("OrderQty"),
         pl.last("Price"),  # 一笔主动单可能同时吃掉多笔挂单
-        pl.last("TransactTime")
+        # SH NOTE: rows synthesized only from trades have no original add
+        # timestamp, so use the first trade rather than the last trade.
+        pl.min("TransactTime").alias("FirstTradeTime"),
     ])
 
     # 2. 使用反连接和半连接分离三种情况
     # 部分成交：同时存在于委托和成交（inner join）
     partial = wt.join(
-        cj_summary.select(["ChannelNo", "ApplSeqNum", "SecurityID", "Side", "OrderQty"]),
+        cj_summary.select(["ChannelNo", "ApplSeqNum", "SecurityID", "Side", "OrderQty", "FirstTradeTime"]),
         on=["ChannelNo", "ApplSeqNum", "SecurityID", "Side"],
         how="inner"
     ).with_columns([
         (pl.col("OrderQty") + pl.col("OrderQty_right")).alias("OrderQty"),
-        pl.lit("主动部分成交").alias("OrderStatus")
+        pl.when(pl.col("OrderQty_right")>0).then(pl.col("FirstTradeTime")).otherwise(pl.col("TransactTime")).alias("TransactTime"),
+        pl.when(pl.col("OrderQty_right")>0).then(pl.lit("主动部分成交")).otherwise(pl.lit("挂单被动成交")).alias("OrderStatus"),
     ]).drop("OrderQty_right")
 
     # 未成交：存在于委托但不存在于成交（anti join）
