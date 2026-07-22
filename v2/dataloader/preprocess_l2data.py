@@ -133,7 +133,9 @@ def restoreSHorder(wt, cj):
         wt.select(["ChannelNo", "ApplSeqNum", "SecurityID", "Side"]),
         on=["ChannelNo", "ApplSeqNum", "SecurityID", "Side"],
         how="anti"
-    ).with_columns([
+    ).filter(pl.col("OrderQty")>0).with_columns([
+        # SH NOTE: map the first trade time to the common output column.
+        pl.col("FirstTradeTime").alias("TransactTime"),
         pl.lit("主动完全成交").alias("OrderStatus"),
     ])
     new = new.select(partial.columns)
