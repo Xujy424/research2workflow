@@ -116,7 +116,7 @@ def restoreSHorder(wt, cj):
         (pl.col("OrderQty") + pl.col("OrderQty_right")).alias("OrderQty"),
         pl.when(pl.col("OrderQty_right")>0).then(pl.col("FirstTradeTime")).otherwise(pl.col("TransactTime")).alias("TransactTime"),
         pl.when(pl.col("OrderQty_right")>0).then(pl.lit("主动部分成交")).otherwise(pl.lit("挂单被动成交")).alias("OrderStatus"),
-    ]).drop("OrderQty_right")
+    ]).drop(["OrderQty_right",'FirstTradeTime'])
 
     # 未成交：存在于委托但不存在于成交（anti join）
     untouched = wt.join(
