@@ -59,7 +59,325 @@ def process_SZ_level2(rawpath, savefile, outpath, securities=None):
     return szwt, szcj, szcancel
 
 
-def restoreSHorder(wt, cj):
+def restoreSHorder(wt: pl.DataFrame, cj: pl.DataFrame) -> pl.DataFrame:
+    """
+    还原上交所完整原始委托表。
+
+    上交所正常连续竞价中的主动部分成交顺序可能为：
+
+        T -> T -> A
+
+    A 行记录剩余委托量，因此需要把 A 行之前的主动成交量加回，
+    并使用首笔主动成交时间作为恢复后订单的 TransactTime。
+
+    盘中停牌期间的订单顺序可能为：
+
+        SUSP -> A -> TRADE -> T
+
+    这种情况下 A 行已经先于复牌成交产生，复牌成交不能再次加回。
+    使用 TradeApplSeqNum < OrderApplSeqNum 可以区分这两种情况。
+    """
+
+    keys = [
+        "ChannelNo",
+        "ApplSeqNum",
+        "SecurityID",
+        "Side",
+    ]
+
+    # 保证成交事件按频道事件序号和时间有序。
+    cj = cj.sort([
+        "ChannelNo",
+        "ApplSeqNum",
+        "SecurityID",
+        "TransactTime",
+    ])
+
+    # 保持原版本逻辑：不使用开盘、收盘集合竞价成交恢复委托。
+    cj_df = cj.filter(
+        ~(
+            (pl.col("TransactTime") < pl.time(9, 30))
+            | (pl.col("TransactTime") >= pl.time(14, 57))
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # 1. 保存所有参与成交的买卖订单键。
+    #
+    # 用途：
+    # - 区分“挂单后成交”和“完全未成交”
+    # - 不负责判断主动方向
+    # ------------------------------------------------------------------
+
+    all_buy_keys = cj_df.select([
+        "ChannelNo",
+        pl.col("BidApplSeqNum").alias("ApplSeqNum"),
+        "SecurityID",
+        pl.lit(1).alias("Side"),
+    ])
+
+    all_sell_keys = cj_df.select([
+        "ChannelNo",
+        pl.col("OfferApplSeqNum").alias("ApplSeqNum"),
+        "SecurityID",
+        pl.lit(-1).alias("Side"),
+    ])
+
+    all_trade_keys = (
+        pl.concat(
+            [all_buy_keys, all_sell_keys],
+            how="vertical_relaxed",
+        )
+        .filter(
+            pl.col("ApplSeqNum").is_not_null()
+            & (pl.col("ApplSeqNum") != 0)
+        )
+        .unique()
+    )
+
+    # ------------------------------------------------------------------
+    # 2. 提取主动买方成交。
+    #
+    # BidApplSeqNum > OfferApplSeqNum 表示买方为后到订单。
+    # 同时保留：
+    # - ApplSeqNum：主动订单对应的订单序号
+    # - TradeApplSeqNum：当前成交事件自身的序号
+    # ------------------------------------------------------------------
+
+    active_buy = (
+        cj_df
+        .filter(
+            pl.col("BidApplSeqNum")
+            > pl.col("OfferApplSeqNum")
+        )
+        .select([
+            "ChannelNo",
+            pl.col("BidApplSeqNum").alias("ApplSeqNum"),
+            pl.col("ApplSeqNum").alias("TradeApplSeqNum"),
+            "SecurityID",
+            "OrderQty",
+            "Price",
+            "TransactTime",
+        ])
+        .with_columns(
+            pl.lit(1).alias("Side")
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # 3. 提取主动卖方成交。
+    # ------------------------------------------------------------------
+
+    active_sell = (
+        cj_df
+        .filter(
+            pl.col("OfferApplSeqNum")
+            > pl.col("BidApplSeqNum")
+        )
+        .select([
+            "ChannelNo",
+            pl.col("OfferApplSeqNum").alias("ApplSeqNum"),
+            pl.col("ApplSeqNum").alias("TradeApplSeqNum"),
+            "SecurityID",
+            "OrderQty",
+            "Price",
+            "TransactTime",
+        ])
+        .with_columns(
+            pl.lit(-1).alias("Side")
+        )
+    )
+
+    active_cj = pl.concat(
+        [active_buy, active_sell],
+        how="vertical_relaxed",
+    )
+
+    # ------------------------------------------------------------------
+    # 4. 对存在 A 行的订单，只汇总 A 行之前的主动成交。
+    #
+    # 正常主动部分成交：
+    #
+    #     TradeApplSeqNum < OrderApplSeqNum
+    #     T -> A
+    #
+    # 停牌后复牌集合撮合：
+    #
+    #     TradeApplSeqNum > OrderApplSeqNum
+    #     A -> T
+    #
+    # 后一种情况不能把成交量再次加回 A.Qty。
+    # ------------------------------------------------------------------
+
+    pre_add_summary = (
+        active_cj
+        .join(
+            wt.select(keys),
+            on=keys,
+            how="inner",
+        )
+        .filter(
+            pl.col("TradeApplSeqNum")
+            < pl.col("ApplSeqNum")
+        )
+        .group_by(keys)
+        .agg([
+            pl.sum("OrderQty").alias("PreDealQty"),
+            pl.min("TransactTime").alias("FirstTradeTime"),
+        ])
+    )
+
+    # ------------------------------------------------------------------
+    # 5. 主动部分成交订单。
+    #
+    # 恢复数量 = A 行剩余量 + A 行之前的主动成交量
+    # 恢复时间 = A 时间与首笔主动成交时间中的较早者
+    # ------------------------------------------------------------------
+
+    partial = (
+        wt
+        .join(
+            pre_add_summary,
+            on=keys,
+            how="inner",
+        )
+        .with_columns([
+            (
+                pl.col("OrderQty")
+                + pl.col("PreDealQty")
+            ).alias("OrderQty"),
+
+            pl.min_horizontal(
+                "TransactTime",
+                "FirstTradeTime",
+            ).alias("TransactTime"),
+
+            pl.lit("主动部分成交").alias("OrderStatus"),
+        ])
+        .drop([
+            "PreDealQty",
+            "FirstTradeTime",
+        ])
+    )
+
+    # ------------------------------------------------------------------
+    # 6. 有 A 行、参与过成交，但不属于 A 前主动部分成交。
+    #
+    # 普通连续竞价下主要是挂单被动成交。
+    # 停牌期间先产生 A、复牌后参与集合撮合的订单也进入此分支。
+    #
+    # 这些订单：
+    # - 不增加 OrderQty
+    # - 保留 A 行 TransactTime
+    # ------------------------------------------------------------------
+
+    passive = (
+        wt
+        .join(
+            all_trade_keys,
+            on=keys,
+            how="semi",
+        )
+        .join(
+            pre_add_summary.select(keys),
+            on=keys,
+            how="anti",
+        )
+        .with_columns(
+            pl.lit("挂单被动成交").alias("OrderStatus")
+        )
+    )
+
+    passive = passive.select(partial.columns)
+
+    # ------------------------------------------------------------------
+    # 7. 完全没有参与连续竞价成交的委托。
+    #
+    # 保留原始 A 行数量和时间。
+    # ------------------------------------------------------------------
+
+    untouched = (
+        wt
+        .join(
+            all_trade_keys,
+            on=keys,
+            how="anti",
+        )
+        .with_columns(
+            pl.lit("未成交委托").alias("OrderStatus")
+        )
+    )
+
+    untouched = untouched.select(partial.columns)
+
+    # ------------------------------------------------------------------
+    # 8. 汇总全部主动成交。
+    #
+    # 这里只用于生成成交表中存在、但委托表中没有 A 行的主动完全成交
+    # 订单。对于存在 A 行的订单，不使用这个汇总加回数量。
+    # ------------------------------------------------------------------
+
+    active_summary = (
+        active_cj
+        .group_by(keys)
+        .agg([
+            pl.sum("OrderQty"),
+            pl.last("Price"),
+            pl.min("TransactTime").alias("TransactTime"),
+        ])
+    )
+
+    # ------------------------------------------------------------------
+    # 9. 主动完全成交订单。
+    #
+    # 没有 A 行，只能使用主动成交表合成：
+    #
+    # - OrderQty = 全部主动成交量
+    # - TransactTime = 首笔主动成交时间
+    #
+    # snapshot 回放成交后，该订单剩余量应归零。
+    # ------------------------------------------------------------------
+
+    new = (
+        active_summary
+        .join(
+            wt.select(keys),
+            on=keys,
+            how="anti",
+        )
+        .filter(
+            pl.col("OrderQty") > 0
+        )
+        .with_columns(
+            pl.lit("主动完全成交").alias("OrderStatus")
+        )
+        .select(partial.columns)
+    )
+
+    # ------------------------------------------------------------------
+    # 10. 合并全部订单。
+    #
+    # 四个分支互斥：
+    # - partial：A 前存在主动成交
+    # - passive：存在 A、参与成交，但不需要加回
+    # - untouched：存在 A、未参与成交
+    # - new：不存在 A，由主动成交合成
+    # ------------------------------------------------------------------
+
+    init_order = pl.concat(
+        [
+            partial,
+            passive,
+            untouched,
+            new,
+        ],
+        how="vertical_relaxed",
+    )
+
+    return init_order
+
+
+def restoreSHorder_v0(wt, cj):
         
     cj = cj.sort(["ChannelNo", "ApplSeqNum", "SecurityID", "TransactTime"])
 
@@ -144,7 +462,7 @@ def restoreSHorder(wt, cj):
     init_order = pl.concat([partial, untouched, new], how="vertical_relaxed")
     return init_order
 
-def restoreSHorder_v2(wt, cj):
+def restoreSHorder_v1(wt, cj):
     cj = cj.sort(["ChannelNo", "ApplSeqNum", "SecurityID", "TransactTime"])
 
     # 剔除集合竞价。集合竞价阶段 A 行 Qty 按说明已经是原始委托量，不需要用成交加回。
