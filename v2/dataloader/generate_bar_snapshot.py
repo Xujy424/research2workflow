@@ -20,7 +20,10 @@ import polars as pl
 
 
 ORDER_KEY = ["ChannelNo", "SecurityID", "Side", "ApplSeqNum"]
-CLEAR_PHASES = ["SUSP", "CLOSE", "ENDTR"]
+CLEAR_PHASES = ["CLOSE", "ENDTR"]
+MASK_PHASES = ["SUSP"]
+RESUME_PHASES = ["TRADE"]
+STATE_PHASES = CLEAR_PHASES + MASK_PHASES + RESUME_PHASES
 
 
 def _as_time(value: dt.time | dt.datetime | str) -> dt.time:
@@ -203,11 +206,12 @@ def _prepare_bar_actions(
             "BarTime",
             pl.lit(0).cast(pl.Int8).alias("ActionType"),
             "SecurityID", "Side", "Price", "QtyDelta",
+            pl.lit(None).cast(pl.String).alias("StatusPhase"),
         )
     )
-    clear_actions = (
+    status_actions = (
         static_events.filter(
-            (pl.col("EventType") == 2) & phase.is_in(CLEAR_PHASES)
+            (pl.col("EventType") == 2) & phase.is_in(STATE_PHASES)
         )
         .sort("EventTime")
         .join_asof(
@@ -224,10 +228,11 @@ def _prepare_bar_actions(
             pl.lit(None).cast(pl.Int8).alias("Side"),
             pl.lit(None).alias("Price"),
             pl.lit(0.0).alias("QtyDelta"),
+            phase.alias("StatusPhase"),
         )
     )
     bar_actions = pl.concat(
-        [level_actions, clear_actions], how="vertical_relaxed"
+        [level_actions, status_actions], how="vertical_relaxed"
     ).select(
         pl.col("BarTime").alias("EventTime"),
         pl.lit(None).alias("SortNo"),
@@ -241,10 +246,7 @@ def _prepare_bar_actions(
         pl.lit(None).alias("ApplSeqNum"),
         "Price",
         pl.lit(None).alias("OrdType"),
-        pl.when(pl.col("ActionType") == 1)
-        .then(pl.lit("CLEAR"))
-        .otherwise(pl.lit(None))
-        .alias("OrderStatus"),
+        pl.col("StatusPhase").alias("OrderStatus"),
         "QtyDelta",
     )
     return (
@@ -312,6 +314,9 @@ def generate_bar_snapshots(
     remaining: dict[tuple, float] = {}
     effective_prices: dict[tuple, object] = {}
     top_cache: dict[object, tuple[list[tuple], list[tuple]]] = {}
+
+    # SUSP masks public snapshots but does not destroy the internal book.
+    suspended_securities: set[object] = set()
     if wide:
         output: dict[str, list] = {"BarTime": [], "SecurityID": []}
         for level in range(1, topn + 1):
@@ -344,13 +349,20 @@ def generate_bar_snapshots(
                     if isinstance(order_status, bytes)
                     else str(order_status)
                 ).strip()
-                if phase == "CLEAR" or phase in CLEAR_PHASES:
+                if phase in MASK_PHASES:
+                    suspended_securities.add(security)
+                    changed_securities.add(security)
+                elif phase in RESUME_PHASES:
+                    suspended_securities.discard(security)
+                    changed_securities.add(security)
+                elif phase in CLEAR_PHASES:
                     levels.pop(security, None)
                     top_cache[security] = ([], [])
                     stale_keys = [key for key in remaining if key[1] == security]
                     for stale_key in stale_keys:
                         remaining.pop(stale_key, None)
                         effective_prices.pop(stale_key, None)
+                    suspended_securities.add(security)
                     changed_securities.add(security)
                 delta_event = next(delta_iter, None)
                 continue
@@ -423,14 +435,19 @@ def generate_bar_snapshots(
             )
             top_cache[security] = (bids, asks)
             if (
-                dt.time(9, 30) <= bar < dt.time(14, 57)
+                security not in suspended_securities
+                and dt.time(9, 30) <= bar < dt.time(14, 57)
                 and bids and asks and bids[0][0] >= asks[0][0]
                 and len(crossed_samples) < 20
             ):
                 crossed_samples.append((bar, security, bids[0][0], asks[0][0]))
 
         for security in all_securities:
-            bids, asks = top_cache.get(security, ([], []))
+            if security in suspended_securities:
+                # Exchange snapshots expose no visible depth during SUSP.
+                bids, asks = [], []
+            else:
+                bids, asks = top_cache.get(security, ([], []))
             if wide:
                 output["BarTime"].append(bar)
                 output["SecurityID"].append(security)
