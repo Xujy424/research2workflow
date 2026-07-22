@@ -114,7 +114,7 @@ def restoreSHorder(wt, cj):
         how="inner"
     ).with_columns([
         (pl.col("OrderQty") + pl.col("OrderQty_right")).alias("OrderQty"),
-        pl.when(pl.col("OrderQty_right")>0).then(pl.col("FirstTradeTime")).otherwise(pl.col("TransactTime")).alias("TransactTime"),
+        pl.min_horizontal("TransactTime","FirstTradeTime").alias("TransactTime"),
         pl.when(pl.col("OrderQty_right")>0).then(pl.lit("主动部分成交")).otherwise(pl.lit("挂单被动成交")).alias("OrderStatus"),
     ]).drop(["OrderQty_right",'FirstTradeTime'])
 
@@ -124,7 +124,7 @@ def restoreSHorder(wt, cj):
         on=["ChannelNo", "ApplSeqNum", "SecurityID", "Side"],
         how="anti"
     ).with_columns(
-        pl.lit("挂单被动成交").alias("OrderStatus")
+        pl.lit("未成交委托").alias("OrderStatus")
     )
     untouched = untouched.select(partial.columns)
 
