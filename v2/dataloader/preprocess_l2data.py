@@ -59,7 +59,11 @@ def process_SZ_level2(rawpath, savefile, outpath, securities=None):
     return szwt, szcj, szcancel
 
 
-def restoreSHorder(wt: pl.DataFrame, cj: pl.DataFrame) -> pl.DataFrame:
+def restoreSHorder(
+    wt: pl.DataFrame,
+    cj: pl.DataFrame,
+    status_events: pl.DataFrame | None = None,
+) -> pl.DataFrame:
     """
     还原上交所完整原始委托表。
 
@@ -93,12 +97,42 @@ def restoreSHorder(wt: pl.DataFrame, cj: pl.DataFrame) -> pl.DataFrame:
         "TransactTime",
     ])
 
-    # 保持原版本逻辑：不使用开盘、收盘集合竞价成交恢复委托。
-    cj_df = cj.filter(
-        ~(
-            (pl.col("TransactTime") < pl.time(9, 30))
-            | (pl.col("TransactTime") >= pl.time(14, 57))
+    # 按每只证券的状态边界排除开盘、收盘集合竞价；
+    # 中间的停牌区间仍保留，继续由事件序号判断是否需要加回。
+    if status_events is None or not status_events.height:
+        raise ValueError("status_events is required to restore SH orders")
+
+    phase_column = (
+        "TradingPhaseCode"
+        if "TradingPhaseCode" in status_events.columns
+        else "TickBSFlag"
+    )
+    phases = status_events.with_columns(
+        pl.col(phase_column)
+        .cast(pl.String, strict=False)
+        .str.strip_chars()
+        .alias("_Phase")
+    )
+    boundaries = phases.group_by("SecurityID").agg(
+        pl.col("TransactTime")
+        .filter(pl.col("_Phase") == "TRADE")
+        .min()
+        .alias("_ContinuousStart"),
+        pl.col("TransactTime")
+        .filter(pl.col("_Phase") == "CCALL")
+        .min()
+        .alias("_ClosingStart"),
+    )
+    cj_df = (
+        cj.join(boundaries, on="SecurityID", how="inner")
+        .filter(
+            (pl.col("TransactTime") >= pl.col("_ContinuousStart"))
+            & (
+                pl.col("_ClosingStart").is_null()
+                | (pl.col("TransactTime") < pl.col("_ClosingStart"))
+            )
         )
+        .drop(["_ContinuousStart", "_ClosingStart"])
     )
 
     # ------------------------------------------------------------------
@@ -659,7 +693,7 @@ def process_SH_level2(rawpath, savefile, outpath, securities=None):
     shcancel = shcj.filter(pl.col('Type')=='D').drop('Type')
     shcj = shcj.filter(pl.col('Type')=='T').drop('Type')
     shwt_added = shwt_added.drop('OrderNo')
-    shwt = restoreSHorder(shwt_added, shcj)
+    shwt = restoreSHorder(shwt_added, shcj, shstatus)
 
     if savefile:
         shcancel.write_parquet(outpath/'shcancel.pq',compression="gzip")
