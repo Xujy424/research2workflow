@@ -657,7 +657,7 @@ if __name__ == "__main__":
     MANUAL_CONFIG = {
         "root": "/data/xujiayi/xjy/l2",
         "date": "20260624",
-        "exchange": "sh",       # "sh" 或 "sz"
+        "exchange": "sz",       # "sh" 或 "sz"
         "interval": "1m",       # 例如 "30s"、"1m"、"5m"
         "topn": 10,
         "output": None,          # None 表示保存到默认路径
