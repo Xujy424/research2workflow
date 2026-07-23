@@ -20,6 +20,7 @@ import polars as pl
 
 
 ORDER_KEY = ["ChannelNo", "SecurityID", "Side", "ApplSeqNum"]
+AUCTION_MATCH_EVENT = 4
 CLEAR_PHASES = ["CLOSE", "ENDTR"]
 MASK_PHASES = ["SUSP"]
 RESUME_PHASES = ["TRADE"]
@@ -152,6 +153,52 @@ def prepare_events(
         ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
     ) if sort_events else events
 
+def _split_closing_auction_trades(
+    trades: pl.DataFrame,
+    status_events: pl.DataFrame | None,
+) -> tuple[pl.DataFrame, pl.DataFrame | None]:
+    """Split SH closing-auction matches from ordinary order-leg reductions."""
+    if status_events is None or not status_events.height:
+        return trades, None
+
+    phase_column = (
+        "TradingPhaseCode"
+        if "TradingPhaseCode" in status_events.columns
+        else "TickBSFlag"
+    )
+    closing_starts = (
+        status_events.filter(
+            pl.col(phase_column)
+            .cast(pl.String, strict=False)
+            .str.strip_chars()
+            == "CCALL"
+        )
+        .group_by("SecurityID")
+        .agg(pl.min("TransactTime").alias("_ClosingStart"))
+    )
+    if not closing_starts.height:
+        return trades, None
+
+    tagged = trades.join(closing_starts, on="SecurityID", how="left")
+    is_closing = (
+        pl.col("_ClosingStart").is_not_null()
+        & (pl.col("TransactTime") >= pl.col("_ClosingStart"))
+    ).fill_null(False)
+    closing_trades = tagged.filter(is_closing)
+    regular_trades = tagged.filter(~is_closing).drop("_ClosingStart")
+    if not closing_trades.height:
+        return regular_trades, None
+
+    # SH NOTE: closing T records carry the aggregate match on boundary order
+    # ids, so they cannot be replayed as normal per-order reductions.
+    closing_matches = closing_trades.sort("TransactTime").group_by("SecurityID").agg(
+        pl.sum("OrderQty").alias("MatchQty"),
+        pl.last("Price").alias("MatchPrice"),
+        pl.max("TransactTime").alias("MatchTime"),
+    )
+    return regular_trades, closing_matches
+
+
 
 def _prepare_bar_actions(
     events: pl.DataFrame,
@@ -255,6 +302,34 @@ def _prepare_bar_actions(
     )
 
 
+def _consume_auction_side(
+    side_levels: dict[object, float],
+    match_price: float,
+    match_qty: float,
+    side: int,
+) -> float:
+    """Consume one side of a call auction by price priority."""
+    eligible = (
+        (price for price, qty in side_levels.items()
+         if qty > 0 and price >= match_price)
+        if side == 1
+        else (price for price, qty in side_levels.items()
+              if qty > 0 and price <= match_price)
+    )
+    remaining_qty = float(match_qty)
+    for price in sorted(eligible, reverse=(side == 1)):
+        deducted = min(side_levels[price], remaining_qty)
+        updated = side_levels[price] - deducted
+        if updated <= 1e-12:
+            side_levels.pop(price, None)
+        else:
+            side_levels[price] = updated
+        remaining_qty -= deducted
+        if remaining_qty <= 1e-12:
+            return 0.0
+    return remaining_qty
+
+
 def generate_bar_snapshots(
     orders: pl.DataFrame,
     trades: pl.DataFrame,
@@ -264,6 +339,7 @@ def generate_bar_snapshots(
     securities: Iterable[int | str] | None = None,
     wide: bool = True,
     status_events: pl.DataFrame | None = None,
+    aggregate_closing_auction: bool = False,
 ) -> pl.DataFrame:
     if topn <= 0: raise ValueError("topn must be positive")
     bars = sorted({_as_time(t) for t in bar_times})
@@ -280,6 +356,12 @@ def generate_bar_snapshots(
                 pl.col("SecurityID").is_in(wanted_list)
             )
 
+    closing_matches = None
+    if aggregate_closing_auction:
+        # SH NOTE: CCALL T rows are aggregate matches, not ordinary order legs.
+        trades, closing_matches = _split_closing_auction_trades(
+            trades, status_events
+        )
     events = prepare_events(orders, trades, cancels, sort_events=False)
     if status_events is not None and status_events.height:
         status_code_column = (
@@ -306,6 +388,33 @@ def generate_bar_snapshots(
     )
 
     bar_actions, dynamic_events = _prepare_bar_actions(events, bars)
+    if closing_matches is not None and closing_matches.height:
+        auction_actions = (
+            closing_matches.sort("MatchTime")
+            .join_asof(
+                pl.DataFrame({"BarTime": bars}).sort("BarTime"),
+                left_on="MatchTime",
+                right_on="BarTime",
+                strategy="backward",
+            )
+            .filter(pl.col("BarTime").is_not_null())
+            .select(
+                pl.col("BarTime").alias("EventTime"),
+                pl.lit(None).alias("SortNo"),
+                pl.lit(AUCTION_MATCH_EVENT).cast(pl.Int8).alias("EventType"),
+                pl.lit(None).alias("ChannelNo"),
+                "SecurityID",
+                pl.lit(None).cast(pl.Int8).alias("Side"),
+                pl.lit(None).alias("ApplSeqNum"),
+                pl.col("MatchPrice").alias("Price"),
+                pl.lit(None).alias("OrdType"),
+                pl.lit("CCALL_MATCH").alias("OrderStatus"),
+                pl.col("MatchQty").alias("QtyDelta"),
+            )
+        )
+        bar_actions = pl.concat(
+            [bar_actions, auction_actions], how="vertical_relaxed"
+        ).sort(["EventTime", "EventType", "SecurityID"])
     del events
 
     levels: dict[object, dict[int, dict[object, float]]] = defaultdict(
@@ -336,6 +445,7 @@ def generate_bar_snapshots(
     delta_event = next(delta_iter, None)
     negative_level_count = 0
     crossed_samples: list[tuple] = []
+    auction_shortfalls: list[tuple] = []
     for bar in tqdm(bars):
         changed_securities: set[object] = set()
         while delta_event is not None and delta_event[0] <= bar:
@@ -364,6 +474,24 @@ def generate_bar_snapshots(
                         effective_prices.pop(stale_key, None)
                     suspended_securities.add(security)
                     changed_securities.add(security)
+                delta_event = next(delta_iter, None)
+                continue
+            if event_type == AUCTION_MATCH_EVENT:
+                match_price = float(price)
+                match_qty = float(delta)
+                buy_short = _consume_auction_side(
+                    levels[security][1], match_price, match_qty, 1
+                )
+                sell_short = _consume_auction_side(
+                    levels[security][-1], match_price, match_qty, -1
+                )
+                if (buy_short > 1e-12 or sell_short > 1e-12) and len(
+                    auction_shortfalls
+                ) < 20:
+                    auction_shortfalls.append(
+                        (bar, security, match_price, buy_short, sell_short)
+                    )
+                changed_securities.add(security)
                 delta_event = next(delta_iter, None)
                 continue
             if event_type == 3:
@@ -469,6 +597,13 @@ def generate_bar_snapshots(
                     ):
                         output[column].append(value)
 
+    if auction_shortfalls:
+        warnings.warn(
+            "closing-auction book had insufficient eligible quantity; "
+            f"first samples: {auction_shortfalls}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if negative_level_count:
         warnings.warn(
             f"{negative_level_count} price-level quantities became negative and were clamped to zero",
@@ -503,6 +638,7 @@ def generate_from_proc(
         make_bar_times(interval),
         topn=topn,
         status_events=pl.read_parquet(status_path) if status_path.exists() else None,
+        aggregate_closing_auction=(exchange == "sh"),
     )
 
 
