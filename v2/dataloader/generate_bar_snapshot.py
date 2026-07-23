@@ -21,7 +21,9 @@ import polars as pl
 
 ORDER_KEY = ["ChannelNo", "SecurityID", "Side", "ApplSeqNum"]
 AUCTION_MATCH_EVENT = 4
-CLEAR_PHASES = ["CLOSE", "ENDTR"]
+# SH NOTE: CLOSE completes the closing auction; its remaining book is the
+# 15:00 closing snapshot. Only ENDTR clears internal state.
+CLEAR_PHASES = ["ENDTR"]
 MASK_PHASES = ["SUSP"]
 RESUME_PHASES = ["TRADE"]
 STATE_PHASES = CLEAR_PHASES + MASK_PHASES + RESUME_PHASES
@@ -445,6 +447,7 @@ def generate_bar_snapshots(
     delta_event = next(delta_iter, None)
     negative_level_count = 0
     crossed_samples: list[tuple] = []
+    negative_level_samples: list[tuple] = []
     auction_shortfalls: list[tuple] = []
     for bar in tqdm(bars):
         changed_securities: set[object] = set()
@@ -542,6 +545,10 @@ def generate_bar_snapshots(
             updated_qty = side_levels[price] + applied
             if updated_qty < -1e-9:
                 negative_level_count += 1
+                if len(negative_level_samples) < 20:
+                    negative_level_samples.append(
+                        (bar, security, side, price, side_levels[price], applied)
+                    )
                 updated_qty = 0.0
             if abs(updated_qty) < 1e-12:
                 side_levels.pop(price, None)
@@ -606,7 +613,8 @@ def generate_bar_snapshots(
         )
     if negative_level_count:
         warnings.warn(
-            f"{negative_level_count} price-level quantities became negative and were clamped to zero",
+            f"{negative_level_count} price-level quantities became negative "
+            f"and were clamped to zero; first samples: {negative_level_samples}",
             RuntimeWarning,
             stacklevel=2,
         )
