@@ -20,6 +20,8 @@ import polars as pl
 
 
 ORDER_KEY = ["ChannelNo", "SecurityID", "Side", "ApplSeqNum"]
+SH_EVENT_SORT = ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
+SZ_EVENT_SORT = ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
 AUCTION_MATCH_EVENT = 4
 # SH NOTE: CLOSE completes the closing auction; its remaining book is the
 # 15:00 closing snapshot. Only ENDTR clears internal state.
@@ -70,6 +72,7 @@ def prepare_events(
     trades: pl.DataFrame,
     cancels: pl.DataFrame,
     sort_events: bool = True,
+    exchange: str = "sh",
 ) -> pl.DataFrame:
     """Return normalized visible add/reduce events sorted by event time."""
     reductions = pl.concat([trades, cancels], how="diagonal_relaxed")
@@ -149,11 +152,11 @@ def prepare_events(
         pl.col("OrderQty").alias("QtyDelta"),
     )
     events = pl.concat([add_events, reduce_events], how="vertical_relaxed")
-    return events.sort(
-        # SH NOTE: for equal timestamps, add events must precede reductions
-        # from the restored order so its full quantity can be deducted.
-        ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
-    ) if sort_events else events
+    if not sort_events:
+        return events
+    if exchange.lower() == "sz":
+        return events.sort(SZ_EVENT_SORT)
+    return events.sort(SH_EVENT_SORT)
 
 def _split_closing_auction_trades(
     trades: pl.DataFrame,
@@ -205,6 +208,7 @@ def _split_closing_auction_trades(
 def _prepare_bar_actions(
     events: pl.DataFrame,
     bars: list[dt.time],
+    event_sort: list[str] = SH_EVENT_SORT,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Vectorize fixed-price events; retain only state-dependent events."""
     ord_type = pl.col("OrdType").cast(pl.String, strict=False).fill_null("")
@@ -228,11 +232,7 @@ def _prepare_bar_actions(
         .partition_by("_Dynamic", as_dict=True, include_key=False)
     )
     static_events = parts.get((False,), events.head(0))
-    dynamic_events = parts.get((True,), events.head(0)).sort(
-        # SH NOTE: restored orders are synthetic add events. At the same
-        # timestamp they must enter the book before their trade/cancel legs.
-        ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
-    )
+    dynamic_events = parts.get((True,), events.head(0)).sort(event_sort)
     bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
 
     level_actions = (
@@ -312,7 +312,7 @@ def _prepare_sz_bar_actions(
         (pl.col("EventType") == 0) & (ord_type == "85")
     )
     if not type85_adds.height:
-        return _prepare_bar_actions(events, bars)
+        return _prepare_bar_actions(events, bars, SZ_EVENT_SORT)
 
     dynamic_ids = type85_adds.get_column("SecurityID").unique().to_list()
     parts = (
@@ -323,10 +323,12 @@ def _prepare_sz_bar_actions(
     )
     static_events = parts.get((False,), events.head(0))
     dynamic_events = parts.get((True,), events.head(0))
-    static_actions, static_replay = _prepare_bar_actions(static_events, bars)
+    static_actions, static_replay = _prepare_bar_actions(
+        static_events, bars, SZ_EVENT_SORT
+    )
 
-    # Preserve every order sharing a timestamp with a type-85 add. This keeps
-    # the original add-before-reduce and SortNo ordering at price lookup time.
+    # Preserve every order sharing a timestamp with a type-85 add so the
+    # original SZ business sequence is available when its price is resolved.
     lookup_times = type85_adds.select(
         "SecurityID", "EventTime"
     ).unique()
@@ -341,7 +343,7 @@ def _prepare_sz_bar_actions(
     )
     replay_events = (
         dynamic_events.join(replay_keys, on=ORDER_KEY, how="semi")
-        .sort(["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"])
+        .sort(SZ_EVENT_SORT)
     )
 
     # Zero-price type-85 orders never entered the reference book. Their
@@ -402,7 +404,7 @@ def _prepare_sz_bar_actions(
     replay = pl.concat(
         [static_replay, replay_events],
         how="vertical_relaxed",
-    ).sort(["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"])
+    ).sort(SZ_EVENT_SORT)
     return actions, replay
 
 
@@ -472,7 +474,9 @@ def generate_bar_snapshots(
         trades, closing_matches = _split_closing_auction_trades(
             trades, status_events
         )
-    events = prepare_events(orders, trades, cancels, sort_events=False)
+    events = prepare_events(
+        orders, trades, cancels, sort_events=False, exchange=exchange
+    )
     if status_events is not None and status_events.height:
         status_code_column = (
             "TradingPhaseCode"
@@ -497,12 +501,12 @@ def generate_bar_snapshots(
         key=str,
     )
 
-    action_preparer = (
-        _prepare_sz_bar_actions
-        if exchange == "sz"
-        else _prepare_bar_actions
-    )
-    bar_actions, dynamic_events = action_preparer(events, bars)
+    if exchange == "sz":
+        bar_actions, dynamic_events = _prepare_sz_bar_actions(events, bars)
+    else:
+        bar_actions, dynamic_events = _prepare_bar_actions(
+            events, bars, SH_EVENT_SORT
+        )
     if closing_matches is not None and closing_matches.height:
         auction_actions = (
             closing_matches.sort("MatchTime")
