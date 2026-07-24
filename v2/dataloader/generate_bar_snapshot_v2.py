@@ -780,7 +780,7 @@ def generate_from_proc(
     reduction_columns = [
         "ChannelNo", "ApplSeqNum", "BidApplSeqNum", "OfferApplSeqNum",
         "SecurityID", "OrderQty", "TransactTime", "Side",
-    ]
+    ] + (["Price"] if exchange == "sh" else [])
     status_events = (
         _read_proc_frame(
             status_path,
