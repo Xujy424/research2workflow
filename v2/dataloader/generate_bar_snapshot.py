@@ -28,6 +28,22 @@ MASK_PHASES = ["SUSP"]
 RESUME_PHASES = ["TRADE"]
 STATE_PHASES = CLEAR_PHASES + MASK_PHASES + RESUME_PHASES
 
+def _event_sort_columns(events: pl.DataFrame) -> list[str]:
+    """Use exchange-specific ordering for events sharing one timestamp."""
+    is_sz = (
+        "OrdType" in events.columns
+        and events.get_column("OrdType").null_count() < events.height
+    )
+    if is_sz:
+        # SZ A/T/D rows carry the original business sequence. A completed
+        # crossing order must be reduced before a later type-85 order looks
+        # up the current same-side best price.
+        return ["EventTime", "SortNo", "EventType", "ChannelNo", "ApplSeqNum"]
+
+    # SH restored orders are synthetic adds. At the restored timestamp the
+    # add must enter before its own trade/cancel reductions.
+    return ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
+
 
 def _as_time(value: dt.time | dt.datetime | str) -> dt.time:
     if isinstance(value, dt.datetime):
@@ -149,11 +165,7 @@ def prepare_events(
         pl.col("OrderQty").alias("QtyDelta"),
     )
     events = pl.concat([add_events, reduce_events], how="vertical_relaxed")
-    return events.sort(
-        # SH NOTE: for equal timestamps, add events must precede reductions
-        # from the restored order so its full quantity can be deducted.
-        ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
-    ) if sort_events else events
+    return events.sort(_event_sort_columns(events)) if sort_events else events
 
 def _split_closing_auction_trades(
     trades: pl.DataFrame,
@@ -229,9 +241,7 @@ def _prepare_bar_actions(
     )
     static_events = parts.get((False,), events.head(0))
     dynamic_events = parts.get((True,), events.head(0)).sort(
-        # SH NOTE: restored orders are synthetic add events. At the same
-        # timestamp they must enter the book before their trade/cancel legs.
-        ["EventTime", "EventType", "SortNo", "ChannelNo", "ApplSeqNum"]
+        _event_sort_columns(events)
     )
     bar_frame = pl.DataFrame({"BarTime": bars}).sort("BarTime")
 
