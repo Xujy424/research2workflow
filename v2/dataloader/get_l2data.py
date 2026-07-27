@@ -48,6 +48,7 @@ def autoload_l2data(date: dt.date | dt.datetime | str, mode: str = "offline"):
             save_path = Path(L2DATA_PATH) / "raw" / date / f"{key}.pq"
             save_path.parent.mkdir(parents=True, exist_ok=True)
             df.write_parquet(save_path, compression="gzip")
+            print(f'{date}日期{key}表搬运完毕！')
         return None
 
     raise ValueError(f"Unsupported mode: {mode}")
@@ -83,8 +84,18 @@ def manulpull_l2data(date: dt.date | dt.datetime | str) -> None:
 
 
 if __name__ == "__main__":
-    
-    manulpull_l2data("20260624")
+
+    import numpy as np
+    import pandas as pd
+    import bisect
+
+    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-01-01')), bisect.bisect_right(dates, pd.to_datetime('2025-12-31'))
+    for date in dates[start_dt:end_dt]:
+        date = date.astype('datetime64[D]').astype(str).replace('-', '')
+        print(date)
+        autoload_l2data("20260626")
+        print()
 
 
 
