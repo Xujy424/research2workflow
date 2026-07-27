@@ -94,7 +94,7 @@ if __name__ == "__main__":
     for date in dates[start_dt:end_dt]:
         date = date.astype('datetime64[D]').astype(str).replace('-', '')
         print(date)
-        autoload_l2data("20260626")
+        autoload_l2data(date)
         print()
 
 
