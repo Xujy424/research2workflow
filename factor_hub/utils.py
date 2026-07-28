@@ -8,11 +8,26 @@ import pandas as pd
 ROOT = Path("/data/xujiayi/xjy/l2")
 
 
-def get_tables(date, exchange):
+def get_tables_per_exchange(date, exchange):
     order = pl.read_parquet(ROOT/"proc"/date/f"{exchange}wt.pq").filter((pl.col('TransactTime')>pl.time(9,30)) & (pl.col('TransactTime')<pl.time(14,57)))
     cancel = pl.read_parquet(ROOT/"proc"/date/f"{exchange}cancel.pq").filter((pl.col('TransactTime')>pl.time(9,30)) & (pl.col('TransactTime')<pl.time(14,57)))
     deal = pl.read_parquet(ROOT/"proc"/date/f"{exchange}cj.pq").filter((pl.col('TransactTime')>pl.time(9,30)) & (pl.col('TransactTime')<pl.time(14,57)))
     shot = pl.read_parquet(ROOT/"proc"/date/f"{exchange}shot_1m.pq").filter((pl.col('BarTime')>=pl.time(9,30)) & (pl.col('BarTime')<=pl.time(14,57)))
+    return order, deal, cancel, shot
+
+def get_tables(date):
+    key = ['SecurityID','ChannelNo','TransactTime','ApplSeqNum']
+    orders, deals, cancels, shots = [],[],[],[]
+    for ex in ['sh','sz']:
+        order, deal, cancel, shot = get_tables_per_exchange(date, ex)
+        orders.append(order.select(['SecurityID','ChannelNo','TransactTime','ApplSeqNum','Side','Price','OrderQty']).with_columns(pl.col("Side").cast(pl.Int8)))
+        deals.append(deal.select(['SecurityID','ChannelNo','TransactTime','ApplSeqNum','BidApplSeqNum','OfferApplSeqNum','Side','Price','OrderQty']))
+        cancels.append(cancel.select(['SecurityID','ChannelNo','TransactTime','ApplSeqNum','BidApplSeqNum','OfferApplSeqNum','Side','Price','OrderQty']))
+        shots.append(shot)
+    order = pl.concat(orders).sort(key)
+    deal = pl.concat(deals).sort(key)
+    cancel = pl.concat(cancels).sort(key)
+    shot = pl.concat(shots).sort(['SecurityID','BarTime'])
     return order, deal, cancel, shot
 
 def calc_cluster(df,shot,limit,n):

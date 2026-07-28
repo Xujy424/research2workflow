@@ -36,10 +36,10 @@ class FactorBase:
         if np.isscalar(dates):
             dates = [dates]
         for date in dates:
-            dt = bisect.bisect_left(self.dates, date)
-            vals = self.calc()
-            vals = vals.reindex(self.ticks).to_numpy(dtype=np.float32)
-            self.arr[dt] = vals
+            vals = self.calc(date)
+            vals = vals.reindex(self.ticks).values.astype(np.float32).flatten()
+            dt = bisect.bisect_left(self.dates, pd.to_datetime(date))
+            self.arr[dt,:len(vals)] = vals
         if isinstance(self.arr, np.memmap):
             self.arr.flush()
 

@@ -16,7 +16,7 @@ from time import perf_counter
 
 import polars as pl
 
-import generate_bar_snapshot as snapshot
+import v2.dataloader.l2data.generate_bar_snapshot as snapshot
 
 
 def _size_mb(frame: pl.DataFrame | None) -> float:
