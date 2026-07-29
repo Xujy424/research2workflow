@@ -10,7 +10,7 @@ from pathlib import Path
 import polars as pl
 
 try:
-    from .. import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
+    from . import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
 except ImportError:
     import sys
 
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     import bisect
 
     dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-08-11')), bisect.bisect_right(dates, pd.to_datetime('2025-12-31'))
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-12-25')), bisect.bisect_right(dates, pd.to_datetime('2025-12-25'))
     for date in dates[start_dt:end_dt]:
         date = date.astype('datetime64[D]').astype(str).replace('-', '')
         print(date)
