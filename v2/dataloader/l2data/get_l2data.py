@@ -3,19 +3,30 @@ from __future__ import annotations
 import datetime as dt
 import os
 import shutil
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
 import polars as pl
 
-try:
-    from . import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
-except ImportError:
-    import sys
 
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from v2.dataloader.l2data import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
+# 同时支持：
+# 1. python -m v2.dataloader.l2data.get_l2data
+# 2. python v2/dataloader/l2data/get_l2data.py
+if __package__:
+    from . import CIFTABLE_PATTERNS, cifs, L2DATA_PATH
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    from v2.dataloader.l2data import (
+        CIFTABLE_PATTERNS,
+        cifs,
+        L2DATA_PATH,
+    )
 
 
 def normalize_date(date: dt.date | dt.datetime | str) -> str:
@@ -31,7 +42,7 @@ def autoload_l2data(date: dt.date | dt.datetime | str, mode: str = "offline"):
         key: filename
         for filename in all_filenames
         for key, pattern in CIFTABLE_PATTERNS.items()
-        if pattern in filename
+        if filename.split('.')[0]==f'{date}_{pattern}'
     }
 
     if mode == "online":
@@ -90,7 +101,7 @@ if __name__ == "__main__":
     import bisect
 
     dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-12-25')), bisect.bisect_right(dates, pd.to_datetime('2025-12-25'))
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-01-01')), bisect.bisect_right(dates, pd.to_datetime('2026-06-30'))
     for date in dates[start_dt:end_dt]:
         date = date.astype('datetime64[D]').astype(str).replace('-', '')
         print(date)

@@ -24,7 +24,7 @@ def is_tradedate(date=None):
     else:
         return True
 
-def do_update(date=None):
+def update_date(date=None):
     if date:
         today = date
     else:
@@ -48,40 +48,51 @@ def do_update(date=None):
     dates.flush()
     return
 
-def reset_index():
-    dates = np.load(
-        Path(ROOT) / "axis" / "dates.npy",
-        mmap_mode="r+",
-        allow_pickle=False,
-    )
-    ticks = np.load(
-        Path(ROOT) / "axis" / "ticks.npy",
-        mmap_mode="r+",
-        allow_pickle=False,
-    )
-    n_valid_dates = int(np.count_nonzero(~np.isnat(dates)))
-    n_valid_ticks = int(np.count_nonzero(ticks!= ""))
 
-    need_date_expand = dates.size()-n_valid_dates < DATE_RESERVE
-    need_tick_expand = ticks.size()-n_valid_ticks < TICK_RESERVE
-
-    new_T = (
-        n_valid_dates + DATE_RESERVE
-        if need_date_expand
-        else len(dates)
-    )
-    new_N = (
-        n_valid_ticks + TICK_RESERVE
-        if need_tick_expand
-        else len(ticks)
-    )
-
+def get_all_ticks():
     
 
-    new_arr = np.full((new_T, new_N), np.nan, dtype=np.float32)
-    new_arr[:arr.shape[0], :arr.shape[1]] = arr
-    if isinstance(self.arr, np.memmap):
-        self.arr.flush()
+def update_tick()
 
-    self.arr = new_arr
-    self.T, self.N = new_arr.shape
+
+
+
+
+
+
+def _ensure_axis_reverse(path, reserve, is_valid, fill_value):
+    arr = np.load(path, allow_pickle=True)
+
+    n_valid = int(np.count_nonzero(is_valid(arr)))
+    free = arr.size - n_valid
+    if free >= reserve:
+        return False
+
+    new_arr = np.full(
+        n_valid + reserve,
+        fill_value,
+        dtype=arr.dtype,
+    )
+    new_arr[:n_valid] = arr[:n_valid]
+
+    np.save(path, new_arr, allow_pickle=True)
+    return True
+
+
+def reset_index():
+    axis_dir = ROOT / "axis"
+    date_expanded = _ensure_axis_reverse(
+        axis_dir / "dates.npy",
+        DATE_RESERVE,
+        lambda x: ~np.isnat(x),
+        np.datetime64("NaT"),
+    )
+    tick_expanded = _ensure_axis_reverse(
+        axis_dir / "ticks.npy",
+        TICK_RESERVE,
+        lambda x: x != "",
+        "",
+    )
+    return date_expanded, tick_expanded
+
+    

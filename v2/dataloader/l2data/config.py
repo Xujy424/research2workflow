@@ -68,7 +68,7 @@ CIFTABLE_PATTERNS = {
     # "szshot": "mdl_6_28_0",
     # "shshot": "MarketData",
 }
-cifs = CIFSLoader("xujiayi", "ZSfund.com@202606")
+cifs = CIFSLoader("xujiayi", "ZSfund.com@202607")
 L2DATA_PATH = ROOT + 'l2/'
 
 
