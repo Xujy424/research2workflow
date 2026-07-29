@@ -101,15 +101,16 @@ def update_tick(date):
     n_valid = int(np.count_nonzero(is_valid(ticks)))
     valid_ticks = ticks[:n_valid]
 
-    ipos = sorted([t for t in current_ticks if t not in valid_ticks])
+    ipos = sorted(set(current_ticks).difference(set(valid_ticks)))
+    if len(ipos)==0: return
     i = 0
     for ipo in ipos:
-        if ipo in valid_ticks:
-            print(f"{ipo} 已存在于 ticks.npy")
-        else:
-            ticks[n_valid+i]=ipo
-            i += 1
-    np.save(path, sorted(ticks), allow_pickle=True)
+        ticks[n_valid+i]=ipo
+        i += 1
+
+    n_valid = int(np.count_nonzero(is_valid(ticks)))
+    ticks[:n_valid] = sorted(ticks[:n_valid])
+    np.save(path, ticks, allow_pickle=True)
     return
         
 
@@ -155,8 +156,6 @@ if __name__ == '__main__':
     # _,_ = reset_index()
     # dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
     # ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    # print(dates)
-    # print(ticks)
     # print(len(dates),len(ticks))
 
 
@@ -199,34 +198,32 @@ if __name__ == '__main__':
             continue
     dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
     ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    print([t for t in ticks if t!=''])
     print(len(dates),len([t for t in ticks if t!='']))
 
-    start_dt = '2008-01-01'     
-    end_dt = '2026-06-30'
-    sql_axis = f'''select
-                    C.SecuCode as "tick",
-                    A.TradingDay as "date"
-                from QT_StockPerformance A
-                left join SecuMain C
-                on A.InnerCode = C.InnerCode
-                where A.TradingDay between '{start_dt}' and '{end_dt}'
-                    and C.SecuMarket in (83,90)
-                    and C.SecuCategory=1
-                union all
-                select
-                    C.SecuCode as "tick",
-                    B.TradingDay as "date"
-                from LC_STIBPerformance B
-                left join SecuMain C
-                on B.InnerCode = C.InnerCode
-                where B.TradingDay between '{start_dt}' and '{end_dt}'
-                    and C.SecuMarket in (83,90)
-                    and C.SecuCategory=1
-            '''
-    axis = pl.read_database(sql_axis, JY_CONN).sort('tick','date')
+    # start_dt = '2008-01-01'     
+    # end_dt = '2026-06-30'
+    # sql_axis = f'''select
+    #                 C.SecuCode as "tick",
+    #                 A.TradingDay as "date"
+    #             from QT_StockPerformance A
+    #             left join SecuMain C
+    #             on A.InnerCode = C.InnerCode
+    #             where A.TradingDay between '{start_dt}' and '{end_dt}'
+    #                 and C.SecuMarket in (83,90)
+    #                 and C.SecuCategory=1
+    #             union all
+    #             select
+    #                 C.SecuCode as "tick",
+    #                 B.TradingDay as "date"
+    #             from LC_STIBPerformance B
+    #             left join SecuMain C
+    #             on B.InnerCode = C.InnerCode
+    #             where B.TradingDay between '{start_dt}' and '{end_dt}'s
+    #                 and C.SecuMarket in (83,90)
+    #                 and C.SecuCategory=1
+    #         '''
+    # axis = pl.read_database(sql_axis, JY_CONN).sort('tick','date')
 
-    ticks = axis['tick'].unique().sort().to_numpy()
-    print(len(ticks))
-    #np.save('/data/xujiayi/end2end/axis/ticks.npy', ticks, allow_pickle=True)
+    # tmp = axis['tick'].unique().sort().to_numpy()
+    # print(len(tmp))
     
