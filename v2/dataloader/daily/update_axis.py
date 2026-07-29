@@ -49,7 +49,7 @@ def update_date(date=None):
         today = date
     else:
         today = datetime.now( ZoneInfo("Asia/Shanghai") ).date()
-        today_np = np.datetime64(today, "D")
+        today = np.datetime64(today, "D")
 
     path = Path(ROOT) / "axis" / "dates.npy"
     dates = np.load(
@@ -60,11 +60,11 @@ def update_date(date=None):
     n_dates = int(np.count_nonzero(~np.isnat(dates)))
     valid_dates = dates[:n_dates]
 
-    idx = np.searchsorted(valid_dates, today_np)
-    if idx < n_dates and valid_dates[idx] == today_np:
+    idx = np.searchsorted(valid_dates, today)
+    if idx < n_dates and valid_dates[idx] == today:
         print(f"{today} 已存在于 dates.npy")
         return 
-    dates[n_dates] = today_np
+    dates[n_dates] = today
     dates.flush()
     return
 
@@ -93,18 +93,24 @@ def get_all_ticks(date):
     return df['tick'].unique().sort().to_numpy()
 
 def update_tick(date):
-    new_ticks = get_all_ticks(date)
-    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    current_ticks = get_all_ticks(date)
+    path = Path(ROOT) / "axis" / "ticks.npy"
+    ticks = np.load(path, allow_pickle=True)
 
     is_valid = lambda x: x != ""
     n_valid = int(np.count_nonzero(is_valid(ticks)))
     valid_ticks = ticks[:n_valid]
-    if n_valid>=new_ticks:
-        return False
-    else:
-        ipos = sorted([t for t in new_ticks if t not in valid_ticks])
-        ticks[n_valid:len(ipos)] = ipos
-        return True
+
+    ipos = sorted([t for t in current_ticks if t not in valid_ticks])
+    i = 0
+    for ipo in ipos:
+        if ipo in valid_ticks:
+            print(f"{ipo} 已存在于 ticks.npy")
+        else:
+            ticks[n_valid+i]=ipo
+            i += 1
+    np.save(path, sorted(ticks), allow_pickle=True)
+    return
         
 
 def _ensure_axis_reverse(path, reserve, is_valid, fill_value):
@@ -143,32 +149,33 @@ def reset_index():
 
 
 if __name__ == '__main__':
-    dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
-    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    print(len(dates),len(ticks))
-    _,_ = reset_index()
-    dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
-    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    print(dates)
-    print(ticks)
-    print(len(dates),len(ticks))
+    # dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
+    # ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    # print(len(dates),len(ticks))
+    # _,_ = reset_index()
+    # dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
+    # ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    # print(dates)
+    # print(ticks)
+    # print(len(dates),len(ticks))
 
 
     # date_list = pd.date_range('2026-01-01', '2026-06-30').strftime('%Y-%m-%d').tolist()
+    # date_list = np.array(date_list, dtype='datetime64')
     # new_tradeday = []
     # for d in date_list:
     #     if is_tradedate(d):
     #         new_tradeday.append(d)
 
-    # import pymssql
-    # JY_CONFIG = {
-    #     "server": '10.10.0.102',
-    #     "user": 'jydbReader',
-    #     "password": 'jy@9043!Reader',
-    #     "database": 'jydb',
-    #     "charset": 'cp936'
-    # }
-    # JY_CONN = pymssql.connect(**JY_CONFIG)
+    import pymssql
+    JY_CONFIG = {
+        "server": '10.10.0.102',
+        "user": 'jydbReader',
+        "password": 'jy@9043!Reader',
+        "database": 'jydb',
+        "charset": 'cp936'
+    }
+    JY_CONN = pymssql.connect(**JY_CONFIG)
     # sql_axis = f'''select
     #         TradingDay as "date"
     #     from QT_StockPerformance
@@ -179,3 +186,47 @@ if __name__ == '__main__':
 
     # print(set(valid_new_tradeday).difference(set(new_tradeday)))
     # print(set(new_tradeday).difference(set(valid_new_tradeday)))
+
+
+    date_list = pd.date_range('2026-01-01', '2026-06-30').strftime('%Y-%m-%d').tolist()
+    date_list = np.array(date_list, dtype='datetime64')
+
+    for d in date_list:
+        if is_tradedate(d):
+            update_date(d)
+            update_tick(d)
+        else:
+            continue
+    dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
+    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    print([t for t in ticks if t!=''])
+    print(len(dates),len([t for t in ticks if t!='']))
+
+    start_dt = '2008-01-01'     
+    end_dt = '2026-06-30'
+    sql_axis = f'''select
+                    C.SecuCode as "tick",
+                    A.TradingDay as "date"
+                from QT_StockPerformance A
+                left join SecuMain C
+                on A.InnerCode = C.InnerCode
+                where A.TradingDay between '{start_dt}' and '{end_dt}'
+                    and C.SecuMarket in (83,90)
+                    and C.SecuCategory=1
+                union all
+                select
+                    C.SecuCode as "tick",
+                    B.TradingDay as "date"
+                from LC_STIBPerformance B
+                left join SecuMain C
+                on B.InnerCode = C.InnerCode
+                where B.TradingDay between '{start_dt}' and '{end_dt}'
+                    and C.SecuMarket in (83,90)
+                    and C.SecuCategory=1
+            '''
+    axis = pl.read_database(sql_axis, JY_CONN).sort('tick','date')
+
+    ticks = axis['tick'].unique().sort().to_numpy()
+    print(len(ticks))
+    #np.save('/data/xujiayi/end2end/axis/ticks.npy', ticks, allow_pickle=True)
+    
