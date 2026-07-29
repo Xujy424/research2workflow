@@ -111,7 +111,7 @@ def update_tick(date):
     n_valid = int(np.count_nonzero(is_valid(ticks)))
     ticks[:n_valid] = sorted(ticks[:n_valid])
     np.save(path, ticks, allow_pickle=True)
-    return
+    return 
         
 
 def _ensure_axis_reverse(path, reserve, is_valid, fill_value):
@@ -119,44 +119,51 @@ def _ensure_axis_reverse(path, reserve, is_valid, fill_value):
 
     n_valid = int(np.count_nonzero(is_valid(arr)))
     free = arr.size - n_valid
-    if free >= reserve:
-        return False
 
-    new_arr = np.full(
-        n_valid + reserve,
-        fill_value,
-        dtype=arr.dtype,
-    )
-    new_arr[:n_valid] = arr[:n_valid]
+    if free < reserve:
+        new_arr = np.full(
+            n_valid + reserve,
+            fill_value,
+            dtype=arr.dtype,
+        )
+        new_arr[:n_valid] = arr[:n_valid]
+        np.save(path, new_arr, allow_pickle=True)
+        
+    return n_valid, len(arr)
 
-    np.save(path, new_arr, allow_pickle=True)
-    return True
-
-def reset_index():
+def reset_axis():
     axis_dir = ROOT / "axis"
-    date_expanded = _ensure_axis_reverse(
+    date_n_valid, date_old_len = _ensure_axis_reverse(
         axis_dir / "dates.npy",
         DATE_RESERVE,
         lambda x: ~np.isnat(x),
         np.datetime64("NaT"),
     )
-    tick_expanded = _ensure_axis_reverse(
+    tick_n_valid, tick_old_len = _ensure_axis_reverse(
         axis_dir / "ticks.npy",
         TICK_RESERVE,
         lambda x: x != "",
         "",
     )
-    return date_expanded, tick_expanded
+
+    new_arr = np.full((date_n_valid+DATE_RESERVE, tick_n_valid+TICK_RESERVE), np.nan)
+    stock_dir = ROOT/"stock"
+    for p in stock_dir.rglob('*.bin'):
+        arr = np.memmap(p, mode='r', dtype=bool if 'mask' in p else float, shape=(date_old_len, tick_old_len))
+        new_arr[:date_old_len, :tick_old_len] = arr
+        new_arr.astype(bool if 'mask' in p else float).tofile(p)
+    return True
+
 
 
 if __name__ == '__main__':
-    # dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
-    # ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    # print(len(dates),len(ticks))
-    # _,_ = reset_index()
-    # dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
-    # ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    # print(len(dates),len(ticks))
+    dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
+    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    print(len(dates),len(ticks))
+    _,_ = reset_axis()
+    dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
+    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    print(len(dates),len(ticks))
 
 
     # date_list = pd.date_range('2026-01-01', '2026-06-30').strftime('%Y-%m-%d').tolist()
@@ -166,15 +173,15 @@ if __name__ == '__main__':
     #     if is_tradedate(d):
     #         new_tradeday.append(d)
 
-    import pymssql
-    JY_CONFIG = {
-        "server": '10.10.0.102',
-        "user": 'jydbReader',
-        "password": 'jy@9043!Reader',
-        "database": 'jydb',
-        "charset": 'cp936'
-    }
-    JY_CONN = pymssql.connect(**JY_CONFIG)
+    # import pymssql
+    # JY_CONFIG = {
+    #     "server": '10.10.0.102',
+    #     "user": 'jydbReader',
+    #     "password": 'jy@9043!Reader',
+    #     "database": 'jydb',
+    #     "charset": 'cp936'
+    # }
+    # JY_CONN = pymssql.connect(**JY_CONFIG)
     # sql_axis = f'''select
     #         TradingDay as "date"
     #     from QT_StockPerformance
@@ -187,18 +194,18 @@ if __name__ == '__main__':
     # print(set(new_tradeday).difference(set(valid_new_tradeday)))
 
 
-    date_list = pd.date_range('2026-01-01', '2026-06-30').strftime('%Y-%m-%d').tolist()
-    date_list = np.array(date_list, dtype='datetime64')
+    # date_list = pd.date_range('2026-01-01', '2026-06-30').strftime('%Y-%m-%d').tolist()
+    # date_list = np.array(date_list, dtype='datetime64')
 
-    for d in date_list:
-        if is_tradedate(d):
-            update_date(d)
-            update_tick(d)
-        else:
-            continue
-    dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
-    ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
-    print(len(dates),len([t for t in ticks if t!='']))
+    # for d in date_list:
+    #     if is_tradedate(d):
+    #         update_date(d)
+    #         update_tick(d)
+    #     else:
+    #         continue
+    # dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
+    # ticks = np.load(ROOT/"axis"/"ticks.npy", allow_pickle=True)
+    # print(len(dates),len([t for t in ticks if t!='']))
 
     # start_dt = '2008-01-01'     
     # end_dt = '2026-06-30'

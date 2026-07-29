@@ -22,7 +22,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-    from v2.dataloader.l2data import (
+    from v2.dataloader.level2 import (
         CIFTABLE_PATTERNS,
         cifs,
         L2DATA_PATH,
@@ -101,6 +101,7 @@ if __name__ == "__main__":
     import bisect
 
     dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    dates = [d for d in dates if not np.isnat(d)]
     start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-01-01')), bisect.bisect_right(dates, pd.to_datetime('2026-06-30'))
     for date in dates[start_dt:end_dt]:
         date = date.astype('datetime64[D]').astype(str).replace('-', '')

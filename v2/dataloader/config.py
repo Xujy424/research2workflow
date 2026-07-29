@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 import pymssql
 
-from .l2data.cifsLoader import CIFSLoader
+from .level2.cifsLoader import CIFSLoader
 
 
 ROOT = '/data/xujiayi/xjy/'
