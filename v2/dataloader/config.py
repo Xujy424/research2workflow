@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 import pymssql
 
-from l2data.cifsLoader import CIFSLoader
+from .l2data.cifsLoader import CIFSLoader
 
 
 ROOT = '/data/xujiayi/xjy/'
@@ -61,5 +61,3 @@ CIFTABLE_PATTERNS = {
 }
 cifs = CIFSLoader("xujiayi", "ZSfund.com@202607")
 L2DATA_PATH = ROOT + 'l2/'
-
-

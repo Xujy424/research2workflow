@@ -11,12 +11,20 @@ import argparse
 import cProfile
 import datetime as dt
 import pstats
+import sys
 from pathlib import Path
 from time import perf_counter
 
 import polars as pl
 
-import v2.dataloader.l2data.generate_bar_snapshot as snapshot
+if __package__:
+    from . import generate_bar_snapshot as snapshot
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    from v2.dataloader.l2data import generate_bar_snapshot as snapshot
 
 
 def _size_mb(frame: pl.DataFrame | None) -> float:

@@ -11,14 +11,14 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 
 if __package__:
-    from ..config import *
+    from ..config import get_jy_conn
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-    from v2.dataloader.config import *
+    from v2.dataloader.config import get_jy_conn
 
 
 ROOT = Path("/data/xujiayi/xjy/")
@@ -179,7 +179,3 @@ if __name__ == '__main__':
 
     # print(set(valid_new_tradeday).difference(set(new_tradeday)))
     # print(set(new_tradeday).difference(set(valid_new_tradeday)))
-    
-
-
-    
