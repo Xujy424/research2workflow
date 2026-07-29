@@ -1,7 +1,7 @@
 ﻿"""Data loading package public interface."""
 
 from .cifsLoader import CIFSLoader
-from .config import (
+from ..config import (
     CIFTABLE_PATTERNS,
     L2DATA_PATH,
     cifs,

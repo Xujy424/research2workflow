@@ -8,16 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 import pymssql
 
-from .cifsLoader import CIFSLoader
-import exchange_calendars as xcals
-
-
-
-START_DATE = "2010-01-01"
-END_DATE = "2025-12-31"
-@lru_cache(maxsize=1)
-def get_xshg_calendar():
-    return xcals.get_calendar("XSHG")
+from l2data.cifsLoader import CIFSLoader
 
 
 ROOT = '/data/xujiayi/xjy/'
