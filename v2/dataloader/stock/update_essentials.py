@@ -134,9 +134,36 @@ def update_d_essentials(date, dates, ticks, conn, root):
     dt = np.searchsorted(dates, date)
     for f_name, f in d_essentials.items():
         path = root / "d_essentials" / f"{f_name}.bin"
-        arr = np.load(path, mmap_mode="r+", allow_pickle=False)
-        arr[dt] = d_essentials[f_name]
+        arr = np.memmap(path, dtype=float, mode='r+', shape=(len(dates),len(ticks)))
+        arr[dt] = f
         arr.flush()
     return
     
     
+
+def update_m_essentials(date, dates, ticks, conn, root):
+    sql_mfield = f'''
+    select
+        SecCode      as "tick",
+        BarTime      as "time",
+        Open/1000    as "open",
+        High/1000    as "high",
+        Low/1000     as "low",
+        close/1000   as "close",
+        Volume/1000  as "volume",
+        Amount/1000  as "amount"
+    from StockPriceOneMin
+    where FDate = '{date}'
+    '''
+    mfield = pl.read_database(sql_mfield, conn).sort(['tick',"time"])
+    field_name = [f for f_name in mfield.columns if f_name!='tick' and f_name!='time']
+
+    dt = np.searchsorted(dates, date)
+    for f_name in field_name:
+        f = mfield.pivot(index='time',columns='tick',values=f_name).to_pandas().set_index('time').fillna(0)
+        f = f.reindex(columns=ticks).values
+
+        path = root / "m_essentials" / f"{f_name}.bin"
+        arr = np.memmap(path, dtype=float, mode='r+', shape=(len(dates),len(ticks)))
+        arr[dt,:,:] = f
+        arr.flush()

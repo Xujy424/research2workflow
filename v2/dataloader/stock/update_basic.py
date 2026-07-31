@@ -167,7 +167,8 @@ def update_basic(date, dates, ticks, conn, root):
     dt = np.searchsorted(dates, date)
     for arr_name in feats_name:
         path = root / "basic" / f"{arr_name}.bin"
-        arr = np.load(path, mmap_mode="r+", allow_pickle=False)
+        typ = bool if arr_name not in ['price_ceil','price_floor'] else float
+        arr = np.memmap(path, dtype=typ, mode='r+', shape=(len(dates),len(ticks)))
         arr[dt] = basic_feats[arr_name]
         arr.flush()
     return
@@ -185,7 +186,7 @@ def get_next_trading_day(date, dates) -> str:
     return datetime.strftime(next_date_dt, "%Y-%m-%d")
 
 
-def update_tradable(date, dates, ticks, conn):
+def update_tradable(date, dates, ticks, conn, root):
     ceil_only, floor_only, hit_ceil, hit_floor = update_hit(date, ticks, conn)
     hastrade = update_hastrade(date, ticks, conn)
     isst = update_isst(date, ticks, conn)       
@@ -199,5 +200,10 @@ def update_tradable(date, dates, ticks, conn):
     tradable = hastrade & next_hastrade &\
                ~ceil_only & ~floor_only & ~hit_ceil & ~hit_floor & ~next_ceil_only & ~next_floor_only & ~next_hit_ceil & ~next_hit_floor &\
                ~isst & ~isnew & ~issuspend
-    return tradable
+
+    path = root / "basic" / "tradable.bin"
+    arr = np.memmap(path, dtype=bool, mode='r+', shape=(len(dates),len(ticks)))
+    dt = np.searchsorted(dates, date)
+    arr[dt] = tradable
+    arr.flush()
 
