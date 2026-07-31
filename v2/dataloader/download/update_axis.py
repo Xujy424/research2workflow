@@ -37,11 +37,19 @@ def is_tradedate(date=None):
     else:
         return True
 
-def is_last_tradedate(date=None):
+def is_last_tradedate_of_year(date=None):
     if date:
         today = date
     else:
         today = datetime.now( ZoneInfo("Asia/Shanghai") ).date()
+
+    cal = xcals.get_calendar('XSHG')
+    end_of_year = today.replace(month=12, day=31)
+    schedule = cal.schedule(start_date=today, end_date=end_of_year)
+    
+    if today not in schedule.index.date:
+        return False
+    return today == schedule.index[-1].date()
 
 
 def update_date(date=None):
@@ -128,10 +136,13 @@ def _ensure_axis_reverse(path, reserve, is_valid, fill_value):
         )
         new_arr[:n_valid] = arr[:n_valid]
         np.save(path, new_arr, allow_pickle=True)
-        
+
     return n_valid, len(arr)
 
 def reset_axis():
+    '''
+        年底重置索引
+    '''
     axis_dir = ROOT / "axis"
     date_n_valid, date_old_len = _ensure_axis_reverse(
         axis_dir / "dates.npy",
