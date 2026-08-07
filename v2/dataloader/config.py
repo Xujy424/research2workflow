@@ -61,3 +61,20 @@ CIFTABLE_PATTERNS = {
 }
 cifs = CIFSLoader("xujiayi", "ZSfund.com@202607")
 L2DATA_PATH = ROOT + 'l2/'
+
+
+
+
+
+
+
+
+sql=f"""
+SELECT
+    f.id,
+    f.stock_code,
+    f.con_np
+FROM con_forecast_stk f
+WHERE f.con_date='2025-12-31'
+"""
+pl.read_database(sql,conn).sort('stock_code')
