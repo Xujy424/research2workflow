@@ -4,73 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 
-
-sql = f'''
-select
-   A.InfoPublDate   as 'start_date',
-   A.CancelDate     as 'end_date',
-   B.SecuCode       as 'tick',
-   B.CompanyCode    as 'code',
-   A.FirstIndustryName as 'industry'
-from DZ_ExgIndustry A
-left join SecuMain B
-on A.CompanyCode = B.CompanyCode
-where A.Standard=38
-   and B.SecuMarket in (83,90)
-   and B.SecuCategory=1
-
-union all 
-
-select
-   C.InfoPublDate   as 'start_date',
-   C.CancelDate     as 'end_date',
-   B.SecuCode       as 'tick',
-   B.CompanyCode    as 'code',
-   C.FirstIndustryName as 'industry'
-from LC_STIBExgIndustry C
-left join SecuMain B
-on C.CompanyCode = B.CompanyCode
-where C.Standard=38
-   and B.SecuMarket in (83,90)
-   and B.SecuCategory=1
-'''
-
-ind = pl.read_database(sql, JY_CONN).sort('tick')
-ind
-
-
-
-ticks = np.load('/data/xujiayi/end2end/axis/ticks.npy', allow_pickle=True)
-dts = np.load('/data/xujiayi/end2end/axis/dates.npy', allow_pickle=True)
-
-df_dates = pl.DataFrame({"date": dts}).sort("date")
-df_ticks = pl.DataFrame({"tick": ticks}).sort("tick")
-df_base = df_dates.join(df_ticks, how="cross")
-
-
-ind_processed = (
-    ind
-    .filter(pl.col("tick").is_in(ticks))
-    .with_columns([
-        pl.col("start_date").cast(pl.Datetime),
-        pl.col("end_date").cast(pl.Datetime).fill_null(pl.datetime(2099, 12, 31))
-    ])
-    .sort(["tick", "start_date"])
-)
-ind_processed = (
-    df_base
-    .join_asof(
-        ind_processed,
-        left_on="date",
-        right_on="start_date",
-        by="tick",
-        strategy="backward"
-    )
-    .filter(pl.col("date") < pl.col("end_date"))
-    .select(["date", "tick", "industry"])
-)
-ind_processed
-
+# 1.0 申万行业分类命名更改映射
 update_map = {
     "黑色金属": "钢铁",
     "建筑建材": "建筑材料",
@@ -84,38 +18,6 @@ update_map = {
     "餐饮旅游": "社会服务",
     "电气设备": "电力设备",
 }
-ind_processed = ind_processed.with_columns(pl.col('industry').replace(update_map).alias("industry"))
-ind_processed
-
-bank_tick = ind_processed.filter(pl.col('industry')=='银行')['tick'].unique()
-financial_tick = ind_processed.filter(pl.col('industry')=='非银金融')['tick'].unique()
-coal_tick = ind_processed.filter(pl.col('industry')=='煤炭')['tick'].unique()
-petrochemicals_tick = ind_processed.filter(pl.col('industry')=='石油石化')['tick'].unique()
-
-ind_final = (
-    ind_processed
-    .with_columns([
-        # 1. 处理"金融服务"的拆分
-        pl.when(pl.col("industry") == "金融服务")
-        .then(
-            pl.when(pl.col("tick").is_in(bank_tick)).then(pl.lit("银行"))
-            .when(pl.col("tick").is_in(financial_tick)).then(pl.lit("非银金融"))
-            .otherwise(pl.lit("非银金融"))
-        )
-        # 2. 处理"采掘"的拆分
-        .when(pl.col("industry") == "采掘")
-        .then(
-            pl.when(pl.col("tick").is_in(coal_tick)).then(pl.lit("煤炭"))
-            .when(pl.col("tick").is_in(petrochemicals_tick)).then(pl.lit("石油石化"))
-            .otherwise(pl.lit("煤炭"))
-        )
-        # 3. 其他行业保持不变
-        .otherwise(pl.col("industry"))
-        .alias("industry")
-    ])
-)
-ind_final
-
 
 # 1.1 行业→行业值映射
 industry_to_id = {
@@ -147,35 +49,6 @@ sector_to_id = {
 }
 
 
-ind_sector_id = (
-    ind_final
-    .with_columns([
-        pl.col("industry").replace(industry_to_id).alias("industry_id"),
-        pl.col("industry").replace(industry_to_sector).alias("sector")
-    ])
-    .with_columns([
-        pl.col("sector").replace(sector_to_id).alias("sector_id")
-    ])
-)
-
-df_industry = (
-    ind_sector_id
-    .pivot(index="date", columns="tick", values="industry_id")
-    .sort("date")
-    .with_columns([
-        pl.all().exclude("date").cast(pl.Float64).fill_null(np.nan)
-    ])
-)
-
-df_sector = (
-    ind_sector_id
-    .pivot(index="date", columns="tick", values="sector_id")
-    .sort("date")
-    .with_columns([
-        pl.all().exclude("date").cast(pl.Float64).fill_null(np.nan)
-    ])
-)
-
 
 def _daily_industry_codes(date, ticks, conn):
     """按有效期读取一天的申万行业，并返回行业、板块编码。"""
@@ -206,7 +79,7 @@ def _daily_industry_codes(date, ticks, conn):
         and B.SecuMarket in (83,90)
         and B.SecuCategory=1
     '''
-    history = pl.read_database(sql, conn).filter(pl.col("tick").is_in(ticks))
+    history = pl.read_database(sql, conn).filter(pl.col("tick").is_in(ticks)).unique()
     if history.is_empty():
         empty = np.full(len(ticks), np.nan, dtype=float)
         return empty, empty.copy()
@@ -268,7 +141,7 @@ def _daily_industry_codes(date, ticks, conn):
 
 
 def _write_daily_mask(date, dates, ticks, root, name, values):
-    dt = np.searchsorted(dates, date)
+    dt = np.searchsorted(dates, pd.to_datetime(date))
     n_valid = np.count_nonzero(ticks != "")
     arr = np.memmap(root / "mask" / f"{name}.bin", dtype=float, mode="r+", shape=(len(dates), len(ticks)))
     arr[dt,:n_valid] = values
