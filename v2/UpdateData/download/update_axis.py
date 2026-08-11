@@ -18,7 +18,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-    from v2.dataloader.config import get_jy_conn
+    from v2.UpdateData.config import get_jy_conn
 
 
 ROOT = Path("/data/xujiayi/xjy/")

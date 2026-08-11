@@ -245,15 +245,10 @@ def load_analyst_history(start_date,end_date,conn,report_ids,cfg):
     ) ind
     WHERE ra.author_id IN ({authors})
       AND f.report_quarter=4
-      AND (
-          f.report_id IN ({reports})
-          OR (
-              f.create_date>='{start.date()}' AND f.create_date<='{end.date()}'
-              AND f.create_date<=f.entrytime
-              AND f.entrytime<=DATEADD(day,{cfg.max_entry_delay_days},f.create_date)
-              AND f.reliability>={cfg.min_reliability}
-          )
-      )
+      AND f.create_date>='{start.date()}' AND f.create_date<='{end.date()}'
+      AND f.create_date<=f.entrytime
+      AND f.entrytime<=DATEADD(day,{cfg.max_entry_delay_days},f.create_date)
+      AND f.reliability>={cfg.min_reliability}
     """
     history=pl.read_database(sql,conn)
     first=pl.read_database(f"""
@@ -289,7 +284,7 @@ def calc_author_accuracy(date,ticks,conn,jy_conn,cfg,pafe_data):
             calc_pafe(date,ticks,conn,jy_conn,cfg,False,fy=year).select("report_id","report_year","pafe") 
             for year in sorted(missing_years)
         ]
-        accuracy_data=pl.concat([*prior,accuracy_data]).filter(pl.col("report_year").is_in(list(source_years)))
+        accuracy_data=pl.concat([*prior,accuracy_data])
     reports=",".join(map(str,accuracy_data["report_id"].drop_nulls().unique().to_list())) or "NULL"
     authors=pl.read_database(f"""
         SELECT DISTINCT report_id,author_id
@@ -370,7 +365,8 @@ def build_pmafe_samples(date,ticks,conn,jy_conn,cfg,return_author_accuracy=False
     author_accuracy=calc_author_accuracy(
         date,ticks,conn,jy_conn,cfg,fit_data
     )
-    samples=merge_analyst_attributes(fit_data,history,author_accuracy)
+    acc = author_accuracy.filter(pl.col('report_year')<pl.col('report_year').max())
+    samples=merge_analyst_attributes(fit_data,history,acc)
     if return_author_accuracy:
         return samples,author_accuracy
     return samples
@@ -460,10 +456,48 @@ def calc_accwt(date,ticks,conn,jy_conn,cfg):
         asof-pd.DateOffset(years=1),asof,conn,current["report_id"],cfg
     )
 
-    author_accuracy = author_accuracy.filter(
-        pl.col('report_year')==fy-1
+    author_accuracy=author_accuracy.filter(
+        pl.col("report_year")==fy
+    )
+
+    next_samples=merge_analyst_attributes(current,history,author_accuracy)
+    predicted=predict_next_pmafe(next_samples,coefficients)
+
+    mean=pl.col("predicted_pmafe").mean().over("stock_code")
+    std=pl.col("predicted_pmafe").std().over("stock_code")
+    count=pl.len().over("stock_code")
+    return predicted.with_columns(
+        ((pl.col("predicted_pmafe")-mean)/std).alias("pmafe_z")
     ).with_columns(
-        (pl.col("report_year")+1).alias("report_year")
+        pl.when(count==1).then(1.0)
+        .when(std.is_null() | (std==0)).then(1.0/count)
+        .when(pl.col("pmafe_z")<0).then(-pl.col("pmafe_z"))
+        .otherwise(0.0).alias("accwt")
+    ).with_columns(
+        (pl.col("accwt")/pl.col("accwt").sum().over("stock_code")).alias("accwt")
+    )
+
+
+def calc_next_accwt(date,ticks,conn,jy_conn,cfg):
+    samples,author_accuracy=build_pmafe_samples(
+        date,ticks,conn,jy_conn,cfg,return_author_accuracy=True
+    )
+    coefficients,_=fit_pmafe_model(samples)
+
+    asof=_date(date)
+    fy=asof.year if (asof.month,asof.day)>=(5,1) else asof.year-1
+    current=load_forecasts(fy,conn,date,cfg,latest_only=True).with_columns(
+        pl.lit(None,dtype=pl.Float64).alias("pafe"),
+        pl.col("create_date").dt.offset_by("-1y").alias("last_yr_date"),
+    )
+
+    history=load_analyst_history(
+        current["last_yr_date"].min(),
+        current["create_date"].max(),
+        conn,current["report_id"],cfg,
+    )
+    author_accuracy=author_accuracy.filter(
+        pl.col("report_year")==fy
     )
 
     next_samples=merge_analyst_attributes(current,history,author_accuracy)
@@ -484,12 +518,14 @@ def calc_accwt(date,ticks,conn,jy_conn,cfg):
     )
 
 def calc_con_forecast(date,ticks,conn,jy_conn,cfg):
-    return calc_accwt(date,ticks,conn,jy_conn,cfg).with_columns(
+    return calc_next_accwt(date,ticks,conn,jy_conn,cfg).with_columns(
         (pl.col("forecast_np")*pl.col("accwt")).alias("weighted_forecast")
     ).group_by("stock_code").agg(
         pl.col("weighted_forecast").sum().alias("con_forecast"),
         pl.len().alias("num_forecasts"),
     )
+
+
 
 
 
@@ -543,9 +579,10 @@ if __name__=="__main__":
     SELECT
         f.id,
         f.stock_code,
-        f.con_np
+        f.con_np,
+        f.con_np_type
     FROM con_forecast_stk f
-    WHERE f.con_date='2025-12-31' AND f.report_year=4
+    WHERE f.con_date='{date}' AND f.con_year={int(date[:4])}
     """
     correct_con_np = pl.read_database(sql,conn).sort('stock_code')
     print(correct_con_np)

@@ -22,7 +22,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-    from v2.dataloader.level2 import (
+    from v2.UpdateData.level2 import (
         CIFTABLE_PATTERNS,
         cifs,
         L2DATA_PATH,
