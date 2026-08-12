@@ -166,6 +166,14 @@ def reset_axis():
     return True
 
 
+def init_empty_field(dates, ticks, fileshare, name, typ):
+    T,N = len(dates), len(ticks)
+    arr = np.full(shape=(T,N),fill_value=np.nan)
+    arr.astype(typ).tofile(ROOT/f'{fileshare}'/f'{name}.bin')
+
+    
+
+
 
 if __name__ == '__main__':
     dates = np.load(ROOT/"axis"/"dates.npy", allow_pickle=True)
