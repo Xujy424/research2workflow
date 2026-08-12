@@ -542,10 +542,9 @@ if __name__=="__main__":
     import pymssql
     from sqlalchemy import create_engine
     from sqlalchemy.engine import URL
+    from tqdm import tqdm
+    from update_industry import _daily_industry_codes
 
-    ticks = np.load(r"D:\data\axis\ticks.npy", allow_pickle=True)
-    date = '2024-06-30'
-    cfg = AnalystFactorConfig()
 
     zyyx_url = URL.create(drivername="mssql+pymssql",
              username="zyyxReader",
@@ -571,24 +570,135 @@ if __name__=="__main__":
     }
     jy_conn = pymssql.connect(**JY_CONFIG)
 
+    cfg = AnalystFactorConfig()
 
-    con_np = calc_con_forecast(date,ticks,conn,jy_conn,cfg)
-    print(con_np)
+    ticks = np.load(r"/data/xujiayi/xjy/axis/ticks.npy", allow_pickle=True)
+    valid_ticks = [t for t in ticks if t!='']
+    dates = np.load(r"/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    # date = '2024-06-30'
+    
 
-    sql=f"""
-    SELECT
-        f.id,
-        f.stock_code,
-        f.con_np,
-        f.con_np_type
-    FROM con_forecast_stk f
-    WHERE f.con_date='{date}' AND f.con_year={int(date[:4])}
-    """
-    correct_con_np = pl.read_database(sql,conn).sort('stock_code')
-    print(correct_con_np)
+    res = []
+    for date in tqdm(dates[601:701]):
+        date = date.astype(datetime).strftime('%Y-%m-%d')
+        
+        con_np = calc_con_forecast(date,ticks,conn,jy_conn,cfg)
+        print(con_np)
 
+        sql=f"""
+        SELECT
+            f.id,
+            f.stock_code,
+            f.con_np,
+            f.con_np_type
+        FROM con_forecast_stk f
+        WHERE f.con_date='{date}' AND f.con_year={int(date[:4])}
+        """
+        correct_con_np = pl.read_database(sql,conn).sort('stock_code')
+        print(correct_con_np)
 
+        dt = np.searchsorted(dates,pd.to_datetime(date))
+        raw_pct = np.memmap(r"/data/xujiayi/xjy/d_field/pct.bin",dtype=float,mode='r',shape=(len(dates),len(ticks)))
+        pct = raw_pct.copy()
+        pct[:-2] = pct[2:]
+        pct[-2:] = np.nan
+        pct = pct[dt]
+        pct = pl.DataFrame({
+            "tick":[str(t).zfill(6) for t in ticks],
+            "pct":pct
+        })
 
+        mv = np.memmap(r"/data/xujiayi/xjy/d_field/mv.bin",dtype=float,mode='r',shape=(len(dates),len(ticks)))
+        mv = mv[dt]
+        ind, _ = _daily_industry_codes(date, valid_ticks, jy_conn)   #为什么ind有大量的nan？
+        beta = pl.DataFrame({
+            "tick":[str(t).zfill(6) for t in ticks],
+            "mv":mv,
+            'ind':ind
+        })
+
+        tmp = (
+            con_np.join(correct_con_np,on="stock_code",how="inner")
+            .join(pct,left_on="stock_code",right_on="tick",how="left")
+            .join(beta,left_on="stock_code",right_on="tick",how="left")
+            .drop_nulls()
+        )
+
+        alpha_forecast = tmp['con_forecast'].to_numpy().reshape(1, -1)
+        alpha_np = tmp['con_np'].to_numpy().reshape(1, -1)
+        mv = tmp['mv'].to_numpy().reshape(1, -1)
+        ind = tmp['ind'].to_numpy().reshape(1, -1)
+
+        def winsorize_and_standardize(x, low=0.01, high=0.99, axis=1):
+            x = x.copy()
+            # 计算上下分位数
+            lower = np.nanquantile(x, low, axis=axis, keepdims=True)
+            upper = np.nanquantile(x, high, axis=axis, keepdims=True)
+            # 截断
+            x = np.clip(x, lower, upper)
+            # 标准化：减去均值，除以标准差
+            mean = np.nanmean(x, axis=axis, keepdims=True)
+            std = np.nanstd(x, axis=axis, keepdims=True) + 1e-8
+            x = (x - mean) / std
+            return x
+
+        # 调用中性化函数（假设 Processor 类已定义）
+        def calc_indmv_neutral_longshort(ind_signal, temp_mv):
+            ix = ~(np.isnan(ind_signal) | np.isinf(ind_signal) | np.isnan(temp_mv) | np.isinf(temp_mv))
+            ind_signal[~ix] = np.nan
+            temp_mv[~ix] = np.nan
+
+            mv_mean = bn.nanmean(temp_mv, axis=1)
+            signal_mean = bn.nanmean(ind_signal, axis=1)
+            m = (mv_mean * signal_mean - bn.nanmean(temp_mv * ind_signal, axis=1)) / (mv_mean**2 - bn.nanmean(temp_mv**2, axis=1) + 1e-6)
+            b = signal_mean - m * mv_mean
+            residual = (ind_signal.T - (temp_mv.T * m) - b).T
+            ind_signal = (residual.T - bn.nanmean(residual, axis=1)) / (bn.nanstd(residual, axis=1) + 1e-6)
+            return ind_signal.T
+        
+        def indmv_neutral_longshort(alpha_vec, ind_arr, mv_arr):
+            new_signal = np.full_like(alpha_vec, np.nan)   # [T,N]
+            ln_mv = np.log(mv_arr)
+            for i in range(31):
+                ind_ix = ind_arr == i
+                ind_select = ind_ix.any(axis=0)
+                ind_ix_select = ind_ix[:, ind_select]
+                ind_signal = alpha_vec[:, ind_select].copy()
+                ind_signal[~ind_ix_select] = np.nan
+                temp_mv = ln_mv[:, ind_select].copy()
+                new_signal[ind_ix] = calc_indmv_neutral_longshort(ind_signal, temp_mv)[ind_ix_select]
+            return new_signal
+
+        alpha_forecast = winsorize_and_standardize(alpha_forecast, low=0.01, high=0.99, axis=1)
+        alpha_np = winsorize_and_standardize(alpha_np, low=0.01, high=0.99, axis=1)
+        
+        neutral_forecast = indmv_neutral_longshort(alpha_forecast, ind, mv)[0, :]
+        neutral_np = indmv_neutral_longshort(alpha_np, ind, mv)[0, :]
+
+        neutral_forecast = winsorize_and_standardize(neutral_forecast.reshape(1, -1), low=0.01, high=0.99, axis=1).flatten()
+        neutral_np = winsorize_and_standardize(neutral_np.reshape(1, -1), low=0.01, high=0.99, axis=1).flatten()
+
+        tmp = (
+            tmp
+            .with_columns(
+                pl.Series('con_forecast_neutral', neutral_forecast),
+                pl.Series('con_np_neutral', neutral_np) 
+            )
+            .with_columns(
+                ((pl.col('con_forecast_neutral').rank('ordinal') * 10 / pl.len()).ceil().cast(pl.Int8)).alias('awcct_group'),
+                ((pl.col('con_np_neutral').rank('ordinal') * 10 / pl.len()).ceil().cast(pl.Int8)).alias('zyyx_group'),
+            )
+        )
+        tmp_awcct = tmp.group_by('awcct_group').agg(pl.col('pct').mean().alias('awcct_pct'))
+        tmp_zyyx = tmp.group_by('zyyx_group').agg(pl.col('pct').mean().alias('zyyx_pct'))
+        group_pct = tmp_awcct.join(
+            tmp_zyyx,left_on='awcct_group',right_on='zyyx_group',how='inner'
+        ).select(['awcct_group','awcct_pct','zyyx_pct']).sort('awcct_group').rename({'awcct_group':'group'}).with_columns(
+            pl.lit(f'{date}').str.to_datetime().alias('date')
+        )
+        res.append(group_pct)
+
+    res = pl.concat(res).sort('group','date')
 
 
 
