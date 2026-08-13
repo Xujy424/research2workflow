@@ -1,7 +1,7 @@
-﻿﻿"""Data loading package public interface.
+"""Data loading package public interface.
 
 Configuration attributes are loaded on demand to avoid a circular import:
-dataloader.config needs CIFSLoader, while callers historically import
+UpdateData.config needs CIFSLoader, while callers historically import
 configuration values from this package.
 """
 
@@ -19,7 +19,7 @@ _CONFIG_EXPORTS = {
 
 def __getattr__(name: str):
     if name in _CONFIG_EXPORTS:
-        from ...dataloader import config
+        from .. import config
 
         return getattr(config, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
