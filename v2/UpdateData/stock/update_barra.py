@@ -58,7 +58,7 @@ def _save(root, dates, ticks, dt, values):
         p = folder / f'{name}.bin'
         if not p.exists():
             with p.open('wb') as f:
-                f.truncate(size)
+                f.truncate(size)   # 扩展到二维 float64 矩阵所需大小
             a = np.memmap(p, dtype=float, mode='r+', shape=(len(dates), len(ticks)))
             a[:] = np.nan
             a.flush()
@@ -68,82 +68,164 @@ def _save(root, dates, ticks, dt, values):
         a[dt] = value
         a.flush()
 
-def update_barra(date, dates, ticks, conn, root):
-    """Compute all ten factors for date and overwrite only its matrix row."""
-    ds = np.asarray(dates, dtype='datetime64[D]')
-    target = np.datetime64(date)
-    dt = int(np.searchsorted(ds, target))
-    if dt >= len(ds) or ds[dt] != target:
-        raise ValueError(f'{date} is not in dates')
-    n = len(ticks)
-    sql = f"select top 1 Yield from Bond_CBYieldCurve where CurveCode=10 and YieldTypeCode=1 and YearsToMaturity=10 and EndDate<='{date}' order by EndDate desc"
-    df = pd.read_sql(sql, conn)
-    rf = np.nan if df.empty else (1 + float(df.iloc[0, 0])) ** (1 / 242) - 1
-    start = max(0, dt - 241)
-    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', 'd_field/pct.bin', start=start, end=dt + 1)
-    mv = _mat(root, dates, ticks, 'd_essentials/total_mv.bin', 'd_field/mv.bin', 'fundamental/mcap.bin', start=start, end=dt + 1)
+
+def _calc_beta(ret, mv, rf, n):
+    if len(ret) != 242:
+        return np.full(n, np.nan)
+    total = np.nansum(mv, 1, keepdims=True)
+    rm = np.nansum(np.divide(mv, total, out=np.zeros_like(mv), where=total != 0) * ret, 1) - rf   # 市值加权个股收益率得到市场收益率
+    return _beta(ret - rf, rm)
+
+
+def _calc_btop(root, dates, ticks, dt, mcap):
+    book = _row(root, dates, ticks, dt, 'fundamental/bookvalue.bin')
+    return np.divide(book, mcap, out=np.full(len(ticks), np.nan), where=mcap != 0)
+
+
+def _calc_size(mcap):
+    with np.errstate(all='ignore'):
+        return np.log(mcap)
+
+
+def _calc_nonlinear_size(size):
+    ok = np.isfinite(size)
+    result = np.full(len(size), np.nan)
+    if not ok.any() or np.nanstd(size) == 0:
+        return result
+    z = np.full(len(size), np.nan)
+    z[ok] = (size[ok] - np.nanmean(size)) / np.nanstd(size)
+    if ok.sum() >= 2:
+        design = np.column_stack((np.ones(ok.sum()), z[ok]))
+        result[ok] = z[ok] ** 3 - design @ np.linalg.lstsq(design, z[ok] ** 3, rcond=None)[0]
+    return result
+
+
+def _calc_momentom(root, dates, ticks, dt):
+    ''' 过去 525 个交易日（剔除最近 21 天）的加权收益率，半衰期 126 天 '''
+    end = dt - 20
+    start = end - 484
+    if start < 0:
+        return np.full(len(ticks), np.nan)
+    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', 'd_field/pct.bin', start=start, end=end)
+    return _mean(np.log1p(ret), _w(484, 124))
+
+
+def _calc_residual_vol(ret, mv, rf, beta, n):
+    '''由 DASTD（超额收益波动率）、CMRA（12 个月收益率区间）、HSIGMA（Beta 残差波动）加权合成，并对 BETA 正交化'''
+    if len(ret) != 242:
+        return np.full(n, np.nan)
+
     total = np.nansum(mv, 1, keepdims=True)
     rm = np.nansum(np.divide(mv, total, out=np.zeros_like(mv), where=total != 0) * ret, 1) - rf
     excess = ret - rf
-    beta = _beta(excess, rm) if len(ret) == 242 else np.full(n, np.nan)
-    if len(ret) == 242:
-        lr = np.log1p(excess)
-        lr[~np.isfinite(lr)] = 0
-        cs = np.cumsum(lr, 0)
-        residual = 0.74 * _std(excess, _w(242, 41)) + 0.16 * (cs.max(0) - cs.min(0)) + 0.1 * _std(excess - beta[None, :] * rm[:, None], _w(242, 62))
-    else:
-        residual = np.full(n, np.nan)
-    mend = dt - 20
-    mstart = mend - 484
-    momentum = _mean(
-        np.log1p(
-            _mat(root, dates, ticks, 'd_essentials/pct.bin', 'd_field/pct.bin', start=mstart, end=mend)
-        )
-        , _w(484, 124)
-    ) if mstart >= 0 else np.full(n, np.nan)
-    mcap = _row(root, dates, ticks, dt, 'fundamental/mcap.bin', 'd_essentials/total_mv.bin', 'd_field/mv.bin')
-    with np.errstate(all='ignore'):
-        size = np.log(mcap)
-    ok = np.isfinite(size)
-    z = np.full(n, np.nan)
-    if ok.any() and np.nanstd(size) != 0:
-        z[ok] = (size[ok] - np.nanmean(size)) / np.nanstd(size)
-    nonlinear = np.full(n, np.nan)
-    if ok.sum() >= 2:
-        X = np.column_stack((np.ones(ok.sum()), z[ok]))
-        nonlinear[ok] = z[ok] ** 3 - X @ np.linalg.lstsq(X, z[ok] ** 3, rcond=None)[0]
-    book = _row(root, dates, ticks, dt, 'fundamental/bookvalue.bin')
-    btop = np.divide(book, mcap, out=np.full(n, np.nan), where=mcap != 0)
+
+    # DASTD: 过去 242 个交易日个股超额收益率的指数加权标准差，半衰期 41 天。
+    dastd = _std(excess, _w(242, 41))
+
+    # CMRA: 过去 242 个交易日累计对数超额收益的最大值与最小值之差。
+    lr = np.log1p(excess)
+    lr[~np.isfinite(lr)] = 0
+    cumulative = np.cumsum(lr, 0)
+    cmra = cumulative.max(0) - cumulative.min(0)
+
+    # HSIGMA: 市场模型残差的指数加权标准差，半衰期 62 天。
+    residual = excess - beta[None, :] * rm[:, None]
+    hsigma = _std(residual, _w(242, 62))
+
+    return 0.74 * dastd + 0.16 * cmra + 0.10 * hsigma
+
+
+def _calc_liquidity(root, dates, ticks, dt):
     turnover = _mat(root, dates, ticks, 'd_essentials/turnover.bin', 'd_field/turnover.bin', start=max(0, dt - 31), end=dt + 1)
-    if len(turnover) == 32:
-        with np.errstate(all='ignore'):
-            stom = np.array([np.log(np.sum(turnover[i:i + 21], 0)) for i in range(12)])
-            liquidity = 0.35 * stom[-1] + 0.35 * np.log(stom[-3:].mean(0)) + 0.3 * np.log(stom.mean(0))
-    else:
-        liquidity = np.full(n, np.nan)
+    if len(turnover) != 32:
+        return np.full(len(ticks), np.nan)
+    with np.errstate(all='ignore'):
+        stom = np.array([np.log(np.sum(turnover[i:i + 21], 0)) for i in range(12)])
+        return 0.35 * stom[-1] + 0.35 * np.log(stom[-3:].mean(0)) + 0.3 * np.log(stom.mean(0))
+
+
+def _calc_leverage(root, dates, ticks, dt, mcap):
     pref = _row(root, dates, ticks, dt, 'fundamental/e_preferstock_bookvalue.bin')
     debt = _row(root, dates, ticks, dt, 'fundamental/long_liability.bin')
     liability = _row(root, dates, ticks, dt, 'fundamental/total_liability.bin')
     net = _row(root, dates, ticks, dt, 'fundamental/net_asset.bin')
     asset = _row(root, dates, ticks, dt, 'fundamental/total_asset.bin', 'fundamental/bookvalue.bin')
     with np.errstate(all='ignore'):
-        leverage = 0.38 * (mcap + pref + debt) / mcap + 0.35 * liability / asset + 0.27 * (net + debt) / (net - pref)
-    gs = max(0, dt - 1209)
-    eps = _mat(root, dates, ticks, 'fundamental/eps.bin', start=gs, end=dt + 1)
-    revenue = _mat(root, dates, ticks, 'fundamental/operating_revenue.bin', start=gs, end=dt + 1)
+        return 0.38 * (mcap + pref + debt) / mcap + 0.35 * liability / asset + 0.27 * (net + debt) / (net - pref)
+
+
+def _calc_growth1(root, dates, ticks, dt):
+    '''由过去五年销售增长率、每股盈利增长率、分析师预测的长期和短期盈利增长率加权合成'''
+    # 定义：0.18 × EGRLF + 0.11 × EGRSF + 0.24 × EGRO + 0.47 × SGRO。
+    # EGRLF：分析师预测长期（3-5年）EPS增长率。
+    # EGRSF：分析师预测短期（1年）EPS增长率。
+    # EGRO：过去5年EPS增长率，回归斜率 / 平均EPS。
+    # SGRO：过去5年营业收入增长率，回归斜率 / 平均营收。
+    # 需基本面数据 (年度频率):
+    # egro: slope(eps_5y) / mean(eps_5y)
+    # sgro: slope(revenue_5y) / mean(revenue_5y)
+    # growth = 0.18 * egrlf + 0.11 * egrsf + 0.24 * egro + 0.47 * sgro
+    n = len(ticks)
+    start = max(0, dt - 1209)
+    eps = _mat(root, dates, ticks, 'fundamental/eps.bin', start=start, end=dt + 1)
+    revenue = _mat(root, dates, ticks, 'fundamental/operating_revenue.bin', start=start, end=dt + 1)
     egro = _growth(eps) if len(eps) == 1210 else np.full(n, np.nan)
     sgro = _growth(revenue) if len(revenue) == 1210 else np.full(n, np.nan)
     egrlf = _row(root, dates, ticks, dt, 'con_forecast/con_npcgrate_2y_roll.bin')
     con_eps = _row(root, dates, ticks, dt, 'con_forecast/con_eps_ttm.bin')
     eps_ttm = _row(root, dates, ticks, dt, 'fundamental/eps_ttm.bin')
-    growth = 0.18 * egrlf + 0.11 * (con_eps / (eps_ttm + 1e-08) - 1) + 0.24 * egro + 0.47 * sgro
+    return 0.18 * egrlf + 0.11 * (con_eps / (eps_ttm + 1e-08) - 1) + 0.24 * egro + 0.47 * sgro
+
+
+def _calc_earnings_yield(root, dates, ticks, dt, mcap):
+    n = len(ticks)
     cash = _mat(root, dates, ticks, 'fundamental/cashdiv.bin', start=max(0, dt - 241), end=dt + 1)
     close = _row(root, dates, ticks, dt, 'd_essentials/close.bin', 'd_field/close.bin')
     profit = _row(root, dates, ticks, dt, 'fundamental/netprofit_ttm.bin')
     con_np = _row(root, dates, ticks, dt, 'con_forecast/con_np_ttm.bin')
     ce = np.nansum(cash, 0) / close if len(cash) == 242 else np.full(n, np.nan)
-    earnings = 0.68 * con_np / mcap + 0.21 * ce + 0.11 * profit / mcap
-    values = dict(beta=beta, btop=btop, size=size, nonlinear_size=nonlinear, momentom=momentum, residual_vol=residual, liquidity=liquidity, leverage=leverage, growth1=growth, earnings_yield=earnings)
+    return 0.68 * con_np / mcap + 0.21 * ce + 0.11 * profit / mcap
+
+
+def update_barra(date, dates, ticks, conn, root):
+    """Compute all ten factors for date and overwrite only its matrix row."""
+    target = np.datetime64(date)
+    dt = int(np.searchsorted(dates, target))
+    if dt >= len(dates) or dates[dt] != target:
+        raise ValueError(f'{date} is not in dates')
+
+    sql = f"""
+    select 
+        top 1 Yield 
+    from Bond_CBYieldCurve 
+    where CurveCode=10 
+        and YieldTypeCode=1 
+        and YearsToMaturity=10 
+        and EndDate<='{date}' order by EndDate desc
+    """
+    df = pd.read_sql(sql, conn)
+    rf = np.nan if df.empty else (1 + float(df.iloc[0, 0])) ** (1 / 242) - 1
+    start = max(0, dt - 241)
+    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', 'd_field/pct.bin', start=start, end=dt + 1)
+    mv = _mat(root, dates, ticks, 'd_essentials/total_mv.bin', 'd_field/mv.bin', 'fundamental/mcap.bin', start=start, end=dt + 1)
+    mcap = _row(root, dates, ticks, dt, 'fundamental/mcap.bin', 'd_essentials/total_mv.bin', 'd_field/mv.bin')
+
+    beta = _calc_beta(ret, mv, rf, len(ticks))
+    size = _calc_size(mcap)
+    values = {
+        'beta': beta,
+        'btop': _calc_btop(root, dates, ticks, dt, mcap),
+        'size': size,
+        'nonlinear_size': _calc_nonlinear_size(size),
+        'momentom': _calc_momentom(root, dates, ticks, dt),
+        'residual_vol': _calc_residual_vol(ret, mv, rf, beta, len(ticks)),
+        'liquidity': _calc_liquidity(root, dates, ticks, dt),
+        'leverage': _calc_leverage(root, dates, ticks, dt, mcap),
+        'growth1': _calc_growth1(root, dates, ticks, dt),
+        'earnings_yield': _calc_earnings_yield(root, dates, ticks, dt, mcap),
+    }
     _save(root, dates, ticks, dt, values)
     return values
+
+
 __all__ = ['BARRA_NAMES', 'update_barra']
