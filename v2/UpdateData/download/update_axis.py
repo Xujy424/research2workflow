@@ -166,9 +166,12 @@ def reset_axis():
     return True
 
 
-def init_empty_field(dates, ticks, fileshare, name, typ):
+def init_empty_field(dates, ticks, fileshare, name, typ, dim=None):
     T,N = len(dates), len(ticks)
-    arr = np.full(shape=(T,N),fill_value=np.nan)
+    if dim is None:
+        arr = np.full(shape=(T,N),fill_value=np.nan)
+    else:
+        arr = np.full(shape=(T,dim,N), fill_value=np.nan)
     arr.astype(typ).tofile(ROOT/f'{fileshare}'/f'{name}.bin')
 
     

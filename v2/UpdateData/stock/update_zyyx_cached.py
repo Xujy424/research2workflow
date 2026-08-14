@@ -479,47 +479,6 @@ def calc_last_accwt(date,ticks,conn,jy_conn,cfg):
         (pl.col("accwt")/pl.col("accwt").sum().over("stock_code")).alias("accwt")
     )
 
-def calc_accwt(date,ticks,conn,jy_conn,cfg):
-    samples,author_accuracy=build_pmafe_samples(
-        date,ticks,conn,jy_conn,cfg,return_author_accuracy=True
-    )
-    coefficients,_=fit_pmafe_model(samples)
-
-    asof=_date(date)
-    fy=asof.year if (asof.month,asof.day)>=(5,1) else asof.year-1
-    current=load_forecasts(fy,conn,date,cfg,latest_only=True).filter(
-        pl.col("entrytime")>=pl.lit(
-            asof.to_pydatetime()-pd.Timedelta(days=cfg.lookback_days)
-        )
-    ).with_columns(
-        pl.lit(None,dtype=pl.Float64).alias("pafe"),
-        pl.col("create_date").dt.offset_by("-1y").alias("last_yr_date"),
-    )
-
-    history=load_analyst_history(
-        asof-pd.DateOffset(years=1),asof,conn,current["report_id"],cfg
-    )
-
-    author_accuracy=author_accuracy.filter(
-        pl.col("report_year")==fy
-    )
-
-    next_samples=merge_analyst_attributes(current,history,author_accuracy)
-    predicted=predict_next_pmafe(next_samples,coefficients)
-
-    mean=pl.col("predicted_pmafe").mean().over("stock_code")
-    std=pl.col("predicted_pmafe").std().over("stock_code")
-    count=pl.len().over("stock_code")
-    return predicted.with_columns(
-        ((pl.col("predicted_pmafe")-mean)/std).alias("pmafe_z")
-    ).with_columns(
-        pl.when(count==1).then(1.0)
-        .when(std.is_null() | (std==0)).then(1.0/count)
-        .when(pl.col("pmafe_z")<0).then(-pl.col("pmafe_z"))
-        .otherwise(0.0).alias("accwt")
-    ).with_columns(
-        (pl.col("accwt")/pl.col("accwt").sum().over("stock_code")).alias("accwt")
-    )
 
 
 def calc_next_accwt(date,ticks,conn,jy_conn,cfg):
