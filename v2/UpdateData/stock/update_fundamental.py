@@ -64,6 +64,15 @@ def _columns(conn, table):
         raise ValueError(f"table not found: {table}")
     return {str(a): str(b).lower() for a, b in zip(out.COLUMN_NAME, out.DATA_TYPE)}
 
+def _shared_business_fields(conn, tables):
+    """Shared numeric SQL columns excluding technical metadata."""
+    schemas = [_columns(conn, table) for table in tables]
+    common = set.intersection(*(set(schema) for schema in schemas))
+    return [
+        name for name, dtype in schemas[0].items()
+        if name in common and _is_business_field(name) and dtype in NUMERIC
+    ]
+
 def _load(conn, table, date, lookback_years=FUNDAMENTAL_LOOKBACK_YEARS):
     cols = _columns(conn, table)
     names = {x.lower(): x for x in cols}
@@ -130,17 +139,19 @@ def update_fundamental(date, dates, ticks, conn=None, root=None):
     
     result = {}
     for statement, tables in STATEMENT_TABLES.items():
-        frames = [_load(conn, table, date) for table in tables]
-        frame = pd.concat([x for x in frames if not x.empty], ignore_index=True) if any(not x.empty for x in frames) else pd.DataFrame()
+        frames = [x for x in (_load(conn, table, date) for table in tables) if not x.empty]
+        if not frames:
+            continue
+        # Main-board and STAR-market tables have slightly different schemas.
+        # Keep only their shared columns before concatenation so every saved
+        # field has the same definition and coverage in both markets.
+        common = set.intersection(*(set(x.columns) for x in frames))
+        columns = [name for name in frames[0].columns if name in common]
+        frame = pd.concat([x.loc[:, columns] for x in frames], ignore_index=True)
         if frame.empty: continue
 
         frame = frame.dropna(subset=["tick"]).sort_values(["tick", "end_date", "publish_date"])
-        fields = [
-            x for x in frame.columns
-            if _is_business_field(x)
-            and x not in {"company_code", "tick", "end_date", "publish_date"}
-            and pd.api.types.is_numeric_dtype(frame[x])
-        ]
+        fields = _shared_business_fields(conn, tables)
 
         # A preliminary/flash report can be the newest event but omit many
         # fields. Select the latest *non-null* value per field and stock,
@@ -148,9 +159,7 @@ def update_fundamental(date, dates, ticks, conn=None, root=None):
         # All rows have already been restricted to publish_date <= date.
         frame = frame.sort_values(["tick", "publish_date", "end_date"])
         for field in fields:
-            field_frame = frame.dropna(subset=[field]).drop_duplicates(
-                "tick", keep="last"
-            )
+            field_frame = frame.dropna(subset=[field]).drop_duplicates("tick", keep="last")  # 所有tick内最新非空数据
             valid_values = pd.to_numeric(
                 field_frame.set_index("tick")[field], errors="coerce"
             ).reindex(valid_ticks).to_numpy(float)
@@ -161,3 +170,18 @@ def update_fundamental(date, dates, ticks, conn=None, root=None):
     return result
 
 __all__ = ["update_fundamental", "STATEMENT_TABLES"]
+
+
+
+if __name__ == '__main__':
+
+    date = '2024-06-14'
+    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    conn = get_jy_conn()
+    root = Path('D:/data/fundamental')
+
+    res = update_fundamental(
+        date, dates, ticks, conn, root
+    )
+    print(res)
