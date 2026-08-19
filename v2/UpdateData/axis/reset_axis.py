@@ -8,13 +8,11 @@ import numpy as np
 
 if __package__:
     from ..config import ROOT
-    from ..utils import ensure_memmap
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateData.config import ROOT
-    from v2.UpdateData.utils import ensure_memmap
 
 
 DATE_RESERVE = 500
@@ -243,31 +241,4 @@ def reset_axis(root=ROOT):
     )
 
 
-def reset_field_axis(root, *args, **kwargs):
-    """Compatibility validator; reset_axis already resizes every matrix."""
-    dates_path, ticks_path = init_axis(root)
-    dates = np.load(dates_path, allow_pickle=False)
-    ticks = np.load(ticks_path, allow_pickle=False)
-    discover_matrix_specs(root, len(dates), len(ticks))
-    return len(dates), len(ticks)
 
-
-def init_empty_field(
-    dates,
-    ticks,
-    fileshare,
-    name,
-    typ,
-    dim=None,
-    root=ROOT,
-):
-    shape = (
-        (len(dates), len(ticks))
-        if dim is None
-        else (len(dates), int(dim), len(ticks))
-    )
-    return ensure_memmap(
-        Path(root) / fileshare / f"{name}.bin",
-        shape,
-        dtype=typ,
-    )
