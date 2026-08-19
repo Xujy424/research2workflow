@@ -1,7 +1,7 @@
 import numpy as np
 import polars as pl
-
-from ..download.update_axis import init_empty_field
+from pathlib import Path
+import pandas as pd
 
 
 INDEX_CODE_TO_NAME = {
@@ -12,6 +12,25 @@ INDEX_CODE_TO_NAME = {
     "932000": "zz2000",
     "000985": "zzfull",
 }
+
+def _asof(date):
+    return pd.Timestamp(date).normalize()
+
+
+def _ensure_memmap(path, shape, dtype, fill_value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dtype = np.dtype(dtype)
+    size = int(np.prod(shape)) * dtype.itemsize
+    if not path.exists():
+        with path.open("wb") as file:
+            file.truncate(size)
+        array = np.memmap(path, dtype=dtype, mode="r+", shape=shape)
+        array[:] = fill_value
+        array.flush()
+    if path.stat().st_size != size:
+        raise ValueError(f"{path} size does not match axes {shape}")
+    return np.memmap(path, dtype=dtype, mode="r+", shape=shape)
 
 
 def _read_latest_index_snapshot(date, conn):
@@ -45,27 +64,17 @@ def _write_index_row(date, dates, ticks, root, name, weights):
     dt = np.searchsorted(dates, date)
     n_valid = np.count_nonzero(ticks != "")
 
-    path = root / "mask" / f"{name}_weight.bin"
-    if not path.exists():
-        init_empty_field(dates, ticks, 'mask', f"{name}_weight", np.float32, dim=None)
-    weight_arr = np.memmap(
-        path,
-        dtype=np.float32,
-        mode="r+",
-        shape=(len(dates), len(ticks)),
+    path = root / 'index'/ "weight" / f"{name}_weight.bin"
+    weight_arr = _ensure_memmap(
+        path, (len(dates), len(ticks)), np.float32, np.nan
     )
     weight_arr[dt] = np.nan
     weight_arr[dt,:n_valid] = weights
     weight_arr.flush()
 
-    path = root / "mask" / f"{name}_mask.bin"
-    if not path.exists():
-        init_empty_field(dates, ticks, 'mask', f"{name}_mask", bool, dim=None)
-    mask_arr = np.memmap(
-        path,
-        dtype=bool,
-        mode="r+",
-        shape=(len(dates), len(ticks)),
+    path = root / 'index'/ "mask" / f"{name}_mask.bin"
+    mask_arr = _ensure_memmap(
+        path, (len(dates), len(ticks)), np.bool_, False
     )
     mask_arr[dt] = False
     mask_arr[dt,:n_valid] = ~np.isnan(weights)
@@ -79,6 +88,8 @@ def update_index(date, dates, ticks, conn, root):
     对每个指数取 date 之前最近的完整快照，而不是对每只股票分别前填；
     这样股票被调出指数后，会在下一次快照中正确变为 NaN/False。
     """
+    date = _asof(date)
+
     n_valid = np.count_nonzero(ticks != "")
     valid_ticks = ticks[:n_valid]
     
@@ -99,4 +110,24 @@ def update_index(date, dates, ticks, conn, root):
 
 
 
+if __name__ == '__main__':
+    from pathlib import Path
+    import pymssql
+
+    date = '2024-06-14'
+    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    root = Path('D:/data')
+
+
+    JY_CONFIG = {
+            "server": "10.10.0.102",
+            "user": "jydbReader",
+            "password": "jy@9043!Reader",
+            "database": "jydb",
+            "charset": "cp936",
+        }
+    jy_conn = pymssql.connect(**JY_CONFIG)
+
+    update_index("2024-06-14", dates, ticks, jy_conn, root)
 

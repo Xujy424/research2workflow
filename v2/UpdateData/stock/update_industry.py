@@ -2,9 +2,26 @@ import polars as pl
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 
-from ..download.update_axis import init_empty_field
 
+def _ensure_memmap(path, shape):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    size = int(np.prod(shape)) * np.dtype(np.float32).itemsize
+    if not path.exists():
+        with path.open("wb") as file:
+            file.truncate(size)
+        array = np.memmap(
+            path, dtype=np.float32, mode="r+", shape=shape
+        )
+        array[:] = np.nan
+        array.flush()
+    if path.stat().st_size != size:
+        raise ValueError(f"{path} size does not match axes {shape}")
+    return np.memmap(
+        path, dtype=np.float32, mode="r+", shape=shape
+    )
 
 # 1.0 申万行业分类命名更改映射
 update_map = {
@@ -145,10 +162,8 @@ def _daily_industry_codes(date, ticks, conn):
 def _write_daily_mask(date, dates, ticks, root, name, values):
     dt = np.searchsorted(dates, pd.to_datetime(date))
     n_valid = np.count_nonzero(ticks != "")
-    path = root / "mask" / f"{name}.bin"
-    if not path.exists():
-        init_empty_field(dates, ticks, 'mask', name, np.float32, dim=None)
-    arr = np.memmap(path, dtype=np.float32, mode="r+", shape=(len(dates), len(ticks)))
+    path = root / "industry" / f"{name}.bin"
+    arr = _ensure_memmap(path, (len(dates), len(ticks)))
     arr[dt,:n_valid] = values
     arr.flush()
 
@@ -179,9 +194,10 @@ if __name__ == '__main__':
     from pathlib import Path
     import pymssql
 
-    dates = np.load('/data/xujiayi/xjy/axis/dates.npy', allow_pickle=True)
-    ticks = np.load('/data/xujiayi/xjy/axis/ticks.npy', allow_pickle=True)
-    root = Path('/data/xujiayi/xjy/')
+    date = '2024-06-14'
+    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    root = Path('D:/data')
 
 
     JY_CONFIG = {
@@ -194,3 +210,4 @@ if __name__ == '__main__':
     jy_conn = pymssql.connect(**JY_CONFIG)
 
     update_industry("2024-06-14", dates, ticks, jy_conn, root)
+    update_sector("2024-06-14", dates, ticks, jy_conn, root)
