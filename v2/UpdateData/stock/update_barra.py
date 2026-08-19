@@ -249,7 +249,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     conn = get_jy_conn()
     root = Path('D:/data')
 

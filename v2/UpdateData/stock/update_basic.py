@@ -3,35 +3,23 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+import sys
 
-
-def _asof(date):
-    return pd.Timestamp(date).normalize()
-
-
-def _date_index(date, dates):
-    target = np.datetime64(_asof(date).date())
-    axis = np.asarray(dates, dtype="datetime64[D]")
-    dt = int(np.searchsorted(axis, target))
-    if dt >= len(axis) or np.isnat(axis[dt]) or axis[dt] != target:
-        raise ValueError(f"date is not present in dates axis: {target}")
-    return dt
-
-
-def _ensure_memmap(path, shape, dtype, fill_value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dtype = np.dtype(dtype)
-    size = int(np.prod(shape)) * dtype.itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(path, dtype=dtype, mode="r+", shape=shape)
-        array[:] = fill_value
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    return np.memmap(path, dtype=dtype, mode="r+", shape=shape)
+if __package__:
+    from ..utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
+else:
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from v2.UpdateData.utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
 
 def update_hit(date, ticks, conn):
     sql_hit = f'''
@@ -252,7 +240,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     root = Path('D:/data')
 
 

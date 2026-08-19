@@ -2,37 +2,39 @@ import polars as pl
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import sys
 
+if __package__:
+    from ..utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
+else:
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from v2.UpdateData.utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
 
 DTYPE = np.float32
 
-def _asof(date):
-    return pd.Timestamp(date).normalize()
 
-
-def _ensure_memmap(path, shape):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    size = int(np.prod(shape)) * np.dtype(DTYPE).itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(path, dtype=DTYPE, mode="r+", shape=shape)
-        array[:] = np.nan
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    return np.memmap(path, dtype=DTYPE, mode="r+", shape=shape)
-
-
-def update_d_moneyflow(root, dates, date, ticks):
+def update_d_moneyflow(root, dates, date, ticks, l2_root=None):
     date = _asof(date)
     date_str = date.strftime("%Y%m%d")
-    shcj = pl.scan_parquet(root/'l2'/'proc'/date_str/'shcj.pq')
-    szcj = pl.scan_parquet(root/'l2'/'proc'/date_str/'szcj.pq')
-    cols = list(set(shcj.collect().columns).intersection(set(szcj.collect().columns)))
-
-    cj = pl.concat([shcj.select(cols), szcj.select(cols)])
+    l2_root = Path(l2_root) if l2_root is not None else Path(root) / "l2"
+    columns = ["SecurityID", "Price", "OrderQty", "Side"]
+    shcj = pl.scan_parquet(
+        l2_root/'proc'/date_str/'shcj.pq'
+    ).select(columns)
+    szcj = pl.scan_parquet(
+        l2_root/'proc'/date_str/'szcj.pq'
+    ).select(columns)
+    cj = pl.concat([shcj, szcj])
     cj = cj.with_columns(
         pl.col('SecurityID').cast(pl.String).str.pad_start(6, '0'),
         (pl.col('Price')*pl.col('OrderQty')).alias('Amount')
@@ -49,7 +51,7 @@ def update_d_moneyflow(root, dates, date, ticks):
         pl.col('OrderQty').sum().alias('vol')
     ).collect()
 
-    dt = np.searchsorted(dates, date)
+    dt = _date_index(date, dates)
     for size, i in dict(zip(['sm','mid','lg','elg'],[1,2,3,4])).items():
         for side, j in dict(zip(['buy','sell'],[1,-1])).items():
             for feat in ['amount','vol']:
@@ -70,7 +72,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     root = Path('D:/data')
 
     update_d_moneyflow(root, dates, date, ticks)

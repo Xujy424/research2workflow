@@ -2,7 +2,23 @@ import numpy as np
 import polars as pl
 from pathlib import Path
 import pandas as pd
+import sys
 
+if __package__:
+    from ..utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
+else:
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from v2.UpdateData.utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
 
 INDEX_CODE_TO_NAME = {
     "000300": "hs300",
@@ -12,26 +28,6 @@ INDEX_CODE_TO_NAME = {
     "932000": "zz2000",
     "000985": "zzfull",
 }
-
-def _asof(date):
-    return pd.Timestamp(date).normalize()
-
-
-def _ensure_memmap(path, shape, dtype, fill_value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dtype = np.dtype(dtype)
-    size = int(np.prod(shape)) * dtype.itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(path, dtype=dtype, mode="r+", shape=shape)
-        array[:] = fill_value
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    return np.memmap(path, dtype=dtype, mode="r+", shape=shape)
-
 
 def _read_latest_index_snapshot(date, conn):
     """读取截至 date 每个指数最近一个完整成分权重快照。"""
@@ -61,7 +57,7 @@ def _read_latest_index_snapshot(date, conn):
 
 def _write_index_row(date, dates, ticks, root, name, weights):
     """写入一个指数当天的权重和成分 mask。"""
-    dt = np.searchsorted(dates, date)
+    dt = _date_index(date, dates)
     n_valid = np.count_nonzero(ticks != "")
 
     path = root / 'index'/ "weight" / f"{name}_weight.bin"
@@ -116,7 +112,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     root = Path('D:/data')
 
 
@@ -130,4 +126,3 @@ if __name__ == '__main__':
     jy_conn = pymssql.connect(**JY_CONFIG)
 
     update_index("2024-06-14", dates, ticks, jy_conn, root)
-

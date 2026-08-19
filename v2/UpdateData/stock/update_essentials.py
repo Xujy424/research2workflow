@@ -6,38 +6,26 @@ import sys
 
 if __package__:
     from ..config import get_jy_conn, get_str_engine
+    from ..utils import (
+        date_index as _date_index,
+        ensure_memmap as _shared_ensure_memmap,
+    )
 else:
     repo_root = Path(__file__).resolve().parents[3]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
     from v2.UpdateData.config import get_jy_conn, get_str_engine
+    from v2.UpdateData.utils import (
+        date_index as _date_index,
+        ensure_memmap as _shared_ensure_memmap,
+    )
 
 
 DTYPE = np.float32
 
 
-def _date_index(date, dates):
-    target = np.datetime64(date, "D")
-    axis = np.asarray(dates, dtype="datetime64[D]")
-    dt = int(np.searchsorted(axis, target))
-    if dt >= len(axis) or axis[dt] != target:
-        raise ValueError(f"{date} is not in dates")
-    return dt
-
-
 def _ensure_memmap(path, shape):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    size = int(np.prod(shape)) * np.dtype(DTYPE).itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(path, dtype=DTYPE, mode="r+", shape=shape)
-        array[:] = np.nan
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    return np.memmap(path, dtype=DTYPE, mode="r+", shape=shape)
+    return _shared_ensure_memmap(path, shape, dtype=DTYPE)
 
 
 
@@ -250,7 +238,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     jy_conn = get_jy_conn()
     str_conn = get_str_engine()
     root = Path('D:/data')

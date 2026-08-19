@@ -11,6 +11,12 @@ import pandas as pd
 if __package__:
     # Normal package import, e.g. ``python -m v2.UpdateData.stock.update_zyyx``.
     from ..config import get_zyyx_conn
+    from ..utils import (
+        asof as _shared_asof,
+        date_index as _date_index,
+        ensure_memmap as _shared_ensure_memmap,
+        valid_stock_ticks,
+    )
 else:
     # IDEs may execute this file directly. Add the repository root so that
     # ``v2.UpdateData.config`` (and its own relative imports) remains valid.
@@ -18,6 +24,12 @@ else:
     if str(_repository_root) not in sys.path:
         sys.path.insert(0, str(_repository_root))
     from v2.UpdateData.config import get_zyyx_conn
+    from v2.UpdateData.utils import (
+        asof as _shared_asof,
+        date_index as _date_index,
+        ensure_memmap as _shared_ensure_memmap,
+        valid_stock_ticks,
+    )
 
 
 TABLES = {
@@ -46,31 +58,16 @@ FORECAST_YEARS = 4
 
 
 def _date(value):
-    value = pd.Timestamp(value).normalize()
+    value = _shared_asof(value)
     if pd.isna(value):
         raise ValueError("invalid date")
     return value
 
 
-def _date_index(date, dates):
-    target = np.datetime64(_date(date).date())
-    axis = np.asarray(dates, dtype="datetime64[D]")
-    index = int(np.searchsorted(axis, target))
-    if index >= len(axis) or axis[index] != target:
-        raise ValueError(f"{date} is not present in the configured date axis")
-    return index
-
-
 def _tick_axis(ticks):
     """Normalize non-empty ticks without moving their positions on the axis."""
-    normalized = []
-    positions = []
-    for position, tick in enumerate(ticks):
-        if tick is None or pd.isna(tick) or str(tick).strip() == "":
-            continue
-        normalized.append(str(tick).strip().zfill(6))
-        positions.append(position)
-    return normalized, np.asarray(positions, dtype=int)
+    normalized, positions = valid_stock_ticks(ticks)
+    return normalized.tolist(), positions
 
 
 def _table_columns(conn, table):
@@ -120,17 +117,7 @@ def _load_daily_table(conn, table, date):
 
 
 def _ensure_memmap(path, shape):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    size = int(np.prod(shape)) * np.dtype(np.float64).itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(path, dtype=np.float64, mode="r+", shape=shape)
-        array[:] = np.nan
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    return np.memmap(path, dtype=np.float64, mode="r+", shape=shape)
+    return _shared_ensure_memmap(path, shape, dtype=np.float64)
 
 
 def _aligned_values(frame, field, ticks, positions, axis_size):
@@ -319,7 +306,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     conn = get_zyyx_conn()
     root = Path('D:/data/zyyx')
 

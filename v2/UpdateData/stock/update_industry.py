@@ -3,24 +3,20 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+import sys
 
-
-def _ensure_memmap(path, shape):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    size = int(np.prod(shape)) * np.dtype(np.float32).itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(
-            path, dtype=np.float32, mode="r+", shape=shape
-        )
-        array[:] = np.nan
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    return np.memmap(
-        path, dtype=np.float32, mode="r+", shape=shape
+if __package__:
+    from ..utils import (
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
+    )
+else:
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from v2.UpdateData.utils import (
+        date_index as _date_index,
+        ensure_memmap as _ensure_memmap,
     )
 
 # 1.0 申万行业分类命名更改映射
@@ -160,7 +156,7 @@ def _daily_industry_codes(date, ticks, conn):
 
 
 def _write_daily_mask(date, dates, ticks, root, name, values):
-    dt = np.searchsorted(dates, pd.to_datetime(date))
+    dt = _date_index(date, dates)
     n_valid = np.count_nonzero(ticks != "")
     path = root / "industry" / f"{name}.bin"
     arr = _ensure_memmap(path, (len(dates), len(ticks)))
@@ -196,7 +192,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     root = Path('D:/data')
 
 

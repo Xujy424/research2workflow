@@ -8,11 +8,23 @@ import pandas as pd
 
 if __package__:
     from ..config import get_jy_conn
+    from ..utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap,
+        valid_stock_ticks,
+    )
 else:
     repo_root = Path(__file__).resolve().parents[3]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
     from v2.UpdateData.config import get_jy_conn
+    from v2.UpdateData.utils import (
+        asof as _asof,
+        date_index as _date_index,
+        ensure_memmap,
+        valid_stock_ticks,
+    )
 
 
 DTYPE = np.float32
@@ -20,26 +32,9 @@ ACTUAL_PROCEDURE = 3131       # scheme implemented
 FORWARD_PROCEDURE = 1004      # final resolution, not implemented
 
 
-def _asof(date):
-    return pd.Timestamp(date).normalize()
-
-
-def _date_index(date, dates):
-    target = np.datetime64(_asof(date).date())
-    axis = np.asarray(dates, dtype="datetime64[D]")
-    index = int(np.searchsorted(axis, target))
-    if index >= len(axis) or axis[index] != target:
-        raise ValueError(f"{target} is not in dates")
-    return index
-
-
 def _tick_axis(ticks):
-    valid, positions = [], []
-    for position, tick in enumerate(ticks):
-        if tick is not None and not pd.isna(tick) and str(tick).strip():
-            valid.append(str(tick).strip().zfill(6))
-            positions.append(position)
-    return valid, np.asarray(positions, dtype=int)
+    valid, positions = valid_stock_ticks(ticks)
+    return valid.tolist(), positions
 
 
 def _load_main(conn, asof):
@@ -152,18 +147,8 @@ def _values(frame, field, valid_ticks, positions, axis_size):
 
 def _save(root, field, dates, dt, values):
     path = Path(root) / "fundamental" / "dividend" / f"{field}.bin"
-    path.parent.mkdir(parents=True, exist_ok=True)
     shape = (len(dates), len(values))
-    size = int(np.prod(shape)) * np.dtype(DTYPE).itemsize
-    if not path.exists():
-        with path.open("wb") as file:
-            file.truncate(size)
-        array = np.memmap(path, mode="r+", dtype=DTYPE, shape=shape)
-        array[:] = np.nan
-        array.flush()
-    if path.stat().st_size != size:
-        raise ValueError(f"{path} size does not match axes {shape}")
-    array = np.memmap(path, mode="r+", dtype=DTYPE, shape=shape)
+    array = ensure_memmap(path, shape, dtype=DTYPE)
     array[dt] = values
     array.flush()
 
@@ -229,7 +214,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     conn = get_jy_conn()
     root = Path('D:/data')
 

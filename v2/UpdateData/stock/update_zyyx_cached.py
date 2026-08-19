@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -727,7 +727,7 @@ if __name__=="__main__":
 
     cfg = AnalystFactorConfig()
 
-    ticks = np.load(r"/data/xujiayi/xjy/axis/ticks.npy", allow_pickle=True)
+    ticks = np.load(r"/data/xujiayi/xjy/axis/stock_ticks.npy", allow_pickle=False)
     valid_ticks = [t for t in ticks if t!='']
     dates = np.load(r"/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
     # date = '2024-06-30'

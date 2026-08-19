@@ -8,11 +8,17 @@ from tqdm import tqdm
 
 if __package__:
     from ..config import get_jy_conn
+    from ..utils import asof as _date, ensure_memmap, valid_stock_ticks
 else:
     root = Path(__file__).resolve().parents[3]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     from v2.UpdateData.config import get_jy_conn
+    from v2.UpdateData.utils import (
+        asof as _date,
+        ensure_memmap,
+        valid_stock_ticks,
+    )
 
 
 
@@ -36,19 +42,10 @@ FUNDAMENTAL_LOOKBACK_YEARS = 3
 
 
 
-def _date(x):
-    return pd.Timestamp(x).normalize()
-
 def _tick_axis(ticks):
     """Return valid tick labels and their positions in the full axis."""
-    valid = []
-    positions = []
-    for pos, tick in enumerate(ticks):
-        if tick is None or pd.isna(tick) or str(tick).strip() == "":
-            continue
-        valid.append(str(tick).strip().zfill(6))
-        positions.append(pos)
-    return valid, np.asarray(positions, dtype=int)
+    valid, positions = valid_stock_ticks(ticks)
+    return valid.tolist(), positions
 
 def _is_business_field(name):
     normalized = str(name).lower().replace("_", "").replace(" ", "")
@@ -122,13 +119,9 @@ def _save(root, name, field, dates, dt, values):
     # Each statement now has one point-in-time latest matrix; no extra
     # ``latest`` directory is needed.
     path = Path(root) / "fundamental" / name / f"{field}.bin"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    size = len(dates) * len(values) * np.dtype(np.float32).itemsize
-    if not path.exists():
-        with path.open("wb") as f: f.truncate(size)
-        a = np.memmap(path, dtype=np.float32, mode="r+", shape=(len(dates), len(values)))
-        a[:] = np.nan; a.flush()
-    a = np.memmap(path, dtype=np.float32, mode="r+", shape=(len(dates), len(values)))
+    a = ensure_memmap(
+        path, (len(dates), len(values)), dtype=np.float32
+    )
     a[dt] = values; a.flush()
 
 def _single_quarter_values(frame, field, valid_ticks, ticks, tick_positions):
@@ -283,7 +276,7 @@ if __name__ == '__main__':
 
     date = '2024-06-14'
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     conn = get_jy_conn()
     root = Path('D:/data')
 
