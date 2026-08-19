@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date as date_type, timedelta
 from pathlib import Path
 import sys
 
@@ -16,6 +17,7 @@ if __package__:
     )
     from .config import (
         L2DATA_PATH,
+        ROOT,
         get_jy_conn,
         get_str_engine,
         get_zyyx_conn,
@@ -49,6 +51,7 @@ else:
     )
     from v2.UpdateData.config import (
         L2DATA_PATH,
+        ROOT,
         get_jy_conn,
         get_str_engine,
         get_zyyx_conn,
@@ -148,3 +151,105 @@ def update_data(
             _close_connection(zyyx_conn)
         if own_str:
             _close_connection(str_conn)
+
+
+def update_history(
+    root,
+    start_date="2010-01-01",
+    end_date="2026-07-31",
+):
+    """Build non-Level-2 data sequentially over a historical date range."""
+    start = date_type.fromisoformat(str(start_date))
+    end = date_type.fromisoformat(str(end_date))
+    if start > end:
+        raise ValueError("start_date must not be later than end_date")
+
+    jy_conn = None
+    zyyx_conn = None
+    str_conn = None
+    try:
+        jy_conn = get_jy_conn()
+        zyyx_conn = get_zyyx_conn()
+        str_conn = get_str_engine()
+
+        current = start
+        while current <= end:
+            if is_tradedate(current):
+                date_text = current.isoformat()
+                print(f"updating {date_text} ...", flush=True)
+                result = update_data(
+                    root,
+                    date_text,
+                    jy_conn=jy_conn,
+                    zyyx_conn=zyyx_conn,
+                    str_conn=str_conn,
+                    update_level2=False,
+                )
+                print(result, flush=True)
+            current += timedelta(days=1)
+    finally:
+        for connection in (jy_conn, zyyx_conn, str_conn):
+            if connection is not None:
+                _close_connection(connection)
+
+
+def update_history_l2(
+    root,
+    start_date="2010-01-01",
+    end_date="2026-07-31",
+):
+    """Download and build only historical Level-2 data and moneyflow."""
+    start = date_type.fromisoformat(str(start_date))
+    end = date_type.fromisoformat(str(end_date))
+    if start > end:
+        raise ValueError("start_date must not be later than end_date")
+
+    dates_path, ticks_path = init_axis(root)
+    dates = np.load(dates_path, allow_pickle=False)
+    stock_ticks = np.load(ticks_path, allow_pickle=False)
+    valid_dates = {
+        str(value)
+        for value in dates[~np.isnat(dates)].astype("datetime64[D]")
+    }
+    if not valid_dates or not np.any(stock_ticks != ""):
+        raise ValueError(
+            "build the date and stock axes with update_history() before L2"
+        )
+
+    current = start
+    while current <= end:
+        if is_tradedate(current):
+            date_text = current.isoformat()
+            if date_text not in valid_dates:
+                raise ValueError(
+                    f"{date_text} is missing from dates.npy; "
+                    "run update_history() first"
+                )
+
+            compact_date = date_text.replace("-", "")
+            print(f"updating L2 {date_text} ...", flush=True)
+            autoload_l2data(compact_date)
+            update_l2_basic(L2DATA_PATH, compact_date)
+            update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
+            update_d_moneyflow(
+                root,
+                dates,
+                date_text,
+                stock_ticks,
+                l2_root=L2DATA_PATH,
+            )
+            print(f"L2 {date_text} updated", flush=True)
+        current += timedelta(days=1)
+
+
+if __name__ == "__main__":
+    update_history(
+        root=ROOT,
+        start_date="2010-01-01",
+        end_date="2026-07-31",
+    )
+    update_history_l2(
+        root=ROOT,
+        start_date="2010-01-01",
+        end_date="2026-07-31",
+    )
