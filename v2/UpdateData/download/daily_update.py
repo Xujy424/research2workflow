@@ -22,6 +22,7 @@ from ..stock.update_barra import update_barra
 from ..level2.get_l2data import autoload_l2data
 from ..level2.preprocess_l2data import update_l2_basic
 from ..level2.generate_bar_snapshot_v2 import update_snapshot
+from ..stock.update_moneyflow import update_d_moneyflow
 
 if __package__:
     from ..config import (
