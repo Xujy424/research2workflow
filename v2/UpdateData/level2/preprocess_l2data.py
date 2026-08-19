@@ -1,6 +1,7 @@
 import polars as pl
 import datetime as dt
 import os
+import shutil
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -873,12 +874,19 @@ def generate_closebook(
     return close_book, alive_orders
 
 
+def update_l2_basic(root, date):
+    rawpath, outpath = generate_path(root, date)
+    shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
+    szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
+    shutil.rmtree(rawpath)
+
+
 
 
 
 if __name__ == '__main__':
 
-    L2DATA_PATH = "/data/xujiayi/xjy/l2"
+    L2DATA_PATH = "/data/l2"
     # rawpath, outpath = generate_path(L2DATA_PATH, '20260624')
 
     # shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
@@ -897,17 +905,20 @@ if __name__ == '__main__':
     # sz_closebook_correct = get_closebook('sz', L2DATA_PATH, '20260624')
     # print(sz_closebook_correct.filter(pl.col('SecurityID')==600000))
 
-    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
-    dates = [d for d in dates if not np.isnat(d)]
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-01-01')), bisect.bisect_right(dates, pd.to_datetime('2026-06-30'))
-    for date in dates[start_dt:end_dt]:
-        date = date.astype('datetime64[D]').astype(str).replace('-', '')
-        rawpath, outpath = generate_path(L2DATA_PATH, date)
-        shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
-        szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
+    # dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    # dates = [d for d in dates if not np.isnat(d)]
+    # start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-01-01')), bisect.bisect_right(dates, pd.to_datetime('2026-06-30'))
+    # for date in dates[start_dt:end_dt]:
+    #     date = date.astype('datetime64[D]').astype(str).replace('-', '')
+    #     rawpath, outpath = generate_path(L2DATA_PATH, date)
+    #     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
+    #     szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
+    date = '2024-06-14'
+    date = date.replace('-', '')
+    rawpath, outpath = generate_path(L2DATA_PATH, date)
+    shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
+    szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
-
-
-
+    shutil.rmtree(rawpath)
 

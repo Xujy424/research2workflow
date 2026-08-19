@@ -25,12 +25,12 @@ TABLES = {
     "con_forecast_roll": "con_forecast_roll_stk",
     "con_rating": "con_rating_stk",
     "con_target_price": "con_target_price_stk",
-    "con_forecast_eq": "con_forecast_eq",
-    "con_forecast_wgt": "con_forecast_wgt",
-    "con_rating_eq": "con_rating_eq",
-    "con_rating_wgt": "con_rating_wgt",
-    "con_target_price_eq": "con_target_price_eq",
-    "con_target_price_wgt": "con_target_price_wgt",
+    "con_forecast_eq": "con_forecast_stk_eq",
+    "con_forecast_wgt": "con_forecast_stk_wgt",
+    "con_rating_eq": "con_rating_stk_eq",
+    "con_rating_wgt": "con_rating_stk_wgt",
+    "con_target_price_eq": "con_target_price_stk_eq",
+    "con_target_price_wgt": "con_target_price_stk_wgt",
 }
 META_FIELDS = {
     "id",
@@ -138,7 +138,7 @@ def _aligned_values(frame, field, ticks, positions, axis_size):
     if frame.empty or field not in frame:
         return result
     values = pd.to_numeric(frame.set_index("stock_code")[field], errors="coerce")
-    result[positions] = values.reindex(ticks).to_numpy(dtype=float)
+    result[positions] = values.reindex(ticks).to_numpy(dtype=np.float64)
     return result
 
 
@@ -152,9 +152,9 @@ def _save_cross_section(root, table_name, dates, ticks, dt, values):
         array.flush()
 
 
-def _save_forecast(root, dates, ticks, dt, values):
+def _save_forecast(root, table_name, dates, ticks, dt, values):
     shape = (len(dates), FORECAST_YEARS, len(ticks))
-    folder = Path(root) / "con_forecast"
+    folder = Path(root) / table_name
     for field, value in values.items():
         array = _ensure_memmap(folder / f"{field}.bin", shape)
         array[dt] = np.nan
@@ -162,11 +162,11 @@ def _save_forecast(root, dates, ticks, dt, values):
         array.flush()
 
 
-def update_con_forecast(date, dates, ticks, conn, root):
-    """Return every forecast field as (4, stock_tick), row 0 being base year."""
+def _update_forecast_table(name, date, dates, ticks, conn, root):
+    """Update a con_year table as (date, 4 forecast years, stock tick)."""
     dt = _date_index(date, dates)
     valid_ticks, positions = _tick_axis(ticks)
-    table = TABLES["con_forecast"]
+    table = TABLES[name]
     columns = _table_columns(conn, table)
     fields = _business_fields(columns)
     frame = _load_daily_table(conn, table, date)
@@ -183,8 +183,13 @@ def update_con_forecast(date, dates, ticks, conn, root):
             )
         result[field] = matrix
 
-    _save_forecast(root, dates, ticks, dt, result)
+    _save_forecast(root, name, dates, ticks, dt, result)
     return result
+
+
+def update_con_forecast(date, dates, ticks, conn, root):
+    """Return every forecast field as (4, stock_tick), row 0 being base year."""
+    return _update_forecast_table("con_forecast", date, dates, ticks, conn, root)
 
 
 def _update_single_year_table(name, date, dates, ticks, conn, root):
@@ -221,15 +226,11 @@ def update_con_target_price(date, dates, ticks, conn, root):
 
 
 def update_con_forecast_eq(date, dates, ticks, conn, root):
-    return _update_single_year_table(
-        "con_forecast_eq", date, dates, ticks, conn, root
-    )
+    return _update_forecast_table("con_forecast_eq", date, dates, ticks, conn, root)
 
 
 def update_con_forecast_wgt(date, dates, ticks, conn, root):
-    return _update_single_year_table(
-        "con_forecast_wgt", date, dates, ticks, conn, root
-    )
+    return _update_forecast_table("con_forecast_wgt", date, dates, ticks, conn, root)
 
 
 def update_con_rating_eq(date, dates, ticks, conn, root):
@@ -322,6 +323,6 @@ if __name__ == '__main__':
     conn = get_zyyx_conn()
     root = Path('D:/data/zyyx')
 
-    update_con_forecast_roll(
+    update_zyyx(
         date, dates, ticks, conn, root
     )

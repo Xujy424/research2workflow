@@ -11,17 +11,16 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 
 if __package__:
-    from ..config import get_jy_conn
+    from ..config import get_jy_conn,ROOT
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-    from v2.UpdateData.config import get_jy_conn
+    from v2.UpdateData.config import get_jy_conn,ROOT
 
 
-ROOT = Path("/data/xujiayi/xjy/")
 DATE_RESERVE = 500
 TICK_RESERVE = 1000
 
@@ -74,10 +73,10 @@ def update_date(date=None):
         return 
     dates[n_dates] = today
     dates.flush()
-    return
+    return date
 
 
-def get_all_ticks(date):
+def _get_all_ticks(date):
     JY_CONN = get_jy_conn()
     sql_axis = f'''select
             C.SecuCode as "tick"
@@ -100,9 +99,9 @@ def get_all_ticks(date):
     df = pl.read_database(sql_axis, JY_CONN).sort('tick')
     return df['tick'].unique().sort().to_numpy()
 
-def update_tick(date):
-    current_ticks = get_all_ticks(date)
-    path = Path(ROOT) / "axis" / "ticks.npy"
+def update_stockticks(date):
+    current_ticks = _get_all_ticks(date)
+    path = Path(ROOT) / "axis" / "stock_ticks.npy"
     ticks = np.load(path, allow_pickle=True)
 
     is_valid = lambda x: x != ""
@@ -139,11 +138,11 @@ def _ensure_axis_reverse(path, reserve, is_valid, fill_value):
 
     return n_valid, len(arr)
 
-def reset_axis():
+def reset_axis(root):
     '''
         年底重置索引
     '''
-    axis_dir = ROOT / "axis"
+    axis_dir = root / "axis"
     date_n_valid, date_old_len = _ensure_axis_reverse(
         axis_dir / "dates.npy",
         DATE_RESERVE,
@@ -151,19 +150,31 @@ def reset_axis():
         np.datetime64("NaT"),
     )
     tick_n_valid, tick_old_len = _ensure_axis_reverse(
-        axis_dir / "ticks.npy",
+        axis_dir / "stock_ticks.npy",
         TICK_RESERVE,
         lambda x: x != "",
         "",
     )
+    # new_arr = np.full((date_n_valid+DATE_RESERVE, tick_n_valid+TICK_RESERVE), np.nan)
+    # stock_dir = ROOT/"stock"
+    # for p in stock_dir.rglob('*.bin'):
+    #     arr = np.memmap(p, mode='r', dtype=bool if 'mask' in p else float, shape=(date_old_len, tick_old_len))
+    #     new_arr[:date_old_len, :tick_old_len] = arr
+    #     new_arr.astype(bool if 'mask' in p else float).tofile(p)
+    return date_n_valid, date_old_len, tick_n_valid, tick_old_len
 
-    new_arr = np.full((date_n_valid+DATE_RESERVE, tick_n_valid+TICK_RESERVE), np.nan)
-    stock_dir = ROOT/"stock"
-    for p in stock_dir.rglob('*.bin'):
-        arr = np.memmap(p, mode='r', dtype=bool if 'mask' in p else float, shape=(date_old_len, tick_old_len))
-        new_arr[:date_old_len, :tick_old_len] = arr
-        new_arr.astype(bool if 'mask' in p else float).tofile(p)
-    return True
+
+def init_axis(root=ROOT, date_reserve=500, tick_reserve=5000):
+    """Create empty axes for an initial update; never overwrites existing axes."""
+    axis_dir = Path(root) / "axis"
+    axis_dir.mkdir(parents=True, exist_ok=True)
+    dates_path = axis_dir / "dates.npy"
+    ticks_path = axis_dir / "stock_ticks.npy"
+    if not dates_path.exists():
+        np.save(dates_path, np.full(date_reserve, np.datetime64("NaT"), dtype="datetime64[D]"))
+    if not ticks_path.exists():
+        np.save(ticks_path, np.full(tick_reserve, "", dtype="<U6"))
+    return dates_path, ticks_path
 
 
 def init_empty_field(dates, ticks, fileshare, name, typ, dim=None):
@@ -173,6 +184,45 @@ def init_empty_field(dates, ticks, fileshare, name, typ, dim=None):
     else:
         arr = np.full(shape=(T,dim,N), fill_value=np.nan)
     arr.astype(typ).tofile(ROOT/f'{fileshare}'/f'{name}.bin')
+
+
+def reset_field_axis(root, date_n_valid, tick_n_valid, date_old_len, tick_old_len, dim=None):
+    """Expand all fields below ``path`` while preserving date/tick axes.
+
+    Ordinary fields are ``(date, tick)``.  ``m_essentials`` fields are
+    ``(date, minute, tick)``; their middle dimension is supplied by ``dim``
+    or inferred from the existing binary file size.
+    """
+    stock_dir =  root / "stock"
+    new_dates = date_n_valid + DATE_RESERVE
+    new_ticks = tick_n_valid + TICK_RESERVE
+
+    for p in stock_dir.rglob('*.bin'):
+        is_minute = p.parent.name == "m_essentials"
+        is_basic_flag = (
+            p.parent.name == "basic"
+            and p.stem not in {"price_ceil", "price_floor"}
+        )
+        file_dtype = np.dtype(bool if (p.name.endswith("_mask.bin") or is_basic_flag) else float)
+        if is_minute:
+            middle = dim
+            if middle is None:
+                unit = date_old_len * tick_old_len * file_dtype.itemsize
+                if unit == 0 or p.stat().st_size % unit:
+                    raise ValueError(f"cannot infer minute dimension for {p}")
+                middle = p.stat().st_size // unit
+            old_shape = (date_old_len, int(middle), tick_old_len)
+            new_shape = (new_dates, int(middle), new_ticks)
+        else:
+            old_shape = (date_old_len, tick_old_len)
+            new_shape = (new_dates, new_ticks)
+
+        old_arr = np.memmap(p, mode="r", dtype=file_dtype, shape=old_shape)
+        fill_value = False if file_dtype == np.dtype(bool) else np.nan
+        new_arr = np.full(new_shape, fill_value, dtype=file_dtype)
+        new_arr[:date_old_len, ..., :tick_old_len] = old_arr
+        new_arr.tofile(p)
+
 
     
 

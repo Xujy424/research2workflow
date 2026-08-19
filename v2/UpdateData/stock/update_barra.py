@@ -2,6 +2,18 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import sys
+
+if __package__:
+    from ..config import get_jy_conn
+else:
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from v2.UpdateData.config import get_jy_conn
+
+
+
 BARRA_NAMES = ('beta', 'btop', 'size', 'nonlinear_size', 'momentom', 'residual_vol', 'liquidity', 'leverage', 'growth1', 'earnings_yield')
 
 def _find(root, *names):
@@ -12,7 +24,7 @@ def _find(root, *names):
     raise FileNotFoundError(f"missing input: {', '.join(names)}")
 
 def _mat(root, dates, ticks, *names, start=0, end=None):
-    a = np.memmap(_find(root, *names), dtype=float, mode='r', shape=(len(dates), len(ticks)))
+    a = np.memmap(_find(root, *names), dtype=np.float32, mode='r', shape=(len(dates), len(ticks)))
     return np.asarray(a[start:end])
 
 def _row(root, dates, ticks, dt, *names):
@@ -78,7 +90,7 @@ def _calc_beta(ret, mv, rf, n):
 
 
 def _calc_btop(root, dates, ticks, dt, mcap):
-    book = _row(root, dates, ticks, dt, 'fundamental/bookvalue.bin')
+    book = _row(root, dates, ticks, dt, 'fundamental/balance/TotalAssets.bin')   # bookvalue
     return np.divide(book, mcap, out=np.full(len(ticks), np.nan), where=mcap != 0)
 
 
@@ -106,7 +118,7 @@ def _calc_momentom(root, dates, ticks, dt):
     start = end - 484
     if start < 0:
         return np.full(len(ticks), np.nan)
-    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', 'd_field/pct.bin', start=start, end=end)
+    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', start=start, end=end)
     return _mean(np.log1p(ret), _w(484, 124))
 
 
@@ -136,7 +148,7 @@ def _calc_residual_vol(ret, mv, rf, beta, n):
 
 
 def _calc_liquidity(root, dates, ticks, dt):
-    turnover = _mat(root, dates, ticks, 'd_essentials/turnover.bin', 'd_field/turnover.bin', start=max(0, dt - 31), end=dt + 1)
+    turnover = _mat(root, dates, ticks, 'd_essentials/turnover.bin', start=max(0, dt - 31), end=dt + 1)
     if len(turnover) != 32:
         return np.full(len(ticks), np.nan)
     with np.errstate(all='ignore'):
@@ -145,11 +157,11 @@ def _calc_liquidity(root, dates, ticks, dt):
 
 
 def _calc_leverage(root, dates, ticks, dt, mcap):
-    pref = _row(root, dates, ticks, dt, 'fundamental/e_preferstock_bookvalue.bin')
-    debt = _row(root, dates, ticks, dt, 'fundamental/long_liability.bin')
-    liability = _row(root, dates, ticks, dt, 'fundamental/total_liability.bin')
-    net = _row(root, dates, ticks, dt, 'fundamental/net_asset.bin')
-    asset = _row(root, dates, ticks, dt, 'fundamental/total_asset.bin', 'fundamental/bookvalue.bin')
+    pref = _row(root, dates, ticks, dt, 'fundamental/balance/EPreferStock.bin')
+    debt = _row(root, dates, ticks, dt, 'fundamental/balance/TotalNonCurrentLiability.bin')
+    liability = _row(root, dates, ticks, dt, 'fundamental/balance/TotalLiability.bin')
+    net = _row(root, dates, ticks, dt, 'fundamental/balance/SEWithoutMI.bin')
+    asset = _row(root, dates, ticks, dt, 'fundamental/balance/TotalAssets.bin')
     with np.errstate(all='ignore'):
         return 0.38 * (mcap + pref + debt) / mcap + 0.35 * liability / asset + 0.27 * (net + debt) / (net - pref)
 
@@ -167,22 +179,22 @@ def _calc_growth1(root, dates, ticks, dt):
     # growth = 0.18 * egrlf + 0.11 * egrsf + 0.24 * egro + 0.47 * sgro
     n = len(ticks)
     start = max(0, dt - 1209)
-    eps = _mat(root, dates, ticks, 'fundamental/eps.bin', start=start, end=dt + 1)
-    revenue = _mat(root, dates, ticks, 'fundamental/operating_revenue.bin', start=start, end=dt + 1)
+    eps = _mat(root, dates, ticks, 'fundamental/income_ttm/BasicEPS.bin', start=start, end=dt + 1)
+    revenue = _mat(root, dates, ticks, 'fundamental/income_ttm/OperatingRevenue.bin', start=start, end=dt + 1)
     egro = _growth(eps) if len(eps) == 1210 else np.full(n, np.nan)
     sgro = _growth(revenue) if len(revenue) == 1210 else np.full(n, np.nan)
-    egrlf = _row(root, dates, ticks, dt, 'con_forecast/con_npcgrate_2y_roll.bin')
-    con_eps = _row(root, dates, ticks, dt, 'con_forecast/con_eps_ttm.bin')
-    eps_ttm = _row(root, dates, ticks, dt, 'fundamental/eps_ttm.bin')
+    egrlf = _row(root, dates, ticks, dt, 'zyyx/con_forecast_roll/con_npcgrate_2y_roll.bin')
+    con_eps = _row(root, dates, ticks, dt, 'zyyx/con_forecast_roll/con_eps_roll.bin')
+    eps_ttm = _row(root, dates, ticks, dt, 'fundamental/income_ttm/BasicEPS.bin')
     return 0.18 * egrlf + 0.11 * (con_eps / (eps_ttm + 1e-08) - 1) + 0.24 * egro + 0.47 * sgro
 
 
 def _calc_earnings_yield(root, dates, ticks, dt, mcap):
     n = len(ticks)
-    cash = _mat(root, dates, ticks, 'fundamental/cashdiv.bin', start=max(0, dt - 241), end=dt + 1)
-    close = _row(root, dates, ticks, dt, 'd_essentials/close.bin', 'd_field/close.bin')
-    profit = _row(root, dates, ticks, dt, 'fundamental/netprofit_ttm.bin')
-    con_np = _row(root, dates, ticks, dt, 'con_forecast/con_np_ttm.bin')
+    cash = _mat(root, dates, ticks, 'fundamental/dividend/cash_dividend_ttm_adjusted.bin', start=max(0, dt - 241), end=dt + 1)
+    close = _row(root, dates, ticks, dt, 'd_essentials/close_adj.bin')
+    profit = _row(root, dates, ticks, dt, 'fundamental/income_ttm/NetProfit.bin')
+    con_np = _row(root, dates, ticks, dt, 'zyyx/con_forecast_roll/con_np_roll.bin')
     ce = np.nansum(cash, 0) / close if len(cash) == 242 else np.full(n, np.nan)
     return 0.68 * con_np / mcap + 0.21 * ce + 0.11 * profit / mcap
 
@@ -206,9 +218,9 @@ def update_barra(date, dates, ticks, conn, root):
     df = pd.read_sql(sql, conn)
     rf = np.nan if df.empty else (1 + float(df.iloc[0, 0])) ** (1 / 242) - 1
     start = max(0, dt - 241)
-    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', 'd_field/pct.bin', start=start, end=dt + 1)
-    mv = _mat(root, dates, ticks, 'd_essentials/total_mv.bin', 'd_field/mv.bin', 'fundamental/mcap.bin', start=start, end=dt + 1)
-    mcap = _row(root, dates, ticks, dt, 'fundamental/mcap.bin', 'd_essentials/total_mv.bin', 'd_field/mv.bin')
+    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', start=start, end=dt + 1)
+    mv = _mat(root, dates, ticks, 'd_essentials/circ_mv.bin', start=start, end=dt + 1)
+    mcap = _row(root, dates, ticks, dt, 'd_essentials/total_mv.bin')
 
     beta = _calc_beta(ret, mv, rf, len(ticks))
     size = _calc_size(mcap)
@@ -229,3 +241,18 @@ def update_barra(date, dates, ticks, conn, root):
 
 
 __all__ = ['BARRA_NAMES', 'update_barra']
+
+
+
+
+if __name__ == '__main__':
+
+    date = '2024-06-14'
+    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
+    conn = get_jy_conn()
+    root = Path('D:/data')
+
+    update_barra(
+        date, dates, ticks, conn, root
+    )

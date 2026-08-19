@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 if __package__:
     from ..config import get_jy_conn
@@ -64,13 +65,14 @@ def _columns(conn, table):
         raise ValueError(f"table not found: {table}")
     return {str(a): str(b).lower() for a, b in zip(out.COLUMN_NAME, out.DATA_TYPE)}
 
-def _shared_business_fields(conn, tables):
-    """Shared numeric SQL columns excluding technical metadata."""
-    schemas = [_columns(conn, table) for table in tables]
-    common = set.intersection(*(set(schema) for schema in schemas))
+def _shared_business_fields(frame):
+    """Return business fields from the normalized, merged statement frame."""
+    helper_columns = {
+        "company_code", "tick", "end_date", "publish_date",
+    }
     return [
-        name for name, dtype in schemas[0].items()
-        if name in common and _is_business_field(name) and dtype in NUMERIC
+        name for name in frame.columns
+        if name not in helper_columns and _is_business_field(name)
     ]
 
 def _load(conn, table, date, lookback_years=FUNDAMENTAL_LOOKBACK_YEARS):
@@ -100,7 +102,10 @@ def _load(conn, table, date, lookback_years=FUNDAMENTAL_LOOKBACK_YEARS):
         sql,
         conn,
         params={"start_date": start.date(), "end_date": asof.date()},
-    )
+    ).rename(columns={
+        'OtherNonCurLia':'OtherNonCurrentLiability',
+        'TotalNonCurLia':'TotalNonCurrentLiability'
+    })
     if out.empty:
         return out
     out = out.rename(columns={
@@ -118,13 +123,97 @@ def _save(root, name, field, dates, dt, values):
     # ``latest`` directory is needed.
     path = Path(root) / "fundamental" / name / f"{field}.bin"
     path.parent.mkdir(parents=True, exist_ok=True)
-    size = len(dates) * len(values) * 8
+    size = len(dates) * len(values) * np.dtype(np.float32).itemsize
     if not path.exists():
         with path.open("wb") as f: f.truncate(size)
-        a = np.memmap(path, dtype=float, mode="r+", shape=(len(dates), len(values)))
+        a = np.memmap(path, dtype=np.float32, mode="r+", shape=(len(dates), len(values)))
         a[:] = np.nan; a.flush()
-    a = np.memmap(path, dtype=float, mode="r+", shape=(len(dates), len(values)))
+    a = np.memmap(path, dtype=np.float32, mode="r+", shape=(len(dates), len(values)))
     a[dt] = values; a.flush()
+
+def _single_quarter_values(frame, field, valid_ticks, ticks, tick_positions):
+    """Derive a quarter from the latest report, without field-level fallback.
+
+    Field-level ffill is correct for accumulated values, but not for a
+    difference: an omitted field in the latest report must stay unavailable,
+    rather than silently using a prior-year annual-report value.
+    """
+    reports = frame[["tick", "end_date", "publish_date", field]].copy()
+    reports = reports.dropna(subset=["tick", "end_date"]).sort_values(
+        ["tick", "end_date", "publish_date"]
+    ).drop_duplicates(["tick", "end_date"], keep="last")
+
+    current = reports.drop_duplicates("tick", keep="last").copy()
+    if current.empty:
+        return np.full(len(ticks), np.nan)
+    current[field] = pd.to_numeric(current[field], errors="coerce")
+    current["year"] = current["end_date"].dt.year
+    current["month"] = current["end_date"].dt.month
+    current["prior_month"] = current["month"].map({3: np.nan, 6: 3, 9: 6, 12: 9})
+
+    reports[field] = pd.to_numeric(reports[field], errors="coerce")
+
+    prior = reports.assign(
+        year=reports["end_date"].dt.year, 
+        month=reports["end_date"].dt.month
+    )
+    prior = prior[["tick", "year", "month", field]].drop_duplicates(
+        ["tick", "year", "month"], keep="last"
+    ).rename(columns={"month": "prior_month", field: "prior_value"})
+
+    current = current.merge(prior, on=["tick", "year", "prior_month"], how="left")
+    current["quarter_value"] = np.where(
+        current["month"].eq(3), current[field], current[field] - current["prior_value"]
+    )
+    current.loc[~current["month"].isin([3, 6, 9, 12]), "quarter_value"] = np.nan
+
+    aligned = current.set_index("tick")["quarter_value"].reindex(valid_ticks).to_numpy(np.float32)
+    values = np.full(len(ticks), np.nan)
+    values[tick_positions] = aligned
+    return values
+
+def _ttm_values(frame, field, valid_ticks, ticks, tick_positions):
+    """Calculate point-in-time TTM from cumulative period-statement values."""
+    reports = frame[["tick", "end_date", "publish_date", field]].copy()
+    reports = reports.dropna(subset=["tick", "end_date"]).sort_values(
+        ["tick", "end_date", "publish_date"]
+    ).drop_duplicates(["tick", "end_date"], keep="last")
+
+    current = reports.drop_duplicates("tick", keep="last").copy()
+    if current.empty:
+        return np.full(len(ticks), np.nan)
+
+    reports[field] = pd.to_numeric(reports[field], errors="coerce")
+
+    current[field] = pd.to_numeric(current[field], errors="coerce")
+    current["year"] = current["end_date"].dt.year
+    current["month"] = current["end_date"].dt.month
+
+    prior = reports.assign(
+        year=reports["end_date"].dt.year,
+        month=reports["end_date"].dt.month,
+    )[["tick", "year", "month", field]].drop_duplicates(
+        ["tick", "year", "month"], keep="last"
+    )
+    prior_fy = prior[prior["month"].eq(12)][["tick", "year", field]].rename(
+        columns={field: "prior_fy"}
+    )
+    prior_fy["year"] += 1
+    prior_same = prior.rename(columns={field: "prior_same"}).copy()
+    prior_same["year"] += 1
+
+    current = current.merge(prior_fy, on=["tick", "year"], how="left")
+    current = current.merge(prior_same, on=["tick", "year", "month"], how="left")
+    current["ttm_value"] = np.where(
+        current["month"].eq(12),
+        current[field],
+        current[field] + current["prior_fy"] - current["prior_same"],
+    )
+    current.loc[~current["month"].isin([3, 6, 9, 12]), "ttm_value"] = np.nan
+    aligned = current.set_index("tick")["ttm_value"].reindex(valid_ticks).to_numpy(np.float32)
+    values = np.full(len(ticks), np.nan)
+    values[tick_positions] = aligned
+    return values
 
 def update_fundamental(date, dates, ticks, conn=None, root=None):
     conn = conn or get_jy_conn()
@@ -151,22 +240,39 @@ def update_fundamental(date, dates, ticks, conn=None, root=None):
         if frame.empty: continue
 
         frame = frame.dropna(subset=["tick"]).sort_values(["tick", "end_date", "publish_date"])
-        fields = _shared_business_fields(conn, tables)
+        fields = _shared_business_fields(frame)
 
         # A preliminary/flash report can be the newest event but omit many
         # fields. Select the latest *non-null* value per field and stock,
         # which is the point-in-time equivalent of a field-level ffill.
         # All rows have already been restricted to publish_date <= date.
         frame = frame.sort_values(["tick", "publish_date", "end_date"])
-        for field in fields:
+        for field in tqdm(fields):
             field_frame = frame.dropna(subset=[field]).drop_duplicates("tick", keep="last")  # 所有tick内最新非空数据
             valid_values = pd.to_numeric(
                 field_frame.set_index("tick")[field], errors="coerce"
-            ).reindex(valid_ticks).to_numpy(float)
+            ).reindex(valid_ticks).to_numpy(np.float32)
             values = np.full(len(ticks), np.nan)
             values[tick_positions] = valid_values
-            _save(root, statement, field, dates, dt, values)
-            result[f"{statement}/{field}"] = values
+
+            is_period_statement = statement in {"income", "cashflow"}
+            output_name = f"{statement}_accum" if is_period_statement else statement
+            _save(root, output_name, field, dates, dt, values)
+            
+            result[f"{output_name}/{field}"] = values
+            if is_period_statement:
+                quarterly = _single_quarter_values(
+                    frame, field, valid_ticks, ticks, tick_positions
+                )
+                quarterly_name = f"{statement}_quartly"
+                _save(root, quarterly_name, field, dates, dt, quarterly)
+                result[f"{quarterly_name}/{field}"] = quarterly
+
+                ttm = _ttm_values(frame, field, valid_ticks, ticks, tick_positions)
+                ttm_name = f"{statement}_ttm"
+                _save(root, ttm_name, field, dates, dt, ttm)
+                result[f"{ttm_name}/{field}"] = ttm
+                
     return result
 
 __all__ = ["update_fundamental", "STATEMENT_TABLES"]
@@ -179,7 +285,7 @@ if __name__ == '__main__':
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
     ticks = np.load('D:/data/axis/ticks.npy',allow_pickle=True)
     conn = get_jy_conn()
-    root = Path('D:/data/fundamental')
+    root = Path('D:/data')
 
     res = update_fundamental(
         date, dates, ticks, conn, root

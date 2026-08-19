@@ -18,13 +18,13 @@ from time import perf_counter
 import polars as pl
 
 if __package__:
-    from . import generate_bar_snapshot as snapshot
+    from . import generate_bar_snapshot_v2 as snapshot
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-    from v2.dataloader.l2data import generate_bar_snapshot as snapshot
+    from v2.UpdateData.level2 import generate_bar_snapshot_v2 as snapshot
 
 
 def _size_mb(frame: pl.DataFrame | None) -> float:

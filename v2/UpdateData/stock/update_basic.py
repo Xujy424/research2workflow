@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
+from ..download.update_axis import init_empty_field
+
 
 
 def update_hit(date, ticks, conn):
@@ -168,6 +170,8 @@ def update_basic(date, dates, ticks, conn, root):
     for arr_name in feats_name:
         path = root / "basic" / f"{arr_name}.bin"
         typ = bool if arr_name not in ['price_ceil','price_floor'] else float
+        if not path.exists():
+            init_empty_field(dates, ticks, 'basic', arr_name, typ, dim=None)
         arr = np.memmap(path, dtype=typ, mode='r+', shape=(len(dates),len(ticks)))
         arr[dt] = basic_feats[arr_name]
         arr.flush()
@@ -202,6 +206,8 @@ def update_tradable(date, dates, ticks, conn, root):
                ~isst & ~isnew & ~issuspend
 
     path = root / "basic" / "tradable.bin"
+    if not path.exists():
+        init_empty_field(dates, ticks, 'basic', 'tradable', bool, dim=None)
     arr = np.memmap(path, dtype=bool, mode='r+', shape=(len(dates),len(ticks)))
     dt = np.searchsorted(dates, date)
     arr[dt] = tradable

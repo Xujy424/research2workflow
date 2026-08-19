@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
+from ..download.update_axis import init_empty_field
+
 
 # 1.0 申万行业分类命名更改映射
 update_map = {
@@ -143,7 +145,10 @@ def _daily_industry_codes(date, ticks, conn):
 def _write_daily_mask(date, dates, ticks, root, name, values):
     dt = np.searchsorted(dates, pd.to_datetime(date))
     n_valid = np.count_nonzero(ticks != "")
-    arr = np.memmap(root / "mask" / f"{name}.bin", dtype=float, mode="r+", shape=(len(dates), len(ticks)))
+    path = root / "mask" / f"{name}.bin"
+    if not path.exists():
+        init_empty_field(dates, ticks, 'mask', name, np.float32, dim=None)
+    arr = np.memmap(path, dtype=np.float32, mode="r+", shape=(len(dates), len(ticks)))
     arr[dt,:n_valid] = values
     arr.flush()
 

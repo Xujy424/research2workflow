@@ -804,36 +804,50 @@ def generate_from_proc(
     )
 
 
+def update_snapshot(root, date, interval, topn):
+    outpath = root / "proc" / date 
+    sh_snapshot = generate_from_proc(root, date, 'sh', interval, topn)
+    sh_snapshot.write_parquet(outpath/f"sh_shot_{interval}.pq", compression="gzip")
+    sz_snapshot = generate_from_proc(root, date, 'sz', interval, topn)
+    sz_snapshot.write_parquet(outpath/f"sz_shot_{interval}.pq", compression="gzip")
+
+
 if __name__ == "__main__":
     # IDE 手动运行配置：改为 True 后，直接修改下面参数并点击“运行”。
     # 保持为 False 时，仍然使用下方 argparse 命令行参数。
-    USE_MANUAL_CONFIG = True
-    MANUAL_CONFIG = {
-        "root": "/data/xujiayi/xjy/l2",
-        "date": "20260624",
-        "exchange": "sz",       # "sh" 或 "sz"
-        "interval": "1m",       # 例如 "30s"、"1m"、"5m"
-        "topn": 10,
-        "output": None,          # None 表示保存到默认路径
-    }
+    # USE_MANUAL_CONFIG = True
+    # MANUAL_CONFIG = {
+    #     "root": "/data/l2",
+    #     "date": "20240614",
+    #     "exchange": "sz",       # "sh" 或 "sz"
+    #     "interval": "1m",       # 例如 "30s"、"1m"、"5m"
+    #     "topn": 10,
+    #     "output": None,          # None 表示保存到默认路径
+    # }
 
-    parser = argparse.ArgumentParser(description="Generate intraday L2 top-N snapshots")
-    parser.add_argument("--root", required=True, help="L2 root containing proc/YYYYMMDD")
-    parser.add_argument("--date", required=True, help="YYYYMMDD")
-    parser.add_argument("--exchange", required=True, choices=("sh", "sz"))
-    parser.add_argument("--interval", default="1m", help="e.g. 30s, 1m, 5m")
-    parser.add_argument("--topn", type=int, default=10)
-    parser.add_argument("--output")
-    if USE_MANUAL_CONFIG:
-        args = argparse.Namespace(**MANUAL_CONFIG)
-    else:
-        args = parser.parse_args()
+    # parser = argparse.ArgumentParser(description="Generate intraday L2 top-N snapshots")
+    # parser.add_argument("--root", required=True, help="L2 root containing proc/YYYYMMDD")
+    # parser.add_argument("--date", required=True, help="YYYYMMDD")
+    # parser.add_argument("--exchange", required=True, choices=("sh", "sz"))
+    # parser.add_argument("--interval", default="1m", help="e.g. 30s, 1m, 5m")
+    # parser.add_argument("--topn", type=int, default=10)
+    # parser.add_argument("--output")
+    # if USE_MANUAL_CONFIG:
+    #     args = argparse.Namespace(**MANUAL_CONFIG)
+    # else:
+    #     args = parser.parse_args()
 
-    result = generate_from_proc(args.root, args.date, args.exchange, args.interval, args.topn)
-    normalized_date = args.date.replace("-", "")
-    output = Path(args.output) if args.output else (
-        Path(args.root) / "proc" / normalized_date / f"{args.exchange}shot_{args.interval}.pq"
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    result.write_parquet(output, compression="gzip")
-    print(f"saved {result.height} rows to {output}")
+    # result = generate_from_proc(args.root, args.date, args.exchange, args.interval, args.topn)
+    # normalized_date = args.date.replace("-", "")
+    # output = Path(args.output) if args.output else (
+    #     Path(args.root) / "proc" / normalized_date / f"{args.exchange}shot_{args.interval}.pq"
+    # )
+    # output.parent.mkdir(parents=True, exist_ok=True)
+    # result.write_parquet(output, compression="gzip")
+    # print(f"saved {result.height} rows to {output}")
+
+
+    root = Path('D:/data/l2')
+    date = '2024-06-14'
+    date = date.replace('-', '')
+    update_snapshot(root, date, '1m', 10)

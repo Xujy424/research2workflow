@@ -7,11 +7,12 @@ from functools import lru_cache
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 import pymssql
+from pathlib import Path
 
 from .level2.cifsLoader import CIFSLoader
 
 
-ROOT = '/data/xujiayi/xjy/'
+ROOT = Path('/data/shanghai/xujiayi/workflow/data/')
 
 
 JY_CONFIG = {
@@ -60,7 +61,7 @@ CIFTABLE_PATTERNS = {
     # "shshot": "MarketData",
 }
 cifs = CIFSLoader("xujiayi", "ZSfund.com@202607")
-L2DATA_PATH = ROOT + 'l2/'
+L2DATA_PATH = ROOT / 'stock' / 'l2/'
 
 
 

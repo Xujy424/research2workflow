@@ -1,93 +1,7 @@
 import numpy as np
 import polars as pl
 
-
-sql = f'''
-select 
-    B.SecuCode as 'index',
-    C.SecuCode as 'tick',
-    A.EndDate as 'date',
-    A.Weight as 'weight'
-from LC_IndexComponentsWeight A
-left join SecuMain B on A.IndexCode=B.InnerCode
-left join SecuMain C on A.InnerCode=C.InnerCode
-where B.SecuCode in ('000300','000905','000510','000852','932000','000985')
-'''
-index_compt = pl.read_database(sql, JY_CONN)
-index_compt
-
-index_compt = index_compt.sort(['index','date','tick'])
-
-hs300 = index_compt.filter(pl.col('index')=='000300').pivot(index='date',columns='tick',values='weight').to_pandas().set_index('date').reindex(columns=ticks).fillna(-999)
-dates = sorted(list(set(dts).union(set(hs300.index))))
-hs300 = hs300.reindex(index=dates)
-hs300 = hs300.ffill().reindex(dts).replace(-999,np.nan)
-hs300
-
-zz500 = index_compt.filter(pl.col('index')=='000905').pivot(index='date',columns='tick',values='weight').to_pandas().set_index('date').reindex(columns=ticks).fillna(-999)
-dates = sorted(list(set(dts).union(set(zz500.index))))
-zz500 = zz500.reindex(index=dates)
-zz500 = zz500.ffill().reindex(dts).replace(-999,np.nan)
-zz500
-
-a500 = index_compt.filter(pl.col('index')=='000510').pivot(index='date',columns='tick',values='weight').to_pandas().set_index('date').reindex(columns=ticks).fillna(-999)
-dates = sorted(list(set(dts).union(set(a500.index))))
-a500 = a500.reindex(index=dates)
-a500 = a500.ffill().reindex(dts).replace(-999,np.nan)
-a500
-
-zz1000 = index_compt.filter(pl.col('index')=='000852').pivot(index='date',columns='tick',values='weight').to_pandas().set_index('date').reindex(columns=ticks).fillna(-999)
-dates = sorted(list(set(dts).union(set(zz1000.index))))
-zz1000 = zz1000.reindex(index=dates)
-zz1000 = zz1000.ffill().reindex(dts).replace(-999,np.nan)
-zz1000
-
-zz2000 = index_compt.filter(pl.col('index')=='932000').pivot(index='date',columns='tick',values='weight').to_pandas().set_index('date').reindex(columns=ticks).fillna(-999)
-dates = sorted(list(set(dts).union(set(zz2000.index))))
-zz2000 = zz2000.reindex(index=dates)
-zz2000 = zz2000.ffill().reindex(dts).replace(-999,np.nan)
-zz2000
-
-zzfull = index_compt.filter(pl.col('index')=='000985').pivot(index='date',columns='tick',values='weight').to_pandas().set_index('date').reindex(columns=ticks).fillna(-999)
-dates = sorted(list(set(dts).union(set(zzfull.index))))
-zzfull = zzfull.reindex(index=dates)
-zzfull = zzfull.ffill().reindex(dts).replace(-999,np.nan)
-zzfull
-
-
-
-hs300.values.astype(float).tofile('/data/xujiayi/end2end/mask/hs300_weight.bin')
-zz500.values.astype(float).tofile('/data/xujiayi/end2end/mask/zz500_weight.bin')
-a500.values.astype(float).tofile('/data/xujiayi/end2end/mask/a500_weight.bin')
-zz1000.values.astype(float).tofile('/data/xujiayi/end2end/mask/zz1000_weight.bin')
-zz2000.values.astype(float).tofile('/data/xujiayi/end2end/mask/zz2000_weight.bin')
-zzfull.values.astype(float).tofile('/data/xujiayi/end2end/mask/zzfull_weight.bin')
-
-
-
-
-hs300 = hs300.values.astype(float)
-zz500 = zz500.values.astype(float)
-a500 = a500.values.astype(float)
-zz1000 = zz1000.values.astype(float)
-zz2000 = zz2000.values.astype(float)
-zzfull = zzfull.values.astype(float)
-
-
-
-
-hs300_mask = ~np.isnan(hs300)
-hs300_mask.astype(bool).tofile('/data/xujiayi/end2end/mask/hs300_mask.bin')
-zz500_mask = ~np.isnan(zz500)
-zz500_mask.astype(bool).tofile('/data/xujiayi/end2end/mask/zz500_mask.bin')
-a500_mask = ~np.isnan(a500)
-a500_mask.astype(bool).tofile('/data/xujiayi/end2end/mask/a500_mask.bin')
-zz1000_mask = ~np.isnan(zz1000)
-zz1000_mask.astype(bool).tofile('/data/xujiayi/end2end/mask/zz1000_mask.bin')
-zz2000_mask = ~np.isnan(zz2000)
-zz2000_mask.astype(bool).tofile('/data/xujiayi/end2end/mask/zz2000_mask.bin')
-zzfull_mask = ~np.isnan(zzfull)
-zzfull_mask.astype(bool).tofile('/data/xujiayi/end2end/mask/zzfull_mask.bin')
+from ..download.update_axis import init_empty_field
 
 
 INDEX_CODE_TO_NAME = {
@@ -131,9 +45,12 @@ def _write_index_row(date, dates, ticks, root, name, weights):
     dt = np.searchsorted(dates, date)
     n_valid = np.count_nonzero(ticks != "")
 
+    path = root / "mask" / f"{name}_weight.bin"
+    if not path.exists():
+        init_empty_field(dates, ticks, 'mask', f"{name}_weight", np.float32, dim=None)
     weight_arr = np.memmap(
-        root / "mask" / f"{name}_weight.bin",
-        dtype=float,
+        path,
+        dtype=np.float32,
         mode="r+",
         shape=(len(dates), len(ticks)),
     )
@@ -141,8 +58,11 @@ def _write_index_row(date, dates, ticks, root, name, weights):
     weight_arr[dt,:n_valid] = weights
     weight_arr.flush()
 
+    path = root / "mask" / f"{name}_mask.bin"
+    if not path.exists():
+        init_empty_field(dates, ticks, 'mask', f"{name}_mask", bool, dim=None)
     mask_arr = np.memmap(
-        root / "mask" / f"{name}_mask.bin",
+        path,
         dtype=bool,
         mode="r+",
         shape=(len(dates), len(ticks)),

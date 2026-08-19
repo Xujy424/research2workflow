@@ -100,14 +100,18 @@ if __name__ == "__main__":
     import pandas as pd
     import bisect
 
-    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
-    dates = [d for d in dates if not np.isnat(d)]
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-06-10')), bisect.bisect_right(dates, pd.to_datetime('2026-07-30'))
-    for date in dates[start_dt:end_dt]:
-        date = date.astype('datetime64[D]').astype(str).replace('-', '')
-        print(date)
-        autoload_l2data(date)
-        print()
+    # dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    # dates = [d for d in dates if not np.isnat(d)]
+    # start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-06-10')), bisect.bisect_right(dates, pd.to_datetime('2026-07-30'))
+    # for date in dates[start_dt:end_dt]:
+    #     date = date.astype('datetime64[D]').astype(str).replace('-', '')
+    #     print(date)
+    #     autoload_l2data(date)
+    #     print()
+
+    date = '2024-06-14'
+    date = date.replace('-', '')
+    autoload_l2data(date)
 
 
 
