@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date as date_type, timedelta
 from pathlib import Path
 import sys
+import warnings
 
 import numpy as np
 
@@ -86,6 +87,22 @@ def _close_connection(connection):
         dispose()
 
 
+def _run_step(label, function, *args, **kwargs):
+    """Run one update step, print one result line, and re-raise failures."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = function(*args, **kwargs)
+    except Exception as exc:
+        print(
+            f"[FAILED] {label}: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        raise
+    print(f"[OK] {label}", flush=True)
+    return result
+
+
 def update_data(
     root,
     date=None,
@@ -99,86 +116,140 @@ def update_data(
     stock_root = root / "stock"
     stock_root.mkdir(parents=True, exist_ok=True)
     dates_path, ticks_path = init_axis(root)
-    print(f'日期:{date}')
     if not is_tradedate(date):
         return {"status": "skipped", "reason": "non-trading day"}
 
+    print(f"date: {date}", flush=True)
     own_jy = jy_conn is None
     own_zyyx = zyyx_conn is None
     own_str = str_conn is None
-    jy_conn = jy_conn or get_jy_conn()
-    zyyx_conn = zyyx_conn or get_zyyx_conn()
-    str_conn = str_conn or get_str_engine()
 
     try:
-        date = update_date(date, root)
-        update_stockticks(date, root, jy_conn)
+        if jy_conn is None:
+            jy_conn = get_jy_conn()
+        if zyyx_conn is None:
+            zyyx_conn = get_zyyx_conn()
+        if str_conn is None:
+            str_conn = get_str_engine()
+
+        date = _run_step("date axis", update_date, date, root)
+        _run_step("stock axis", update_stockticks, date, root, jy_conn)
         dates = np.load(dates_path, allow_pickle=False)
         stock_ticks = np.load(ticks_path, allow_pickle=False)
-        print('日期及股票索引更新结束.')
 
-        update_d_essentials(date, dates, stock_ticks, jy_conn, stock_root)
-        print('日行情更新结束.')
-        update_m_essentials(date, dates, stock_ticks, str_conn, stock_root)
-        print('分钟行情更新结束.')
-        update_basic(date, dates, stock_ticks, jy_conn, stock_root)
-        update_tradable(date, dates, stock_ticks, jy_conn, stock_root)
-        print('基础信息更新结束.')
-        update_industry(date, dates, stock_ticks, jy_conn, stock_root)
-        update_sector(date, dates, stock_ticks, jy_conn, stock_root)
-        print('行业与板块分类更新结束.')
-        update_index(date, dates, stock_ticks, jy_conn, stock_root)
-        print('指数成分更新结束.')
-        update_zyyx(
-            date, dates, stock_ticks, zyyx_conn, stock_root / "zyyx"
+        _run_step(
+            "daily essentials",
+            update_d_essentials,
+            date, dates, stock_ticks, jy_conn, stock_root,
         )
-        print('朝阳永续数据更新结束.')
-        update_fundamental(date, dates, stock_ticks, jy_conn, stock_root)
-        update_dividend(date, dates, stock_ticks, jy_conn, stock_root)
-        print('基本面数据更新结束.')
-        update_barra(date, dates, stock_ticks, jy_conn, stock_root)
-        print('Barra十因子更新结束.')
+        _run_step(
+            "minute essentials",
+            update_m_essentials,
+            date, dates, stock_ticks, str_conn, stock_root,
+        )
+        _run_step(
+            "basic and tradable",
+            lambda: (
+                update_basic(
+                    date, dates, stock_ticks, jy_conn, stock_root
+                ),
+                update_tradable(
+                    date, dates, stock_ticks, jy_conn, stock_root
+                ),
+            ),
+        )
+        _run_step(
+            "industry and sector",
+            lambda: (
+                update_industry(
+                    date, dates, stock_ticks, jy_conn, stock_root
+                ),
+                update_sector(
+                    date, dates, stock_ticks, jy_conn, stock_root
+                ),
+            ),
+        )
+        _run_step(
+            "index constituents",
+            update_index,
+            date, dates, stock_ticks, jy_conn, stock_root,
+        )
+        _run_step(
+            "ZYYX consensus",
+            update_zyyx,
+            date,
+            dates,
+            stock_ticks,
+            zyyx_conn,
+            stock_root / "zyyx",
+        )
+        _run_step(
+            "fundamental and dividend",
+            lambda: (
+                update_fundamental(
+                    date, dates, stock_ticks, jy_conn, stock_root
+                ),
+                update_dividend(
+                    date, dates, stock_ticks, jy_conn, stock_root
+                ),
+            ),
+        )
+        _run_step(
+            "Barra factors",
+            update_barra,
+            date, dates, stock_ticks, jy_conn, stock_root,
+        )
 
         if update_level2:
             compact_date = date.replace("-", "")
-            autoload_l2data(compact_date)
-            print('level2原始表加载结束.')
-            update_l2_basic(L2DATA_PATH, compact_date)
-            print('level2处理表更新结束.')
-            update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
-            print('level2快照表更新结束.')
-            update_d_moneyflow(
-                stock_root, dates, date, stock_ticks, l2_root=L2DATA_PATH
+            _run_step("Level-2 download", autoload_l2data, compact_date)
+            _run_step(
+                "Level-2 preprocessing",
+                update_l2_basic,
+                L2DATA_PATH,
+                compact_date,
             )
-            print('资金流分类更新结束.')
+            _run_step(
+                "Level-2 snapshots",
+                update_snapshot,
+                L2DATA_PATH,
+                compact_date,
+                "1m",
+                10,
+            )
+            _run_step(
+                "moneyflow",
+                update_d_moneyflow,
+                stock_root,
+                dates,
+                date,
+                stock_ticks,
+                l2_root=L2DATA_PATH,
+            )
 
-        print()
-        resized = (
-            reset_axis(root)
-            if is_last_tradedate_of_year(date)
-            else None
-        )
+        resized = None
+        if is_last_tradedate_of_year(date):
+            resized = _run_step("annual axis resize", reset_axis, root)
+
         return {
             "status": "updated",
             "date": date,
             "axis_resized": bool(resized and resized.changed),
         }
-    
     finally:
-        if own_jy:
+        if own_jy and jy_conn is not None:
             _close_connection(jy_conn)
-        if own_zyyx:
+        if own_zyyx and zyyx_conn is not None:
             _close_connection(zyyx_conn)
-        if own_str:
+        if own_str and str_conn is not None:
             _close_connection(str_conn)
-
 
 def update_history(
     root,
     start_date="2010-01-01",
     end_date="2026-07-31",
 ):
-    """Build non-Level-2 data sequentially over a historical date range."""
+    """Build non-Level-2 data sequentially and stop on the first failure."""
     start = date_type.fromisoformat(str(start_date))
     end = date_type.fromisoformat(str(end_date))
     if start > end:
@@ -187,27 +258,29 @@ def update_history(
     jy_conn = None
     zyyx_conn = None
     str_conn = None
+    current = start
     try:
         jy_conn = get_jy_conn()
         zyyx_conn = get_zyyx_conn()
         str_conn = get_str_engine()
 
-        current = start
         while current <= end:
             if is_tradedate(current):
-                date_text = current.isoformat()
-                print(f"updating {date_text} ...", flush=True)
-                result = update_data(
+                update_data(
                     root,
-                    date_text,
+                    current.isoformat(),
                     jy_conn=jy_conn,
                     zyyx_conn=zyyx_conn,
                     str_conn=str_conn,
                     update_level2=False,
                 )
-                print(result, flush=True)
-                print()
             current += timedelta(days=1)
+    except Exception:
+        print(
+            f"[STOPPED] historical update at {current.isoformat()}",
+            flush=True,
+        )
+        raise
     finally:
         for connection in (jy_conn, zyyx_conn, str_conn):
             if connection is not None:
@@ -219,7 +292,7 @@ def update_history_l2(
     start_date="2010-01-01",
     end_date="2026-07-31",
 ):
-    """Download and build only historical Level-2 data and moneyflow."""
+    """Build only historical Level-2 data and stop on the first failure."""
     start = date_type.fromisoformat(str(start_date))
     end = date_type.fromisoformat(str(end_date))
     if start > end:
@@ -241,35 +314,52 @@ def update_history_l2(
         )
 
     current = start
-    while current <= end:
-        if is_tradedate(current):
-            date_text = current.isoformat()
-            if date_text not in valid_dates:
-                raise ValueError(
-                    f"{date_text} is missing from dates.npy; "
-                    "run update_history() first"
+    try:
+        while current <= end:
+            if is_tradedate(current):
+                date_text = current.isoformat()
+                if date_text not in valid_dates:
+                    raise ValueError(
+                        f"{date_text} is missing from dates.npy; "
+                        "run update_history() first"
+                    )
+
+                compact_date = date_text.replace("-", "")
+                print(f"L2 date: {date_text}", flush=True)
+                _run_step(
+                    "Level-2 download", autoload_l2data, compact_date
                 )
-
-            compact_date = date_text.replace("-", "")
-            print(f"updating L2 {date_text} ...", flush=True)
-            autoload_l2data(compact_date)
-            print('level2原始表加载结束.')
-            update_l2_basic(L2DATA_PATH, compact_date)
-            print('level2处理表更新结束.')
-            update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
-            print('level2快照表更新结束.')
-            update_d_moneyflow(
-                stock_root,
-                dates,
-                date_text,
-                stock_ticks,
-                l2_root=L2DATA_PATH,
-            )
-            print('资金流分类更新结束.')
-            print(f"L2 {date_text} updated", flush=True)
-            print()
-        current += timedelta(days=1)
-
+                _run_step(
+                    "Level-2 preprocessing",
+                    update_l2_basic,
+                    L2DATA_PATH,
+                    compact_date,
+                )
+                _run_step(
+                    "Level-2 snapshots",
+                    update_snapshot,
+                    L2DATA_PATH,
+                    compact_date,
+                    "1m",
+                    10,
+                )
+                _run_step(
+                    "moneyflow",
+                    update_d_moneyflow,
+                    stock_root,
+                    dates,
+                    date_text,
+                    stock_ticks,
+                    l2_root=L2DATA_PATH,
+                )
+            current += timedelta(days=1)
+    except Exception:
+        print(
+            f"[STOPPED] historical Level-2 update at "
+            f"{current.isoformat()}",
+            flush=True,
+        )
+        raise
 
 if __name__ == "__main__":
     update_history(

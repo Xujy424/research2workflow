@@ -4,7 +4,6 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
 
 if __package__:
     from ..config import get_jy_conn
