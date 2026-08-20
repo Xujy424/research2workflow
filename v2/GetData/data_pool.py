@@ -291,24 +291,113 @@ __all__ = ["AxisLoader", "DataPool", "FieldSpec"]
 
 
 if __name__ == "__main__":
+    # 1. Open the default stock module and close memmaps automatically.
     with DataPool(ROOT) as data:
-        end_date = data["trade_dates"][-1]
-        ticks = data["ticks"][:3]
+        dates = data["trade_dates"]
+        ticks = data["ticks"]
+        end_date = dates[-1]
+        start_date = dates[max(0, len(dates) - 20)]
+        selected_ticks = ticks[:min(3, len(ticks))]
 
-        close = data.read(
+        # 2. Discover fields and inspect physical dtype/shape.
+        fields = data.fields()
+        close_spec = data.field_spec("d_essentials/close")
+        print("axes:", len(dates), len(ticks))
+        print("fields:", len(fields))
+        print("close spec:", close_spec.dtype, close_spec.shape)
+
+        # 3. Full reserved read-only memmap, including empty axis capacity.
+        raw_close = data.load("d_essentials/close")
+        same_raw_close = data["d_essentials/close"]
+        print("raw:", raw_close.shape, same_raw_close.shape)
+
+        # 4. One daily cross-section for all valid instruments: (code,).
+        close = data.read("d_essentials/close", end_date)
+
+        # 5. A date can also be an axis position; -1 means latest date.
+        latest_close = data.read("d_essentials/close", -1)
+
+        # 6. One instrument or several instruments in requested order.
+        one_stock = data.read(
             "d_essentials/close",
             end_date,
-            ticks=ticks,
+            ticks=selected_ticks[0],
         )
-        forecast_eps = data.read(
-            "zyyx/con_forecast/eps",
+        selected_close = data.read(
+            "d_essentials/close",
             end_date,
-            ticks=ticks,
-        )
-        raw_net_profit = data.load(
-            "fundamental/income_ttm/NetProfit"
+            ticks=selected_ticks[::-1],
         )
 
-        print("close:", close.shape)
-        print("forecast EPS:", forecast_eps.shape)
-        print("raw net profit:", raw_net_profit.shape)
+        # 7. Inclusive date range: (date, code).
+        close_history = data.read(
+            "d_essentials/close",
+            end_date=end_date,
+            start_date=start_date,
+            ticks=selected_ticks,
+        )
+
+        # 8. The same range can use integer axis positions.
+        recent_close = data.read(
+            "d_essentials/close",
+            end_date=-1,
+            start_date=max(0, len(dates) - 5),
+            ticks=selected_ticks,
+        )
+
+        # 9. Minute field for one day: (241, code).
+        minute_close = data.read(
+            "m_essentials/close",
+            end_date,
+            ticks=selected_ticks,
+        )
+
+        # 10. Consensus field for one day: (4 forecast years, code).
+        forecast_eps = data.read(
+            "zyyx/con_forecast/con_eps",
+            end_date,
+            ticks=selected_ticks,
+        )
+
+        # 11. Fundamental and Barra fields use the same slash path.
+        net_profit = data.read(
+            "fundamental/income_ttm/NetProfit",
+            end_date,
+            ticks=selected_ticks,
+        )
+        beta = data.read(
+            "barra/beta",
+            end_date,
+            ticks=selected_ticks,
+        )
+
+        # 12. copy=False avoids the final explicit copy when slicing allows it.
+        close_view = data.read(
+            "d_essentials/close",
+            end_date,
+            copy=False,
+        )
+
+        print("daily:", close.shape, latest_close.shape)
+        print("selected:", one_stock.shape, selected_close.shape)
+        print("history:", close_history.shape, recent_close.shape)
+        print("3-D:", minute_close.shape, forecast_eps.shape)
+        print("factor inputs:", net_profit.shape, beta.shape)
+        print("view:", close_view.shape)
+
+        # Complete labeled 2-D field; potentially memory intensive.
+        # close_frame = data.get_field("d_essentials/close")
+
+        # After UpdateData changes or resizes files:
+        # data.close()
+        # run_update_data(...)
+        # data.refresh()
+
+    # 13. Other asset modules share the same API and dates.npy.
+    # Their code axes are axis/fund_ticks.npy and axis/future_ticks.npy.
+    #
+    # with DataPool(ROOT, asset="fund") as fund:
+    #     fund_nav = fund.read("nav/unit", end_date=-1)
+    #
+    # with DataPool(ROOT, asset="future") as future:
+    #     future_close = future.read("d_essentials/close", end_date=-1)
