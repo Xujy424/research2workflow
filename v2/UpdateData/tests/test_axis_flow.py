@@ -157,7 +157,9 @@ class AxisFlowTest(unittest.TestCase):
 
             def recorder(name):
                 def update(date, dates, ticks, *args, **kwargs):
-                    calls.append((name, date, len(dates), len(ticks)))
+                    calls.append((
+                        name, date, len(dates), len(ticks), Path(args[-1])
+                    ))
                     return {}
                 return update
 
@@ -185,7 +187,15 @@ class AxisFlowTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "updated")
             self.assertEqual(len(calls), len(functions))
-            self.assertEqual({call[2:] for call in calls}, {(500, 5000)})
+            self.assertEqual({call[2:4] for call in calls}, {(500, 5000)})
+            self.assertEqual(
+                {call[4] for call in calls if call[0] != "update_zyyx"},
+                {root / "stock"},
+            )
+            self.assertEqual(
+                {call[4] for call in calls if call[0] == "update_zyyx"},
+                {root / "stock" / "zyyx"},
+            )
 
 
 if __name__ == "__main__":

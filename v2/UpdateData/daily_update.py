@@ -129,7 +129,9 @@ def update_data(
         print('行业与板块分类更新结束.')
         update_index(date, dates, stock_ticks, jy_conn, stock_root)
         print('指数成分更新结束.')
-        update_zyyx(date, dates, stock_ticks, zyyx_conn, stock_root)
+        update_zyyx(
+            date, dates, stock_ticks, zyyx_conn, stock_root / "zyyx"
+        )
         print('朝阳永续数据更新结束.')
         update_fundamental(date, dates, stock_ticks, jy_conn, stock_root)
         update_dividend(date, dates, stock_ticks, jy_conn, stock_root)

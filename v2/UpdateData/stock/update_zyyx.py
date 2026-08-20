@@ -308,7 +308,7 @@ if __name__ == '__main__':
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
     ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     conn = get_zyyx_conn()
-    root = Path('D:/data/zyyx')
+    root = Path('D:/data/stock/zyyx')
 
     update_zyyx(
         date, dates, ticks, conn, root
