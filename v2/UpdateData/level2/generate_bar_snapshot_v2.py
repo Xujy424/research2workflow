@@ -847,7 +847,7 @@ if __name__ == "__main__":
     # print(f"saved {result.height} rows to {output}")
 
 
-    root = Path('D:/data/l2')
-    date = '2024-06-14'
+    root = Path('/data/shanghai/xujiayi/workflow/data/stock/l2')
+    date = '2025-01-02'
     date = date.replace('-', '')
     update_snapshot(root, date, '1m', 10)

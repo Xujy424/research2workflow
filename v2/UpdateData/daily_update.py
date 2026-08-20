@@ -97,6 +97,7 @@ def update_data(
 ):
     root = Path(root)
     dates_path, ticks_path = init_axis(root)
+    print(f'日期:{date}')
     if not is_tradedate(date):
         return {"status": "skipped", "reason": "non-trading day"}
 
@@ -112,28 +113,42 @@ def update_data(
         update_stockticks(date, root, jy_conn)
         dates = np.load(dates_path, allow_pickle=False)
         stock_ticks = np.load(ticks_path, allow_pickle=False)
+        print('日期及股票索引更新结束.')
 
         update_d_essentials(date, dates, stock_ticks, jy_conn, root)
+        print('日行情更新结束.')
         update_m_essentials(date, dates, stock_ticks, str_conn, root)
+        print('分钟行情更新结束.')
         update_basic(date, dates, stock_ticks, jy_conn, root)
         update_tradable(date, dates, stock_ticks, jy_conn, root)
+        print('基础信息更新结束.')
         update_industry(date, dates, stock_ticks, jy_conn, root)
         update_sector(date, dates, stock_ticks, jy_conn, root)
+        print('行业与板块分类更新结束.')
         update_index(date, dates, stock_ticks, jy_conn, root)
+        print('指数成分更新结束.')
         update_zyyx(date, dates, stock_ticks, zyyx_conn, root)
+        print('朝阳永续数据更新结束.')
         update_fundamental(date, dates, stock_ticks, jy_conn, root)
         update_dividend(date, dates, stock_ticks, jy_conn, root)
+        print('基本面数据更新结束.')
         update_barra(date, dates, stock_ticks, jy_conn, root)
+        print('Barra十因子更新结束.')
 
         if update_level2:
             compact_date = date.replace("-", "")
             autoload_l2data(compact_date)
+            print('level2原始表加载结束.')
             update_l2_basic(L2DATA_PATH, compact_date)
+            print('level2处理表更新结束.')
             update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
+            print('level2快照表更新结束.')
             update_d_moneyflow(
                 root, dates, date, stock_ticks, l2_root=L2DATA_PATH
             )
+            print('资金流分类更新结束.')
 
+        print()
         resized = (
             reset_axis(root)
             if is_last_tradedate_of_year(date)
@@ -144,6 +159,7 @@ def update_data(
             "date": date,
             "axis_resized": bool(resized and resized.changed),
         }
+    
     finally:
         if own_jy:
             _close_connection(jy_conn)
@@ -229,8 +245,11 @@ def update_history_l2(
             compact_date = date_text.replace("-", "")
             print(f"updating L2 {date_text} ...", flush=True)
             autoload_l2data(compact_date)
+            print('level2原始表加载结束.')
             update_l2_basic(L2DATA_PATH, compact_date)
+            print('level2处理表更新结束.')
             update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
+            print('level2快照表更新结束.')
             update_d_moneyflow(
                 root,
                 dates,
@@ -238,7 +257,9 @@ def update_history_l2(
                 stock_ticks,
                 l2_root=L2DATA_PATH,
             )
+            print('资金流分类更新结束.')
             print(f"L2 {date_text} updated", flush=True)
+            print()
         current += timedelta(days=1)
 
 
@@ -248,8 +269,15 @@ if __name__ == "__main__":
         start_date="2010-01-01",
         end_date="2026-07-31",
     )
-    update_history_l2(
-        root=ROOT,
-        start_date="2010-01-01",
-        end_date="2026-07-31",
-    )
+    # update_history_l2(
+    #     root=ROOT,
+    #     start_date="2010-01-01",
+    #     end_date="2026-07-31",
+    # )
+
+    # update_data(
+    #     root=ROOT,
+    #     date=None,
+    #     update_level2=True,
+    # )
+

@@ -878,7 +878,7 @@ def update_l2_basic(root, date):
     rawpath, outpath = generate_path(root, date)
     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
     szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
-    shutil.rmtree(rawpath)
+    #shutil.rmtree(rawpath)
 
 
 
@@ -886,7 +886,7 @@ def update_l2_basic(root, date):
 
 if __name__ == '__main__':
 
-    L2DATA_PATH = "/data/l2"
+    L2DATA_PATH = '/data/shanghai/xujiayi/workflow/data/stock/l2'
     # rawpath, outpath = generate_path(L2DATA_PATH, '20260624')
 
     # shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
@@ -914,11 +914,11 @@ if __name__ == '__main__':
     #     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
     #     szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
-    date = '2024-06-14'
+    date = '2025-01-02'
     date = date.replace('-', '')
     rawpath, outpath = generate_path(L2DATA_PATH, date)
     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
     szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
-    shutil.rmtree(rawpath)
+    #shutil.rmtree(rawpath)
 
