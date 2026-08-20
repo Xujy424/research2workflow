@@ -274,9 +274,7 @@ class DataPool:
     def __getitem__(self, key):
         if key in {"dates", "trade_dates"}:
             return self.axis.trade_dates
-        if key in {
-            "ticks", f"{self.asset}_tick", f"{self.asset}_ticks"
-        }:
+        if key in {"ticks", f"{self.asset}_ticks"}:
             return self.axis.ticks
         return self.load(key)
     
