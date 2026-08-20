@@ -240,7 +240,7 @@ def update_fundamental(date, dates, ticks, conn=None, root=None):
         # which is the point-in-time equivalent of a field-level ffill.
         # All rows have already been restricted to publish_date <= date.
         frame = frame.sort_values(["tick", "publish_date", "end_date"])
-        for field in tqdm(fields):
+        for field in fields:
             field_frame = frame.dropna(subset=[field]).drop_duplicates("tick", keep="last")  # 所有tick内最新非空数据
             valid_values = pd.to_numeric(
                 field_frame.set_index("tick")[field], errors="coerce"

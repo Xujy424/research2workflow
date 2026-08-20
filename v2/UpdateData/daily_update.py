@@ -206,6 +206,7 @@ def update_history(
                     update_level2=False,
                 )
                 print(result, flush=True)
+                print()
             current += timedelta(days=1)
     finally:
         for connection in (jy_conn, zyyx_conn, str_conn):
