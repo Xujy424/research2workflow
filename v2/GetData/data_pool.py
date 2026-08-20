@@ -295,8 +295,8 @@ if __name__ == "__main__":
     with DataPool(ROOT) as data:
         dates = data["trade_dates"]
         ticks = data["ticks"]
-        end_date = dates[-1]
-        start_date = dates[max(0, len(dates) - 20)]
+        end_date = dates[20]
+        start_date = dates[0]
         selected_ticks = ticks[:min(3, len(ticks))]
 
         # 2. Discover fields and inspect physical dtype/shape.
