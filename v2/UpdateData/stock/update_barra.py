@@ -70,7 +70,7 @@ def _save(root, dates, ticks, dt, values):
         p = folder / f'{name}.bin'
         if not p.exists():
             with p.open('wb') as f:
-                f.truncate(size)   # 扩展到二维 float64 矩阵所需大小
+                f.truncate(size)
             a = np.memmap(p, dtype=float, mode='r+', shape=(len(dates), len(ticks)))
             a[:] = np.nan
             a.flush()
@@ -85,7 +85,7 @@ def _calc_beta(ret, mv, rf, n):
     if len(ret) != 242:
         return np.full(n, np.nan)
     total = np.nansum(mv, 1, keepdims=True)
-    rm = np.nansum(np.divide(mv, total, out=np.zeros_like(mv), where=total != 0) * ret, 1) - rf   # 市值加权个股收益率得到市场收益率
+    rm = np.nansum(np.divide(mv, total, out=np.zeros_like(mv), where=total != 0) * ret, 1) - rf
     return _beta(ret - rf, rm)
 
 
@@ -113,7 +113,7 @@ def _calc_nonlinear_size(size):
 
 
 def _calc_momentom(root, dates, ticks, dt):
-    ''' 过去 525 个交易日（剔除最近 21 天）的加权收益率，半衰期 126 天 '''
+    """Weighted momentum excluding the most recent 21 trading days."""
     end = dt - 20
     start = end - 484
     if start < 0:
@@ -123,7 +123,7 @@ def _calc_momentom(root, dates, ticks, dt):
 
 
 def _calc_residual_vol(ret, mv, rf, beta, n):
-    '''由 DASTD（超额收益波动率）、CMRA（12 个月收益率区间）、HSIGMA（Beta 残差波动）加权合成，并对 BETA 正交化'''
+    """Combine DASTD, CMRA, and HSIGMA residual-volatility components."""
     if len(ret) != 242:
         return np.full(n, np.nan)
 
@@ -131,16 +131,16 @@ def _calc_residual_vol(ret, mv, rf, beta, n):
     rm = np.nansum(np.divide(mv, total, out=np.zeros_like(mv), where=total != 0) * ret, 1) - rf
     excess = ret - rf
 
-    # DASTD: 过去 242 个交易日个股超额收益率的指数加权标准差，半衰期 41 天。
+    # Exponentially weighted volatility of excess returns.
     dastd = _std(excess, _w(242, 41))
 
-    # CMRA: 过去 242 个交易日累计对数超额收益的最大值与最小值之差。
+    # Range of cumulative log excess returns.
     lr = np.log1p(excess)
     lr[~np.isfinite(lr)] = 0
     cumulative = np.cumsum(lr, 0)
     cmra = cumulative.max(0) - cumulative.min(0)
 
-    # HSIGMA: 市场模型残差的指数加权标准差，半衰期 62 天。
+    # Exponentially weighted market-model residual volatility.
     residual = excess - beta[None, :] * rm[:, None]
     hsigma = _std(residual, _w(242, 62))
 
@@ -167,13 +167,8 @@ def _calc_leverage(root, dates, ticks, dt, mcap):
 
 
 def _calc_growth1(root, dates, ticks, dt):
-    '''由过去五年销售增长率、每股盈利增长率、分析师预测的长期和短期盈利增长率加权合成'''
-    # 定义：0.18 × EGRLF + 0.11 × EGRSF + 0.24 × EGRO + 0.47 × SGRO。
-    # EGRLF：分析师预测长期（3-5年）EPS增长率。
-    # EGRSF：分析师预测短期（1年）EPS增长率。
-    # EGRO：过去5年EPS增长率，回归斜率 / 平均EPS。
-    # SGRO：过去5年营业收入增长率，回归斜率 / 平均营收。
-    # 需基本面数据 (年度频率):
+    """Combine consensus and historical earnings and sales growth."""
+    # Historical components use approximately five years of daily PIT data.
     # egro: slope(eps_5y) / mean(eps_5y)
     # sgro: slope(revenue_5y) / mean(revenue_5y)
     # growth = 0.18 * egrlf + 0.11 * egrsf + 0.24 * egro + 0.47 * sgro
@@ -251,7 +246,7 @@ if __name__ == '__main__':
     dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
     ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
     conn = get_jy_conn()
-    root = Path('D:/data')
+    root = Path('D:/data/stock')
 
     update_barra(
         date, dates, ticks, conn, root
