@@ -96,6 +96,8 @@ def update_data(
     update_level2=True,
 ):
     root = Path(root)
+    stock_root = root / "stock"
+    stock_root.mkdir(parents=True, exist_ok=True)
     dates_path, ticks_path = init_axis(root)
     print(f'日期:{date}')
     if not is_tradedate(date):
@@ -115,24 +117,24 @@ def update_data(
         stock_ticks = np.load(ticks_path, allow_pickle=False)
         print('日期及股票索引更新结束.')
 
-        update_d_essentials(date, dates, stock_ticks, jy_conn, root)
+        update_d_essentials(date, dates, stock_ticks, jy_conn, stock_root)
         print('日行情更新结束.')
-        update_m_essentials(date, dates, stock_ticks, str_conn, root)
+        update_m_essentials(date, dates, stock_ticks, str_conn, stock_root)
         print('分钟行情更新结束.')
-        update_basic(date, dates, stock_ticks, jy_conn, root)
-        update_tradable(date, dates, stock_ticks, jy_conn, root)
+        update_basic(date, dates, stock_ticks, jy_conn, stock_root)
+        update_tradable(date, dates, stock_ticks, jy_conn, stock_root)
         print('基础信息更新结束.')
-        update_industry(date, dates, stock_ticks, jy_conn, root)
-        update_sector(date, dates, stock_ticks, jy_conn, root)
+        update_industry(date, dates, stock_ticks, jy_conn, stock_root)
+        update_sector(date, dates, stock_ticks, jy_conn, stock_root)
         print('行业与板块分类更新结束.')
-        update_index(date, dates, stock_ticks, jy_conn, root)
+        update_index(date, dates, stock_ticks, jy_conn, stock_root)
         print('指数成分更新结束.')
-        update_zyyx(date, dates, stock_ticks, zyyx_conn, root)
+        update_zyyx(date, dates, stock_ticks, zyyx_conn, stock_root)
         print('朝阳永续数据更新结束.')
-        update_fundamental(date, dates, stock_ticks, jy_conn, root)
-        update_dividend(date, dates, stock_ticks, jy_conn, root)
+        update_fundamental(date, dates, stock_ticks, jy_conn, stock_root)
+        update_dividend(date, dates, stock_ticks, jy_conn, stock_root)
         print('基本面数据更新结束.')
-        update_barra(date, dates, stock_ticks, jy_conn, root)
+        update_barra(date, dates, stock_ticks, jy_conn, stock_root)
         print('Barra十因子更新结束.')
 
         if update_level2:
@@ -144,7 +146,7 @@ def update_data(
             update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
             print('level2快照表更新结束.')
             update_d_moneyflow(
-                root, dates, date, stock_ticks, l2_root=L2DATA_PATH
+                stock_root, dates, date, stock_ticks, l2_root=L2DATA_PATH
             )
             print('资金流分类更新结束.')
 
@@ -220,6 +222,9 @@ def update_history_l2(
     if start > end:
         raise ValueError("start_date must not be later than end_date")
 
+    root = Path(root)
+    stock_root = root / "stock"
+    stock_root.mkdir(parents=True, exist_ok=True)
     dates_path, ticks_path = init_axis(root)
     dates = np.load(dates_path, allow_pickle=False)
     stock_ticks = np.load(ticks_path, allow_pickle=False)
@@ -251,7 +256,7 @@ def update_history_l2(
             update_snapshot(L2DATA_PATH, compact_date, "1m", 10)
             print('level2快照表更新结束.')
             update_d_moneyflow(
-                root,
+                stock_root,
                 dates,
                 date_text,
                 stock_ticks,

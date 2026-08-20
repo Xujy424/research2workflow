@@ -18,6 +18,7 @@ class AxisFlowTest(unittest.TestCase):
     def test_resize_insert_append_and_l2_exclusion(self):
         with TemporaryDirectory() as folder:
             root = Path(folder)
+            stock_root = root / "stock"
             dates_path, ticks_path = axis_reset.init_axis(
                 root, date_reserve=3, tick_reserve=3
             )
@@ -34,27 +35,27 @@ class AxisFlowTest(unittest.TestCase):
 
             shape = (3, 3)
             flag = ensure_memmap(
-                root / "basic" / "flag.bin",
+                stock_root / "basic" / "flag.bin",
                 shape,
                 dtype=np.bool_,
             )
             value32 = ensure_memmap(
-                root / "d_essentials" / "close.bin",
+                stock_root / "d_essentials" / "close.bin",
                 shape,
                 dtype=np.float32,
             )
             value64 = ensure_memmap(
-                root / "barra" / "beta.bin",
+                stock_root / "barra" / "beta.bin",
                 shape,
                 dtype=np.float64,
             )
             minute = ensure_memmap(
-                root / "m_essentials" / "close.bin",
+                stock_root / "m_essentials" / "close.bin",
                 (3, 241, 3),
                 dtype=np.float32,
             )
             forecast = ensure_memmap(
-                root / "zyyx" / "con_forecast" / "eps.bin",
+                stock_root / "zyyx" / "con_forecast" / "eps.bin",
                 (3, 4, 3),
                 dtype=np.float64,
             )
@@ -67,7 +68,7 @@ class AxisFlowTest(unittest.TestCase):
                 array.flush()
             del array, flag, value32, value64, minute, forecast
 
-            l2_file = root / "l2" / "proc" / "raw.bin"
+            l2_file = stock_root / "l2" / "proc" / "raw.bin"
             l2_file.parent.mkdir(parents=True)
             l2_file.write_bytes(b"not-a-matrix")
 
@@ -81,7 +82,7 @@ class AxisFlowTest(unittest.TestCase):
                 ),
             )
             value32 = np.memmap(
-                root / "d_essentials" / "close.bin",
+                stock_root / "d_essentials" / "close.bin",
                 dtype=np.float32,
                 mode="r",
                 shape=shape,
@@ -120,16 +121,16 @@ class AxisFlowTest(unittest.TestCase):
 
             new_dates, new_ticks = len(np.load(dates_path)), len(stock_ticks)
             self.assertEqual(
-                (root / "basic" / "flag.bin").stat().st_size,
+                (stock_root / "basic" / "flag.bin").stat().st_size,
                 new_dates * new_ticks,
             )
             self.assertEqual(
-                (root / "m_essentials" / "close.bin").stat().st_size,
+                (stock_root / "m_essentials" / "close.bin").stat().st_size,
                 new_dates * 241 * new_ticks * 4,
             )
             self.assertEqual(
                 (
-                    root / "zyyx" / "con_forecast" / "eps.bin"
+                    stock_root / "zyyx" / "con_forecast" / "eps.bin"
                 ).stat().st_size,
                 new_dates * 4 * new_ticks * 8,
             )
