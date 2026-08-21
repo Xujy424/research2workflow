@@ -160,7 +160,8 @@ def _write_daily_mask(date, dates, ticks, root, name, values):
     n_valid = np.count_nonzero(ticks != "")
     path = root / "industry" / f"{name}.bin"
     arr = _ensure_memmap(path, (len(dates), len(ticks)))
-    arr[dt,:n_valid] = values
+    arr[dt] = np.nan
+    arr[dt, :n_valid] = values
     arr.flush()
 
 
