@@ -13,12 +13,14 @@ if __package__:
     from .alphabase import AlphaBase, AlphaContext, AlphaMeta
     from ..GetData import DataPool
     from ..UpdateData.config import ROOT, get_zyyx_conn
+    from ..ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT, get_zyyx_conn
+    from v2.ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
 
 
 def _date(value):
@@ -146,13 +148,10 @@ class AFRContext(AlphaContext):
         if self._owns_conn:
             self.conn.close()
 
-    def reports(self, asof):
+    def reports(self, asof, start):
         asof = _date(asof)
         if asof in self._cache:
             return self._cache[asof]
-        start = asof - pd.Timedelta(
-            days=self.config.volatility_days + self.config.max_history_days
-        )
         sql = f"""
         SELECT
             f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
@@ -161,33 +160,19 @@ class AFRContext(AlphaContext):
         FROM rpt_forecast_stk f
         JOIN rpt_report_author ra ON ra.report_id = f.report_id
         WHERE f.create_date BETWEEN '{start}' AND '{asof}'
-            AND f.entrytime <= '{asof} 23:59:59'
-            AND f.create_date <= f.entrytime
             AND f.report_quarter = 4
             AND f.report_year = YEAR(f.create_date) + 1
             AND f.forecast_np IS NOT NULL
-            AND f.organ_id IS NOT NULL
-            AND ra.author_id IS NOT NULL
             AND (f.reliability >= 5 OR f.reliability IS NULL)
         """
         frame = (
             pl.read_database(sql, self.conn, infer_schema_length=None)
             .with_columns(
                 pl.col("stock_code").cast(pl.String).str.zfill(6).alias("tick"),
-                pl.col("organ_id").cast(pl.Int64, strict=False),
-                pl.col("author_id").cast(pl.Int64, strict=False),
-                pl.col("create_date").cast(pl.Datetime, strict=False).dt.date(),
-                pl.col("entrytime").cast(pl.Datetime, strict=False),
-                *[
-                    pl.col(c).cast(pl.Float64, strict=False)
-                    for c in (
-                        "forecast_np", "target_price_ceiling","target_price_floor", "current_price",
-                    )
-                ],
+                pl.col("create_date").str.strptime(pl.Datetime("us"), format="%Y-%m-%d").alias("create_date")
             )
             .sort([
-                "tick", "author_id", "report_year",
-                "create_date", "entrytime", "id",
+                "tick", "author_id", "report_year", "create_date", "entrytime", "id",
             ])
             .unique(
                 ["report_id", "tick", "organ_id", "author_id", "report_year"],
@@ -241,8 +226,9 @@ class AFRFactor(AlphaBase):
 
     def event_values(self, asof):
         cfg = self.context.config
+        start_date = asof - pd.Timedelta(days=cfg.max_history_days)
         keys = ["tick", "author_id", "report_year"]
-        events = self.context.reports(asof).with_columns(
+        events = self.context.reports(asof, start_date).with_columns(
             pl.col("forecast_np").shift().over(keys).alias("prior_np"),
             pl.col("create_date").shift().over(keys).alias("prior_date"),
         ).with_columns(
@@ -430,6 +416,36 @@ __all__ = [
 if __name__ == "__main__":
     # for name, frame in calculate_afr_family(date.today()).items():
     #     print(name, frame.shape)
+
+    from tqdm import tqdm
+    import matplotlib.pyplot as plt
     
     afr = AFRFactor(AFRContext())
-    afr.calclate()
+
+    # preds = []
+    dates = afr.context.data['trade_dates']   # 2010-01-04 to 
+    # for date in tqdm(dates):
+    #     value = afr.update(date)
+    #     preds.append(value)
+    # pred = np.stack(preds,axis=0)
+    pred = afr.context.data.load("factor_pool/afr").copy()
+    mask = np.all(np.isnan(pred), axis=1)
+    pred = pred[~mask]
+
+    close_adj = afr.context.data.read("d_essentials/close_adj",end_date=pred.shape[0]-1, start_date=0).copy()
+    pct1 = close_adj[2:]/close_adj[1:-1] - 1
+    pct5 = close_adj[6:]/close_adj[1:-5] - 1
+    pct10 = close_adj[11:]/close_adj[1:-10] - 1
+    pct20 = close_adj[21:]/close_adj[1:-20] - 1
+
+    for i, val in enumerate([pct1,pct5,pct10,pct20]):
+        pct = np.full(pred.shape, np.nan)
+        pct[:val.shape[0], :val.shape[1]] = val
+        ic = IC(pred, pct)
+        rankic = rankIC(pred, pct)
+        group_ret = calc_group_ret(pred, pct, 10)
+        group_ret = np.cumsum(group_ret,axis=1)
+        plt.figure()
+        plt.plot(group_ret.T)
+        plt.savefig(f'afr_group_ret{i}')
+    print(pred)

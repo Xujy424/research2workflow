@@ -60,11 +60,11 @@ class AlphaBase(ABC):
             f"valid/full tick axes {axis.tick_count}/{len(axis.full_ticks)}"
         )
 
-    def output_path(self, folder="alpha") -> Path:
+    def output_path(self, folder="factor_pool") -> Path:
         data = self.context.data
         return data.root / data.asset / folder / f"{self.meta.name}.bin"
 
-    def update(self, asof, folder="alpha") -> np.ndarray:
+    def update(self, asof, folder="factor_pool") -> np.ndarray:
         """Calculate and write the cross-section to its axis date row."""
         axis = self.context.data.axis
         row = axis.date_position(asof)

@@ -46,11 +46,11 @@ def calc_group_ret(alpha, label, num_group=10):
         group_ret[i] = np.nanmean(temp_ret, axis=-1)
     group_ret = group_ret - np.nanmean(group_ret, axis=0)
     col_list = list(range(1, num_group + 1))[::-1]
-    group_ret = pd.DataFrame(
-        group_ret.T,
-        columns=col_list,
-        index=alpha.index,
-    )
+    # group_ret = pd.DataFrame(
+    #     group_ret.T,
+    #     columns=col_list,
+    #     index=alpha.index,
+    # )
     return group_ret
 
 # 中文说明：`calc_annret`：计算研究或生产指标。
