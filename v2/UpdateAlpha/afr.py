@@ -429,8 +429,7 @@ if __name__ == "__main__":
     #     preds.append(value)
     # pred = np.stack(preds,axis=0)
     pred = afr.context.data.load("factor_pool/afr").copy()
-    mask = np.all(np.isnan(pred), axis=1)
-    pred = pred[~mask]
+    pred = pred[:afr.context.data.axis.date_count,:afr.context.data.axis.tick_count]
 
     close_adj = afr.context.data.read("d_essentials/close_adj",end_date=pred.shape[0]-1, start_date=0).copy()
     pct1 = close_adj[2:]/close_adj[1:-1] - 1

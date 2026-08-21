@@ -37,20 +37,24 @@ def update_adjfactor(date, ticks, conn):
             A.AdjustingFactor AS scaler,
             A.AdjustingConst AS const,
             A.RatioAdjustingFactor AS ratio_scaler,
-            ROW_NUMBER() OVER(PARTITION BY B.SecuCode ORDER BY A.ExDiviDate DESC) AS rn
+            ROW_NUMBER() OVER(PARTITION BY A.InnerCode ORDER BY A.ExDiviDate DESC) AS rn
         FROM QT_AdjustingFactor A
         LEFT JOIN SecuMain B ON A.InnerCode = B.InnerCode
         WHERE A.ExDiviDate <= '{date}'
+          AND B.SecuMarket IN (83,90)
+          AND B.SecuCategory = 1
         UNION ALL
         SELECT 
             B.SecuCode AS tick,
             C.AdjustingFactor AS scaler,
             C.AdjustingConst AS const,
             C.RatioAdjustingFactor AS ratio_scaler,
-            ROW_NUMBER() OVER(PARTITION BY B.SecuCode ORDER BY C.ExDiviDate DESC) AS rn
+            ROW_NUMBER() OVER(PARTITION BY C.InnerCode ORDER BY C.ExDiviDate DESC) AS rn
         FROM LC_STIBAdjustingFactor C
         LEFT JOIN SecuMain B ON C.InnerCode = B.InnerCode
         WHERE C.ExDiviDate <= '{date}'
+          AND B.SecuMarket IN (83,90)
+          AND B.SecuCategory = 1
     )
     SELECT tick, scaler, const, ratio_scaler FROM ranked WHERE rn = 1
     """
