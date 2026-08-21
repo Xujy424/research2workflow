@@ -142,11 +142,11 @@ def update_data(
             update_d_essentials,
             date, dates, stock_ticks, jy_conn, stock_root,
         )
-        _run_step(
-            "minute essentials",
-            update_m_essentials,
-            date, dates, stock_ticks, str_conn, stock_root,
-        )
+        # _run_step(
+        #     "minute essentials",
+        #     update_m_essentials,
+        #     date, dates, stock_ticks, str_conn, stock_root,
+        # )
         _run_step(
             "basic and tradable",
             lambda: (
