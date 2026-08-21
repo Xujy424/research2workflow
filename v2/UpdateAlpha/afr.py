@@ -28,14 +28,22 @@ def _date(value):
 
 
 def _residual(y, x):
-    y, x = np.asarray(y, float), np.asarray(x, float)
+    """Return OLS residuals for one or more regressors without inversion."""
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    if x.ndim == 1:
+        x = x[:, None]
+    if x.ndim != 2 or len(x) != len(y):
+        raise ValueError("x must have shape (n_samples, n_regressors)")
+
     out = np.full(y.shape, np.nan)
-    ok = np.isfinite(y) & np.isfinite(x)
-    if ok.sum() < 3:
+    ok = np.isfinite(y) & np.all(np.isfinite(x), axis=1)
+    if ok.sum() <= x.shape[1] + 1:
         out[ok] = y[ok]
         return out
-    design = np.c_[np.ones(ok.sum()), x[ok]]
-    out[ok] = y[ok] - design @ np.linalg.lstsq(design, y[ok], rcond=None)[0]
+    design = np.column_stack((np.ones(ok.sum()), x[ok]))
+    coefficients = np.linalg.lstsq(design, y[ok], rcond=None)[0]
+    out[ok] = y[ok] - design @ coefficients
     return out
 
 
@@ -117,6 +125,8 @@ def _aggregate(frame, value, weights=None, alias="value"):
     if weights is None:
         return _equal_weight(frame, value, alias)
     return _analyst_weight(frame, value, weights, alias)
+
+
 
 @dataclass(frozen=True)
 class AFRConfig:
@@ -214,6 +224,44 @@ class AFRContext(AlphaContext):
     def price(self, dates, ticks):
         return self.field_values(self.config.close_field, dates, ticks)
 
+    def market_price(self, dates):
+        """Return the all-stock market-cap-weighted price for each date."""
+        axes = self.data.axis
+        requested = np.asarray(dates, dtype="datetime64[D]")
+        rows = np.searchsorted(
+            axes.trade_dates, requested, side="right",
+        ) - 1
+        result = np.full(len(rows), np.nan)
+        close = self.data.load(self.config.close_field)
+        market_value = self.data.load(self.config.market_value_field)
+
+        valid_rows = (rows >= 0) & (rows < axes.date_count)
+        unique_rows, inverse = np.unique(
+            rows[valid_rows], return_inverse=True
+        )
+        prices = close[unique_rows]
+        weights = market_value[unique_rows]
+        valid = (
+            np.isfinite(prices)
+            & np.isfinite(weights)
+            & (prices > 0)
+            & (weights > 0)
+        )
+        numerator = np.sum(
+            np.where(valid, prices * weights, 0.0), axis=1, dtype=np.float64
+        )
+        denominator = np.sum(
+            np.where(valid, weights, 0.0), axis=1, dtype=np.float64
+        )
+        weighted_price = np.divide(
+            numerator,
+            denominator,
+            out=np.full(len(unique_rows), np.nan),
+            where=denominator > 0,
+        )
+        result[valid_rows] = weighted_price[inverse]
+        return result
+
     def industry(self, asof, ticks):
         return np.asarray(
             self.data.read(self.config.industry_field, asof, ticks=ticks), float
@@ -259,26 +307,22 @@ class PAFRFactor(AFRFactor):
     )
 
     def excess_momentum(self, starts, ends, ticks):
-        values = np.log(
+        stock_momentum = np.log(
             self.context.price(ends, ticks)
             / self.context.price(starts, ticks)
         )
-        weights = self.context.field_values(
-            self.context.config.market_value_field, ends, ticks
+        market_momentum = np.log(
+            self.context.market_price(ends)
+            / self.context.market_price(starts)
         )
-        valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
-        benchmark = (
-            np.average(values[valid], weights=weights[valid])
-            if valid.any()
-            else np.nan
-        )
-        return values - benchmark
+        return stock_momentum - market_momentum
 
     def calculate(self, asof):
         asof = _date(asof)
         events = self.event_values(asof)
         if events.is_empty():
             return self.context.empty()
+        
         ticks = events["tick"].to_list()
         between = self.excess_momentum(
             events["prior_date"], events["create_date"], ticks
@@ -287,19 +331,15 @@ class PAFRFactor(AFRFactor):
             events["create_date"], [asof] * len(events), ticks
         )
         events = events.with_columns(
-            pl.Series("raw", _residual(events["afr_event"], between)),
+            pl.Series("between", between),
             pl.Series("post", post),
         )
-        stock = _aggregate(
-            events, "raw", self.context.analyst_weights, "raw",
-        ).join(
-            _aggregate(
-                events, "post", self.context.analyst_weights, "post",
-            ),
-            on="tick",
+        momentum = events.select("between", "post").to_numpy()
+        events = events.with_columns(
+            pl.Series("pafr_event", _residual(events["afr_event"], momentum))
         )
-        stock = stock.with_columns(
-            pl.Series("value", _residual(stock["raw"], stock["post"]))
+        stock = _aggregate(
+            events, "pafr_event", self.context.analyst_weights,
         )
         return self.context.align(stock)
 
@@ -414,37 +454,76 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    # for name, frame in calculate_afr_family(date.today()).items():
-    #     print(name, frame.shape)
-
     from tqdm import tqdm
     import matplotlib.pyplot as plt
-    
-    afr = AFRFactor(AFRContext())
+    import matplotlib.dates as mdates
 
-    # preds = []
-    dates = afr.context.data['trade_dates']   # 2010-01-04 to 
-    # for date in tqdm(dates):
-    #     value = afr.update(date)
-    #     preds.append(value)
-    # pred = np.stack(preds,axis=0)
-    pred = afr.context.data.load("factor_pool/afr").copy()
-    pred = pred[:afr.context.data.axis.date_count,:afr.context.data.axis.tick_count]
+    with AFRContext() as context:
+        pafr = PAFRFactor(context)
+        trade_dates = context.data["trade_dates"]
 
-    close_adj = afr.context.data.read("d_essentials/close_adj",end_date=pred.shape[0]-1, start_date=0).copy()
-    pct1 = close_adj[2:]/close_adj[1:-1] - 1
-    pct5 = close_adj[6:]/close_adj[1:-5] - 1
-    pct10 = close_adj[11:]/close_adj[1:-10] - 1
-    pct20 = close_adj[21:]/close_adj[1:-20] - 1
+        for trade_date in tqdm(trade_dates, desc="Updating PAFR"):
+            pafr.update(trade_date)
 
-    for i, val in enumerate([pct1,pct5,pct10,pct20]):
-        pct = np.full(pred.shape, np.nan)
-        pct[:val.shape[0], :val.shape[1]] = val
-        ic = IC(pred, pct)
-        rankic = rankIC(pred, pct)
-        group_ret = calc_group_ret(pred, pct, 10)
-        group_ret = np.cumsum(group_ret,axis=1)
-        plt.figure()
-        plt.plot(group_ret.T)
-        plt.savefig(f'afr_group_ret{i}')
-    print(pred)
+        pred = context.data.load("factor_pool/pafr").copy()
+        pred = pred[
+            :context.data.axis.date_count,
+            :context.data.axis.tick_count,
+        ]
+        close_adj = context.data.read(
+            "d_essentials/close_adj",
+            start_date=0,
+            end_date=pred.shape[0] - 1,
+        )
+
+        horizons = (1, 5, 10, 20)
+        fig, axes = plt.subplots(2, 2, figsize=(16, 10), sharex=True)
+        colors = plt.cm.tab10(np.linspace(0, 1, 10))
+
+        for ax, horizon in zip(axes.flat, horizons):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                forward_return = (
+                    close_adj[1 + horizon:] / close_adj[1:-horizon] - 1
+                )
+
+            label = np.full(pred.shape, np.nan)
+            label[:len(forward_return)] = forward_return
+            ic = IC(pred, label)
+            rank_ic = rankIC(pred, label)
+            group_return = calc_group_ret(pred, label, 10)
+            cumulative_return = np.nancumsum(group_return, axis=1)
+
+            for group, values in enumerate(cumulative_return, start=1):
+                suffix = " (Low)" if group == 1 else " (High)" if group == 10 else ""
+                ax.plot(
+                    trade_dates[:len(values)],
+                    values,
+                    color=colors[group - 1],
+                    linewidth=1.2,
+                    label=f"Group {group}{suffix}",
+                )
+
+            mean_ic = np.nanmean(ic)
+            mean_rank_ic = np.nanmean(rank_ic)
+            ax.set_title(
+                f"PAFR {horizon}D Forward Return | "
+                f"Mean IC={mean_ic:.4f}, Mean RankIC={mean_rank_ic:.4f}"
+            )
+            ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
+            ax.grid(alpha=0.25)
+            ax.legend(ncol=2, fontsize=8)
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(
+                ax.xaxis.get_major_locator()
+            ))
+
+        fig.suptitle("PAFR Decile Cumulative Excess Returns", fontsize=15)
+        fig.supxlabel("Trade Date")
+        fig.supylabel("Cumulative Group Excess Return")
+        fig.tight_layout()
+
+        output = Path(__file__).resolve().parent / "output" / "pafr_group_returns.png"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        print(f"saved: {output}")
