@@ -214,9 +214,17 @@ class AFRContext(AlphaContext):
             np.asarray(dates, dtype="datetime64[D]"),
             side="right",
         ) - 1
-        cols = axes.tick_positions(ticks)
+        normalized_ticks = [str(tick).strip().zfill(6) for tick in ticks]
+        cols = np.asarray(
+            [axes._tick_positions.get(tick, -1) for tick in normalized_ticks],
+            dtype=np.int64,
+        )
         values = np.full(len(rows), np.nan)
-        valid = (rows >= 0) & (rows < axes.date_count)
+        valid = (
+            (rows >= 0)
+            & (rows < axes.date_count)
+            & (cols >= 0)
+        )
         matrix = self.data.load(field)
         values[valid] = matrix[rows[valid], cols[valid]]
         return values
