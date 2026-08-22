@@ -393,20 +393,25 @@ class ExpectedInertiaFactor(AlphaBase):
 
 
 class ExpectedVolatilityFactor(ExpectedInertiaFactor):
-    meta = AlphaMeta("expected_volatility", "Industry and time-series expected vol")
-    dependencies = ("rpt_forecast_stk", "industry/industry")
+    meta = AlphaMeta(
+        "expected_volatility",
+        "Analyst disagreement and time-series expected volatility",
+    )
+    dependencies = ("rpt_forecast_stk",)
 
     def calculate(self, asof):
         asof = _date(asof)
         cfg = self.context.config
-        events = self.event_values(asof, cfg.volatility_days)   # 365天的窗口
-
-        recent = events.filter(      # 90天分析师数量窗口取最新
+        events = self.event_values(asof, cfg.volatility_days)
+        recent = events.filter(
             pl.col("create_date") >= asof - pd.Timedelta(days=cfg.lookback_days)
         )
-        if recent.is_empty(): return self.context.empty()
-        current = _aggregate(
-            recent, "inertia_event", self.context.analyst_weights, "inertia",
+        if recent.is_empty():
+            return self.context.empty()
+
+        latest = _analyst_values(recent, "inertia_event")
+        tick_vol = latest.group_by("tick").agg(
+            pl.col("inertia_event").std(ddof=1).alias("tick_vol")
         )
 
         analyst_vol = events.group_by(
@@ -415,18 +420,31 @@ class ExpectedVolatilityFactor(ExpectedInertiaFactor):
             pl.col("inertia_event").std(ddof=1).alias("time_vol")
         )
         time_vol = _aggregate(
-            analyst_vol, "time_vol", self.context.analyst_weights, "time_vol"
+            analyst_vol,
+            "time_vol",
+            self.context.analyst_weights,
+            "time_vol",
         )
 
-        frame = current.join(time_vol, on="tick", how="left").with_columns(
-            pl.Series("industry", self.context.industry(asof, current["tick"]))
-        ).with_columns(
-            pl.col("inertia").std(ddof=1).over("industry").alias("industry_vol")
-        )  # current已经是截面最新
-
-        # Buy industry disagreement, penalise unstable stock histories.
-        value = (_zscore(frame["industry_vol"]) - _zscore(frame["time_vol"])) / 2
+        frame = tick_vol.join(time_vol, on="tick", how="inner")
+        value = (
+            -_zscore(frame["tick_vol"]) - _zscore(frame["time_vol"])
+        ) / 2
         frame = frame.with_columns(pl.Series("value", value))
+
+        # Report-style industry-dispersion alternative retained for reference:
+        # current = _aggregate(
+        #     recent, "inertia_event", self.context.analyst_weights, "inertia",
+        # )
+        # frame = current.join(time_vol, on="tick", how="left").with_columns(
+        #     pl.Series("industry", self.context.industry(asof, current["tick"]))
+        # ).with_columns(
+        #     pl.col("inertia").std(ddof=1).over("industry").alias("industry_vol")
+        # )
+        # value = (
+        #     _zscore(frame["industry_vol"]) - _zscore(frame["time_vol"])
+        # ) / 2
+
         return self.context.align(frame)
 
 
