@@ -58,7 +58,6 @@ def _zscore(x):
 
 
 
-
 def _analyst_values(frame, value):
     """Keep each analyst's latest valid observation for every stock."""
     keys = ["tick", "author_id"]
@@ -360,16 +359,13 @@ class ExpectedInertiaFactor(AlphaBase):
         cfg = self.context.config
         keys = ["tick", "author_id", "report_year"]
         events = self.context.reports(asof).with_columns(
-            pl.mean_horizontal(
-                "target_price_ceiling", "target_price_floor"
-            ).alias("target_mid")
+            pl.mean_horizontal("target_price_ceiling", "target_price_floor").alias("target_mid")
         ).with_columns(
             pl.col("forecast_np").shift().over(keys).alias("prior_np"),
             pl.col("target_mid").shift().over(keys).alias("prior_target"),
             pl.col("create_date").shift().over(keys).alias("prior_date"),
         ).with_columns(
-            (pl.col("create_date") - pl.col("prior_date"))
-            .dt.total_days().alias("gap_days"),
+            (pl.col("create_date") - pl.col("prior_date")).dt.total_days().alias("gap_days"),
             (
                 (pl.col("target_mid") / pl.col("prior_target")).log()
                 - (pl.col("forecast_np") / pl.col("prior_np")).log()
@@ -380,8 +376,7 @@ class ExpectedInertiaFactor(AlphaBase):
             pl.col("prior_date").is_not_null()
             & pl.col("gap_days").is_between(1, cfg.max_history_days)
             & (
-                pl.col("create_date")
-                >= _date(asof) - pd.Timedelta(days=days)
+                pl.col("create_date")>= _date(asof) - pd.Timedelta(days=days)
             )
             & pl.col("inertia_event").is_finite()
         )
@@ -389,8 +384,7 @@ class ExpectedInertiaFactor(AlphaBase):
     def calculate(self, asof):
         cfg = self.context.config
         events = self.event_values(asof).filter(
-            pl.col("organ_id").n_unique().over("tick")
-            >= cfg.min_institutions
+            pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions
         )
         frame = _aggregate(
             events, "inertia_event", self.context.analyst_weights,
@@ -405,15 +399,16 @@ class ExpectedVolatilityFactor(ExpectedInertiaFactor):
     def calculate(self, asof):
         asof = _date(asof)
         cfg = self.context.config
-        events = self.event_values(asof, cfg.volatility_days)
-        recent = events.filter(
+        events = self.event_values(asof, cfg.volatility_days)   # 365天的窗口
+
+        recent = events.filter(      # 90天分析师数量窗口取最新
             pl.col("create_date") >= asof - pd.Timedelta(days=cfg.lookback_days)
         )
-        if recent.is_empty():
-            return self.context.empty()
+        if recent.is_empty(): return self.context.empty()
         current = _aggregate(
             recent, "inertia_event", self.context.analyst_weights, "inertia",
         )
+
         analyst_vol = events.group_by(
             ["tick", "organ_id", "author_id"]
         ).agg(
@@ -422,11 +417,13 @@ class ExpectedVolatilityFactor(ExpectedInertiaFactor):
         time_vol = _aggregate(
             analyst_vol, "time_vol", self.context.analyst_weights, "time_vol"
         )
+
         frame = current.join(time_vol, on="tick", how="left").with_columns(
             pl.Series("industry", self.context.industry(asof, current["tick"]))
         ).with_columns(
             pl.col("inertia").std(ddof=1).over("industry").alias("industry_vol")
-        )
+        )  # current已经是截面最新
+
         # Buy industry disagreement, penalise unstable stock histories.
         value = (_zscore(frame["industry_vol"]) - _zscore(frame["time_vol"])) / 2
         frame = frame.with_columns(pl.Series("value", value))
