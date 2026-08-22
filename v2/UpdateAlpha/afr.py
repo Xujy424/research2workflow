@@ -358,7 +358,8 @@ class ExpectedInertiaFactor(AlphaBase):
     def event_values(self, asof, lookback_days=None):
         cfg = self.context.config
         keys = ["tick", "author_id", "report_year"]
-        events = self.context.reports(asof).with_columns(
+        start_date = asof - pd.Timedelta(days=cfg.volatility_days)
+        events = self.context.reports(asof, start_date).with_columns(
             pl.mean_horizontal("target_price_ceiling", "target_price_floor").alias("target_mid")
         ).with_columns(
             pl.col("forecast_np").shift().over(keys).alias("prior_np"),
