@@ -467,13 +467,13 @@ if __name__ == "__main__":
     import matplotlib.dates as mdates
 
     with AFRContext() as context:
-        pafr = PAFRFactor(context)
+        afr = AFRFactor(context)
         trade_dates = context.data["trade_dates"]
 
-        for trade_date in tqdm(trade_dates, desc="Updating PAFR"):
-            pafr.update(trade_date)
+        for trade_date in tqdm(trade_dates, desc="Updating AFR"):
+            afr.update(trade_date)
 
-        pred = context.data.load("factor_pool/pafr").copy()
+        pred = context.data.load("factor_pool/afr").copy()
         pred = pred[
             :context.data.axis.date_count,
             :context.data.axis.tick_count,
@@ -514,7 +514,7 @@ if __name__ == "__main__":
             mean_ic = np.nanmean(ic)
             mean_rank_ic = np.nanmean(rank_ic)
             ax.set_title(
-                f"PAFR {horizon}D Forward Return | "
+                f"AFR {horizon}D Forward Return | "
                 f"Mean IC={mean_ic:.4f}, Mean RankIC={mean_rank_ic:.4f}"
             )
             ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
@@ -525,12 +525,12 @@ if __name__ == "__main__":
                 ax.xaxis.get_major_locator()
             ))
 
-        fig.suptitle("PAFR Decile Cumulative Excess Returns", fontsize=15)
+        fig.suptitle("AFR Decile Cumulative Excess Returns", fontsize=15)
         fig.supxlabel("Trade Date")
         fig.supylabel("Cumulative Group Excess Return")
         fig.tight_layout()
 
-        output = Path(__file__).resolve().parent / "output" / "pafr_group_returns.png"
+        output = Path(__file__).resolve().parent / "output" / "afr_group_returns.png"
         output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=160, bbox_inches="tight")
         plt.close(fig)
