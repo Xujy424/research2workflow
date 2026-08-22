@@ -15,7 +15,7 @@ if __package__:
     from ...UpdateData.config import ROOT, get_zyyx_conn
     from ...ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
 else:
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
     from v2.GetData import DataPool
