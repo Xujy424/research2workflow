@@ -10,10 +10,10 @@ import pandas as pd
 import polars as pl
 
 if __package__:
-    from .alphabase import AlphaBase, AlphaContext, AlphaMeta
-    from ..GetData import DataPool
-    from ..UpdateData.config import ROOT, get_zyyx_conn
-    from ..ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
+    from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ...GetData import DataPool
+    from ...UpdateData.config import ROOT, get_zyyx_conn
+    from ...ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -58,24 +58,9 @@ def _zscore(x):
 
 
 
-def _analyst_values(frame, value):
-    """Keep each analyst's latest valid observation for every stock."""
-    keys = ["tick", "author_id"]
-    order = [
-        column
-        for column in [*keys, "create_date", "entrytime", "id"]
-        if column in frame.columns
-    ]
-    return (
-        frame.filter(pl.col(value).is_finite())
-        .sort(order)
-        .unique(keys, keep="last", maintain_order=True)
-    )
 
-
-def _equal_weight(frame, value, alias="value"):
+def _equal_weight(authors, value, alias="value"):
     """Use analysts' latest values, then equal-weight analysts and institutions."""
-    authors = _analyst_values(frame, value)
     return (
         authors.group_by(["tick", "organ_id"])
         .agg(pl.col(value).mean().alias(value))
@@ -84,7 +69,7 @@ def _equal_weight(frame, value, alias="value"):
     )
 
 
-def _analyst_weight(frame, value, weights, alias="value"):
+def _analyst_weight(authors, value, weights, alias="value"):
     """Use latest values, weight analysts, then equal-weight institutions."""
     if not isinstance(weights, pl.DataFrame):
         weights = pl.from_pandas(weights)
@@ -97,7 +82,7 @@ def _analyst_weight(frame, value, weights, alias="value"):
         pl.col("author_id").cast(pl.Int64, strict=False),
         pl.col("weight").cast(pl.Float64, strict=False),
     ).unique("author_id", keep="last")
-    authors = _analyst_values(frame, value).join(
+    authors = authors.join(
         weights, on="author_id", how="left"
     ).with_columns(
         pl.when(pl.col("weight").is_finite() & (pl.col("weight") > 0))
@@ -120,10 +105,13 @@ def _analyst_weight(frame, value, weights, alias="value"):
     )
 
 
-def _aggregate(frame, value, weights=None, alias="value"):
-    if weights is None:
-        return _equal_weight(frame, value, alias)
-    return _analyst_weight(frame, value, weights, alias)
+def _aggregate(context, frame, value, alias="value"):
+    authors = context.analyst_values(frame, value)
+    if context.analyst_weights is None:
+        return _equal_weight(authors, value, alias)
+    return _analyst_weight(
+        authors, value, context.analyst_weights, alias
+    )
 
 
 
@@ -152,11 +140,21 @@ class AFRContext(AlphaContext):
         super().__init__(DataPool(root, asset="stock"))
         self._cache = {}
 
-    def close(self):
-        super().close()
-        if self._owns_conn:
-            self.conn.close()
 
+    @staticmethod
+    def analyst_values(frame, value):
+        """Keep each analyst's latest valid observation for every stock."""
+        keys = ["tick", "author_id"]
+        order = [
+            column
+            for column in [*keys, "create_date", "entrytime", "id"]
+            if column in frame.columns
+        ]
+        return (
+            frame.filter(pl.col(value).is_finite())
+            .sort(order)
+            .unique(keys, keep="last", maintain_order=True)
+        )
     def reports(self, asof, start):
         asof = _date(asof)
         if asof in self._cache:
@@ -170,7 +168,7 @@ class AFRContext(AlphaContext):
         JOIN rpt_report_author ra ON ra.report_id = f.report_id
         WHERE f.create_date BETWEEN '{start}' AND '{asof}'
             AND f.report_quarter = 4
-            AND f.report_year = YEAR(f.create_date) + 1
+            AND f.report_year = YEAR(f.create_date)
             AND f.forecast_np IS NOT NULL
             AND (f.reliability >= 5 OR f.reliability IS NULL)
         """
@@ -190,17 +188,6 @@ class AFRContext(AlphaContext):
         )
         self._cache[asof] = frame
         return frame
-
-    def align(self, frame, value="value"):
-        """Align a Polars tick/value cross-section to valid local ticks."""
-        axis = self.data.axis
-        out = np.full(axis.tick_count, np.nan, dtype=np.float32)
-        positions = {str(tick): i for i, tick in enumerate(axis.ticks)}
-        for tick, item in frame.select("tick", value).iter_rows():
-            position = positions.get(str(tick).zfill(6))
-            if position is not None and item is not None:
-                out[position] = item
-        return out
 
     def empty(self):
         return np.full(self.data.axis.tick_count, np.nan, dtype=np.float32)
@@ -300,7 +287,7 @@ class AFRFactor(AlphaBase):
     def calculate(self, asof):
         asof = _date(asof)
         frame = _aggregate(
-            self.event_values(asof), "afr_event", self.context.analyst_weights,
+            self.context, self.event_values(asof), "afr_event",
         )
         return self.context.align(frame)
 
@@ -346,7 +333,7 @@ class PAFRFactor(AFRFactor):
             pl.Series("pafr_event", _residual(events["afr_event"], momentum))
         )
         stock = _aggregate(
-            events, "pafr_event", self.context.analyst_weights,
+            self.context, events, "pafr_event",
         )
         return self.context.align(stock)
 
@@ -388,7 +375,7 @@ class ExpectedInertiaFactor(AlphaBase):
             pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions
         )
         frame = _aggregate(
-            events, "inertia_event", self.context.analyst_weights,
+            self.context, events, "inertia_event",
         )
         return self.context.align(frame)
 
@@ -410,7 +397,7 @@ class ExpectedVolatilityFactor(ExpectedInertiaFactor):
         if recent.is_empty():
             return self.context.empty()
 
-        latest = _analyst_values(recent, "inertia_event")
+        latest = self.context.analyst_values(recent, "inertia_event")
         tick_vol = latest.group_by("tick").agg(
             pl.col("inertia_event").std(ddof=1).alias("tick_vol")
         )
@@ -421,10 +408,7 @@ class ExpectedVolatilityFactor(ExpectedInertiaFactor):
             pl.col("inertia_event").std(ddof=1).alias("time_vol")
         )
         time_vol = _aggregate(
-            analyst_vol,
-            "time_vol",
-            self.context.analyst_weights,
-            "time_vol",
+            self.context, analyst_vol, "time_vol", "time_vol",
         )
 
         frame = tick_vol.join(time_vol, on="tick", how="inner")
@@ -435,7 +419,7 @@ class ExpectedVolatilityFactor(ExpectedInertiaFactor):
 
         # Report-style industry-dispersion alternative retained for reference:
         # current = _aggregate(
-        #     recent, "inertia_event", self.context.analyst_weights, "inertia",
+        #     self.context, recent, "inertia_event", "inertia",
         # )
         # frame = current.join(time_vol, on="tick", how="left").with_columns(
         #     pl.Series("industry", self.context.industry(asof, current["tick"]))
@@ -483,32 +467,41 @@ if __name__ == "__main__":
     import matplotlib.dates as mdates
 
     with AFRContext() as context:
-        ev = ExpectedVolatilityFactor(context)
+        pafr = PAFRFactor(context)
         trade_dates = context.data["trade_dates"]
 
-        for trade_date in tqdm(trade_dates, desc="Updating AFR"):
-            ev.update(trade_date)
+        for trade_date in tqdm(trade_dates, desc="Updating PAFR"):
+            pafr.update(trade_date)
 
-        pred = context.data.load("factor_pool/ev").copy()
+        pred = context.data.load("factor_pool/pafr").copy()
         pred = pred[
             :context.data.axis.date_count,
             :context.data.axis.tick_count,
         ]
-        close_adj = context.data.read(
-            "d_essentials/close_adj",
+        daily_return = context.data.read(
+            "d_essentials/pct",
+            start_date=0,
+            end_date=pred.shape[0] - 1,
+        ) / 100.0
+
+        tradable = context.data.read(
+            "basic/tradable",
             start_date=0,
             end_date=pred.shape[0] - 1,
         )
+        pred = np.where(tradable, pred, np.nan)
 
         horizons = (1, 5, 10, 20)
         fig, axes = plt.subplots(2, 2, figsize=(16, 10), sharex=True)
         colors = plt.cm.tab10(np.linspace(0, 1, 10))
 
         for ax, horizon in zip(axes.flat, horizons):
-            with np.errstate(divide="ignore", invalid="ignore"):
-                forward_return = (
-                    close_adj[1 + horizon:] / close_adj[1:-horizon] - 1
-                )
+            # pct[t] is the return from t - 1 to t. For a signal formed on
+            # t, skip t + 1 and compound t + 2 ... t + 1 + horizon.
+            windows = np.lib.stride_tricks.sliding_window_view(
+                daily_return[2:], horizon, axis=0
+            )
+            forward_return = np.prod(1.0 + windows, axis=-1) - 1.0
 
             label = np.full(pred.shape, np.nan)
             label[:len(forward_return)] = forward_return
@@ -530,7 +523,7 @@ if __name__ == "__main__":
             mean_ic = np.nanmean(ic)
             mean_rank_ic = np.nanmean(rank_ic)
             ax.set_title(
-                f"EV {horizon}D Forward Return | "
+                f"PAFR {horizon}D Forward Return | "
                 f"Mean IC={mean_ic:.4f}, Mean RankIC={mean_rank_ic:.4f}"
             )
             ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
@@ -541,12 +534,12 @@ if __name__ == "__main__":
                 ax.xaxis.get_major_locator()
             ))
 
-        fig.suptitle("EV Decile Cumulative Excess Returns", fontsize=15)
+        fig.suptitle("PAFR Decile Cumulative Excess Returns", fontsize=15)
         fig.supxlabel("Trade Date")
         fig.supylabel("Cumulative Group Excess Return")
         fig.tight_layout()
 
-        output = Path(__file__).resolve().parent / "output" / "ev_group_returns.png"
+        output = Path(__file__).resolve().parents[1] / "output" / "pafr_group_returns.png"
         output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=160, bbox_inches="tight")
         plt.close(fig)

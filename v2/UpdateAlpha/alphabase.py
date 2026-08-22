@@ -23,6 +23,20 @@ class AlphaContext:
 
     def close(self):
         self.data.close()
+        if getattr(self, "_owns_conn", False):
+            connection = getattr(self, "conn", None)
+            if connection is not None:
+                connection.close()
+
+    def align(self, frame, value="value"):
+        """Align a tick/value table to the valid local instrument axis."""
+        axis = self.data.axis
+        out = np.full(axis.tick_count, np.nan, dtype=np.float32)
+        for tick, item in frame.select("tick", value).iter_rows():
+            position = axis._tick_positions.get(str(tick).strip().zfill(6))
+            if position is not None and item is not None and np.isfinite(item):
+                out[position] = item
+        return out
 
     def __enter__(self):
         return self

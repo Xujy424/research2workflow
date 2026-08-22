@@ -1,7 +1,7 @@
 """Alpha calculation and matrix-maintenance interfaces."""
 
 from .alphabase import AlphaBase, AlphaContext, AlphaMeta
-from .afr import (
+from .analyst_forecast.afr import (
     AFRConfig,
     AFRContext,
     AFRFactor,
@@ -11,7 +11,29 @@ from .afr import (
     calculate_afr_family,
     update_afr_family,
 )
+from .analyst_forecast.sue import (
+    SUEConfig,
+    SUEContext,
+    SUE0Factor,
+    SUE1Factor,
+    SUR0Factor,
+    SUR1Factor,
+    calculate_sue_family,
+    update_sue_family,
+)
 
+from .analyst_forecast.consensus import (
+    ConsensusConfig,
+    ConsensusContext,
+    EPFY1Factor,
+    PEGFactor,
+    SCOREFactor,
+    TPERFactor,
+    COVFactor,
+    DISPFactor,
+    calculate_consensus_family,
+    update_consensus_family,
+)
 __all__ = [
     "AlphaBase",
     "AlphaContext",
@@ -24,4 +46,22 @@ __all__ = [
     "ExpectedVolatilityFactor",
     "calculate_afr_family",
     "update_afr_family",
+    "SUEConfig",
+    "SUEContext",
+    "SUE0Factor",
+    "SUE1Factor",
+    "SUR0Factor",
+    "SUR1Factor",
+    "calculate_sue_family",
+    "update_sue_family",
+    "ConsensusConfig",
+    "ConsensusContext",
+    "EPFY1Factor",
+    "PEGFactor",
+    "SCOREFactor",
+    "TPERFactor",
+    "COVFactor",
+    "DISPFactor",
+    "calculate_consensus_family",
+    "update_consensus_family",
 ]
