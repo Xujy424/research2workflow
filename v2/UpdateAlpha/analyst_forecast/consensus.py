@@ -52,8 +52,13 @@ class ConsensusContext(AlphaContext):
         start = asof - pd.Timedelta(days=self.config.lookback_days)
         sql = f"""
         SELECT
-            id, report_id, stock_code, organ_id, create_date, entrytime,
-            report_year, report_quarter, forecast_np, gg_rating_code,
+            id, 
+            report_id, 
+            stock_code, 
+            organ_id, author_id
+            create_date, entrytime,
+            report_year, report_quarter, 
+            forecast_np, organ_rating_code,
             target_price_ceiling, target_price_floor
         FROM rpt_forecast_stk
         WHERE create_date BETWEEN '{start}' AND '{asof}'
