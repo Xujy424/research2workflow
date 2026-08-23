@@ -14,6 +14,7 @@ if __package__:
     from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT, get_jy_conn
+    from .utils import _date
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
     if str(PROJECT_ROOT) not in sys.path:
@@ -21,10 +22,8 @@ else:
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT, get_jy_conn
+    from v2.UpdateAlpha.analyst_forecast.utils import _date
 
-
-def _date(value):
-    return pd.Timestamp(value).date()
 
 
 

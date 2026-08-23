@@ -14,6 +14,7 @@ if __package__:
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT, get_zyyx_conn
     from ...ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
+    from .utils import _date, aggregate, latest_analyst_values
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -21,10 +22,10 @@ else:
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT, get_zyyx_conn
     from v2.ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
+    from v2.UpdateAlpha.analyst_forecast.utils import (
+        _date, aggregate, latest_analyst_values,
+    )
 
-
-def _date(value):
-    return pd.Timestamp(value).date()
 
 
 def _residual(y, x):
@@ -59,61 +60,10 @@ def _zscore(x):
 
 
 
-def _equal_weight(authors, value, alias="value"):
-    """Use analysts' latest values, then equal-weight analysts and institutions."""
-    return (
-        authors.group_by(["tick", "organ_id"])
-        .agg(pl.col(value).mean().alias(value))
-        .group_by("tick")
-        .agg(pl.col(value).mean().alias(alias))
-    )
-
-
-def _analyst_weight(authors, value, weights, alias="value"):
-    """Use latest values, weight analysts, then equal-weight institutions."""
-    if not isinstance(weights, pl.DataFrame):
-        weights = pl.from_pandas(weights)
-    required = {"author_id", "weight"}
-    missing = required.difference(weights.columns)
-    if missing:
-        raise ValueError(f"analyst weights missing columns: {sorted(missing)}")
-
-    weights = weights.select(
-        pl.col("author_id").cast(pl.Int64, strict=False),
-        pl.col("weight").cast(pl.Float64, strict=False),
-    ).unique("author_id", keep="last")
-    authors = authors.join(
-        weights, on="author_id", how="left"
-    ).with_columns(
-        pl.when(pl.col("weight").is_finite() & (pl.col("weight") > 0))
-        .then(pl.col("weight"))
-        .otherwise(0.0)
-        .alias("weight")
-    )
-    institutions = authors.group_by(["tick", "organ_id"]).agg(
-        (pl.col(value) * pl.col("weight")).sum().alias("weighted_sum"),
-        pl.col("weight").sum().alias("weight_sum"),
-        pl.col(value).mean().alias("equal_value"),
-    ).with_columns(
-        pl.when(pl.col("weight_sum") > 0)
-        .then(pl.col("weighted_sum") / pl.col("weight_sum"))
-        .otherwise(pl.col("equal_value"))
-        .alias(value)
-    )
-    return institutions.group_by("tick").agg(
-        pl.col(value).mean().alias(alias)
-    )
-
-
 def _aggregate(context, frame, value, alias="value"):
-    authors = context.analyst_values(frame, value)
-    if context.analyst_weights is None:
-        return _equal_weight(authors, value, alias)
-    return _analyst_weight(
-        authors, value, context.analyst_weights, alias
+    return aggregate(
+        frame, value, context.analyst_weights, alias
     )
-
-
 
 @dataclass(frozen=True)
 class AFRConfig:
@@ -143,18 +93,7 @@ class AFRContext(AlphaContext):
 
     @staticmethod
     def analyst_values(frame, value):
-        """Keep each analyst's latest valid observation for every stock."""
-        keys = ["tick", "author_id"]
-        order = [
-            column
-            for column in [*keys, "create_date", "entrytime", "id"]
-            if column in frame.columns
-        ]
-        return (
-            frame.filter(pl.col(value).is_finite())
-            .sort(order)
-            .unique(keys, keep="last", maintain_order=True)
-        )
+        return latest_analyst_values(frame, value)
     def reports(self, asof, start):
         asof = _date(asof)
         if asof in self._cache:
@@ -467,13 +406,13 @@ if __name__ == "__main__":
     import matplotlib.dates as mdates
 
     with AFRContext() as context:
-        pafr = PAFRFactor(context)
+        afr = AFRFactor(context)
         trade_dates = context.data["trade_dates"]
 
-        for trade_date in tqdm(trade_dates, desc="Updating PAFR"):
-            pafr.update(trade_date)
+        for trade_date in tqdm(trade_dates, desc="Updating AFR"):
+            afr.update(trade_date)
 
-        pred = context.data.load("factor_pool/pafr").copy()
+        pred = context.data.load("factor_pool/afr").copy()
         pred = pred[
             :context.data.axis.date_count,
             :context.data.axis.tick_count,
@@ -523,7 +462,7 @@ if __name__ == "__main__":
             mean_ic = np.nanmean(ic)
             mean_rank_ic = np.nanmean(rank_ic)
             ax.set_title(
-                f"PAFR {horizon}D Forward Return | "
+                f"AFR {horizon}D Forward Return | "
                 f"Mean IC={mean_ic:.4f}, Mean RankIC={mean_rank_ic:.4f}"
             )
             ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
@@ -534,12 +473,12 @@ if __name__ == "__main__":
                 ax.xaxis.get_major_locator()
             ))
 
-        fig.suptitle("PAFR Decile Cumulative Excess Returns", fontsize=15)
+        fig.suptitle("AFR Decile Cumulative Excess Returns", fontsize=15)
         fig.supxlabel("Trade Date")
         fig.supylabel("Cumulative Group Excess Return")
         fig.tight_layout()
 
-        output = Path(__file__).resolve().parents[1] / "output" / "pafr_group_returns.png"
+        output = Path(__file__).resolve().parents[1] / "output" / "afr_group_returns.png"
         output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=160, bbox_inches="tight")
         plt.close(fig)
