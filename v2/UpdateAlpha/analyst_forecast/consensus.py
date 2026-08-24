@@ -15,7 +15,8 @@ if __package__:
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT, get_zyyx_conn
     from .utils import (
-        _date, aggregate, institution_values, latest_analyst_values,
+        _consensus_fy1_year, _date, _detail_fy1_year,
+        aggregate, institution_values, latest_analyst_values,
     )
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -25,20 +26,11 @@ else:
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT, get_zyyx_conn
     from v2.UpdateAlpha.analyst_forecast.utils import (
-        _date, aggregate, institution_values, latest_analyst_values,
+        _consensus_fy1_year, _date, _detail_fy1_year,
+        aggregate, institution_values, latest_analyst_values,
     )
 
 
-
-def _consensus_fy1_year(asof):
-    """FY1 for consensus earnings: switch to the current year on May 1."""
-    asof = _date(asof)
-    return asof.year if (asof.month, asof.day) >= (5, 1) else asof.year - 1
-
-
-def _detail_fy1_year(asof):
-    """FY1 for broker-level forecast details: switch on January 1."""
-    return _date(asof).year
 
 
 @dataclass(frozen=True)

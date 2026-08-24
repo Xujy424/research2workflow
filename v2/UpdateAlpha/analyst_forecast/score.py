@@ -35,7 +35,7 @@ class ScoreConfig:
     lookback_days: int = 90
     history_days: int = 365
     max_revision_gap_days: int = 180
-    min_history_ratings: int = 20
+    min_history_ratings: int = 3
     industry_field: str = "industry/industry"
 
 
@@ -101,9 +101,7 @@ class ScoreContext(AlphaContext):
     def current_analysts(self, asof):
         asof = _date(asof)
         recent = self.reports(asof).filter(
-            pl.col("create_date") >= asof - pd.Timedelta(
-                days=self.config.lookback_days
-            )
+            pl.col("create_date") >= asof - pd.Timedelta(days=self.config.lookback_days)
         )
         return latest_analyst_values(recent, "rating_score")
 
@@ -129,16 +127,13 @@ class _ScoreFactor(AlphaBase):
 
 class ScoreRevisionFactor(_ScoreFactor):
     """Latest analyst rating change versus the analyst's previous rating."""
-
     meta = AlphaMeta("score_revision", "analyst standardized-rating revision")
     dependencies = ("rpt_forecast_stk", "rpt_report_author")
     column = "score_revision"
 
     def cross_section(self, asof):
         reports = self.context.reports(asof).sort(
-            ["tick", "organ_id", "author_id", "create_date", "entrytime", "report_id", "id", 'report_year', 'report_quarter']
-        ).filter(
-            (pl.col('report_year')==asof.year) & (pl.col('report_quarter')==4)
+            ["tick", "organ_id", "author_id", "create_date", "entrytime", "report_id", "id",]
         )
         keys = ["tick", "organ_id", "author_id"]
         events = reports.with_columns(
@@ -155,23 +150,20 @@ class ScoreRevisionFactor(_ScoreFactor):
         return aggregate(events, self.column, alias=self.column)
 
 
-class ScoreOrganBiasFactor(_ScoreFactor):
-    """Current rating relative to the broker's earlier cross-stock tendency."""
-
-    meta = AlphaMeta(
-        "score_organ_bias", "rating relative to broker historical rating bias"
-    )
+class ScoreBiasFactor(_ScoreFactor):
+    """Current rating versus the analyst's history for the same stock."""
+    meta = AlphaMeta("score_bias", "rating relative to analyst-stock historical rating bias")
     dependencies = ("rpt_forecast_stk", "rpt_report_author")
-    column = "score_organ_bias"
+    column = "score_bias"
 
     def cross_section(self, asof):
         cutoff = asof - pd.Timedelta(days=self.context.config.lookback_days)
         reports = self.context.reports(asof)
         history = (
             reports.filter(pl.col("create_date") < cutoff)
-            .group_by("organ_id")
+            .group_by(["author_id", "tick"])
             .agg(
-                pl.col("rating_score").mean().alias("organ_history_mean"),
+                pl.col("rating_score").mean().alias("analyst_stock_history_mean"),
                 pl.len().alias("history_count"),
             )
             .filter(
@@ -179,17 +171,15 @@ class ScoreOrganBiasFactor(_ScoreFactor):
             )
         )
         current = self.context.current_analysts(asof).join(
-            history, on="organ_id", how="inner"
+            history, on=["author_id", "tick"], how="inner"
         ).with_columns(
-            (pl.col("rating_score") - pl.col("organ_history_mean"))
-            .alias(self.column)
+            (pl.col("rating_score") - pl.col("analyst_stock_history_mean")).alias(self.column)
         )
         return aggregate(current, self.column, alias=self.column)
 
 
 class ScoreIndustryFactor(_ScoreFactor):
     """Current consensus rating relative to its industry's cross-section."""
-
     meta = AlphaMeta("score_industry", "consensus rating minus industry mean rating")
     dependencies = ("rpt_forecast_stk", "rpt_report_author", "industry/industry")
     column = "score_industry"
@@ -215,7 +205,7 @@ class ScoreIndustryFactor(_ScoreFactor):
 
 
 def _factor_classes():
-    return ScoreRevisionFactor, ScoreOrganBiasFactor, ScoreIndustryFactor
+    return ScoreRevisionFactor, ScoreBiasFactor, ScoreIndustryFactor
 
 
 def calculate_score_family(asof, root=ROOT, conn=None, config=ScoreConfig()):
@@ -238,7 +228,7 @@ def update_score_family(
 
 __all__ = [
     "ScoreConfig", "ScoreContext",
-    "ScoreRevisionFactor", "ScoreOrganBiasFactor", "ScoreIndustryFactor",
+    "ScoreRevisionFactor", "ScoreBiasFactor", "ScoreIndustryFactor",
     "calculate_score_family", "update_score_family",
 ]
 

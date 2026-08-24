@@ -10,6 +10,17 @@ def _date(value):
     return pd.Timestamp(value).date()
 
 
+def _consensus_fy1_year(asof):
+    """FY1 for consensus earnings: switch to the current year on May 1."""
+    asof = _date(asof)
+    return asof.year if (asof.month, asof.day) >= (5, 1) else asof.year - 1
+
+
+def _detail_fy1_year(asof):
+    """FY1 for broker-level forecast details: switch on January 1."""
+    return _date(asof).year
+
+
 def latest_analyst_values(frame, value=None, extra_keys=()):
     """Keep each analyst's latest finite value for every grouping key."""
     keys = ["tick", "author_id", *extra_keys]
@@ -88,6 +99,7 @@ def aggregate(frame, value, weights=None, alias="value", extra_keys=()):
 
 
 __all__ = [
-    "_date", "latest_analyst_values", "institution_values",
+    "_date", "_consensus_fy1_year", "_detail_fy1_year",
+    "latest_analyst_values", "institution_values",
     "equal_weight", "analyst_weight", "aggregate",
 ]
