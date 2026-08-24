@@ -58,14 +58,7 @@ class ScoreContext(AlphaContext):
         SELECT
             f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
             f.create_date, f.entrytime, f.report_year, f.report_quarter,
-            CASE f.gg_rating_code
-                WHEN '1' THEN 0.00
-                WHEN '2' THEN 0.25
-                WHEN '3' THEN 0.50
-                WHEN '5' THEN 0.75
-                WHEN '7' THEN 1.00
-                ELSE NULL
-            END AS rating_score
+            f.gg_rating_code AS rating_score
         FROM rpt_forecast_stk f
         JOIN rpt_report_author ra ON ra.report_id = f.report_id
         WHERE f.create_date BETWEEN '{start}' AND '{asof}'
@@ -251,7 +244,7 @@ if __name__ == "__main__":
     import matplotlib.dates as mdates
 
     with ScoreContext() as context:
-        sr = ScoreRevisionFactor(context)
+        sr = ScoreOrganBiasFactor(context)
         trade_dates = context.data["trade_dates"]
 
         for trade_date in tqdm(trade_dates, desc="Updating SR"):
