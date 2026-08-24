@@ -190,12 +190,8 @@ class ScoreOrganBiasFactor(_ScoreFactor):
 class ScoreIndustryFactor(_ScoreFactor):
     """Current consensus rating relative to its industry's cross-section."""
 
-    meta = AlphaMeta(
-        "score_industry", "consensus rating minus industry mean rating"
-    )
-    dependencies = (
-        "rpt_forecast_stk", "rpt_report_author", "industry/industry",
-    )
+    meta = AlphaMeta("score_industry", "consensus rating minus industry mean rating")
+    dependencies = ("rpt_forecast_stk", "rpt_report_author", "industry/industry")
     column = "score_industry"
 
     def cross_section(self, asof):
