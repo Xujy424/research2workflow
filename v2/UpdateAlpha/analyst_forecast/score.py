@@ -1,4 +1,4 @@
-﻿"""Point-in-time analyst-rating level, bias and revision-event factors."""
+"""Point-in-time analyst-rating level, bias and revision-event factors."""
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +43,7 @@ class ScoreContext(AlphaContext):
         start=asof-pd.Timedelta(days=self.config.history_days)
         sql=f"""
         SELECT f.id,f.report_id,f.stock_code,f.organ_id,ra.author_id,
-               f.report_year,f.report_quarter,f.create_date,f.entrytime,
+               f.create_date,f.entrytime,
                f.gg_rating_code AS rating_score
         FROM rpt_forecast_stk f
         JOIN rpt_report_author ra ON ra.report_id=f.report_id
@@ -57,15 +57,14 @@ class ScoreContext(AlphaContext):
         frame=(pl.read_database(sql,self.conn,infer_schema_length=None).with_columns(
             pl.col('stock_code').cast(pl.String).str.zfill(6).alias('tick'),
             pl.col('organ_id').cast(pl.Int64,strict=False),pl.col('author_id').cast(pl.Int64,strict=False),
-            pl.col('report_year').cast(pl.Int64,strict=False),pl.col('report_quarter').cast(pl.Int64,strict=False),
             pl.col('create_date').cast(pl.Date,strict=False),pl.col('entrytime').cast(pl.Datetime,strict=False),
             pl.col('rating_score').cast(pl.Float64,strict=False),
         ).filter(
             pl.col('tick').is_not_null()
         ).sort(
-            ['tick','organ_id','author_id','report_year','report_quarter','create_date','entrytime','report_id','id']
+            ['tick','organ_id','author_id','create_date','entrytime','report_id','id']
         ).unique(
-            ['report_id','tick','organ_id','author_id','report_year','report_quarter'],
+            ['report_id','tick','organ_id','author_id'],
             keep='last',maintain_order=True))
         self._cache={'asof':asof,'frame':frame};return frame
 
@@ -93,8 +92,6 @@ class ScoreLevelFactor(_ScoreFactor):
     def cross_section(self,asof):
         reports=self.context.reports(asof).filter(
             (pl.col('create_date')>=asof-pd.Timedelta(days=self.context.config.lookback_days))&
-            (pl.col('report_year')==asof.year)&
-            (pl.col('report_quarter')==4)&
             pl.col('rating_score').is_finite()
         )
         return aggregate(reports,'rating_score',alias=self.column)
@@ -107,8 +104,6 @@ class ScoreBiasFactor(_ScoreFactor):
     def cross_section(self,asof):
         cutoff=asof-pd.Timedelta(days=self.context.config.lookback_days)
         reports=(self.context.reports(asof).filter(
-            (pl.col('report_year')==asof.year)&
-            (pl.col('report_quarter')==4)&
             pl.col('rating_score').is_finite()
         ).sort(
             ['tick','organ_id','author_id','create_date','entrytime','report_id','id']
@@ -137,13 +132,11 @@ class ScoreRevisionEventFactor(_ScoreFactor):
     def cross_section(self,asof):
         reports=(
             self.context.reports(asof).filter(
-                (pl.col('report_year')==asof.year)&
-                (pl.col('report_quarter')==4)&
                 pl.col('rating_score').is_finite()
             ).sort(
                 ['tick','organ_id','author_id','create_date','entrytime','report_id','id']
             ).unique(
-            ['tick','organ_id','author_id','create_date'],
+            ['report_id','tick','organ_id','author_id'],
             keep='last',maintain_order=True
             )
         )
