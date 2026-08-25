@@ -25,9 +25,9 @@ from .analyst_forecast.sue import (
 from .analyst_forecast.score import (
     ScoreConfig,
     ScoreContext,
-    ScoreRevisionFactor,
+    ScoreLevelFactor,
     ScoreBiasFactor,
-    ScoreIndustryFactor,
+    ScoreRevisionEventFactor,
     calculate_score_family,
     update_score_family,
 )
@@ -77,9 +77,9 @@ __all__ = [
     "update_consensus_family",
     "ScoreConfig",
     "ScoreContext",
-    "ScoreRevisionFactor",
+    "ScoreLevelFactor",
     "ScoreBiasFactor",
-    "ScoreIndustryFactor",
+    "ScoreRevisionEventFactor",
     "calculate_score_family",
     "update_score_family",
 ]
