@@ -123,20 +123,22 @@ class COVContext(AlphaContext):
         if start < 0 or start >= end:
             return result
 
+        start_date = dates[start]
+        end_date = dates[end]
         start_close = np.asarray(
-            self.data.read(self.config.close_field, pre_date),
+            self.data.read(self.config.close_field, start_date),
             dtype=np.float64,
         )
         end_close = np.asarray(
-            self.data.read(self.config.close_field, asof),
+            self.data.read(self.config.close_field, end_date),
             dtype=np.float64,
         )
         start_mv = np.asarray(
-            self.data.read(self.config.market_value_field, pre_date),
+            self.data.read(self.config.market_value_field, start_date),
             dtype=np.float64,
         )
         end_mv = np.asarray(
-            self.data.read(self.config.market_value_field, asof),
+            self.data.read(self.config.market_value_field, end_date),
             dtype=np.float64,
         )
 
