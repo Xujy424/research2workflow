@@ -25,15 +25,35 @@ else:
     from v2.UpdateAlpha.analyst_forecast.utils import _date
 
 
+DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
+
+
 @dataclass(frozen=True)
 class COVConfig:
     lookback_days: int = 90
+    close_field: str = "d_essentials/close_adj"
+    market_value_field: str = "d_essentials/circ_mv"
+
+
+def _residual(y, x):
+    """Return cross-sectional OLS residuals with an intercept."""
+    y = np.asarray(y, dtype=np.float64)
+    x = np.asarray(x, dtype=np.float64)
+    out = np.full(y.shape, np.nan, dtype=np.float64)
+    valid = np.isfinite(y) & np.isfinite(x)
+    if valid.sum() <= 2:
+        out[valid] = y[valid]
+        return out
+    design = np.column_stack((np.ones(valid.sum()), x[valid]))
+    coefficients = np.linalg.lstsq(design, y[valid], rcond=None)[0]
+    out[valid] = y[valid] - design @ coefficients
+    return out
 
 
 class COVContext(AlphaContext):
     """Current-FY1 annual forecasts used to measure active analyst coverage."""
 
-    def __init__(self, root=ROOT, conn=None, config=COVConfig()):
+    def __init__(self, root=DEFAULT_ROOT, conn=None, config=COVConfig()):
         self.config = config
         self.conn = conn or get_zyyx_conn()
         self._owns_conn = conn is None
@@ -89,6 +109,78 @@ class COVContext(AlphaContext):
         self._cache = {"asof": asof, "reports": reports}
         return reports
 
+    def excess_momentum(self, asof):
+        """Return endpoint stock log momentum less market log momentum."""
+        asof = _date(asof)
+        axis = self.data.axis
+        dates = axis.trade_dates
+        
+        end = axis.date_position(asof)
+        pre_date = np.datetime64(asof - pd.Timedelta(days=self.config.lookback_days),"D",)
+        start = int(np.searchsorted(dates, pre_date, side="right")) - 1
+
+        result = np.full(axis.tick_count, np.nan, dtype=np.float64)
+        if start < 0 or start >= end:
+            return result
+
+        start_close = np.asarray(
+            self.data.read(self.config.close_field, pre_date),
+            dtype=np.float64,
+        )
+        end_close = np.asarray(
+            self.data.read(self.config.close_field, asof),
+            dtype=np.float64,
+        )
+        start_mv = np.asarray(
+            self.data.read(self.config.market_value_field, pre_date),
+            dtype=np.float64,
+        )
+        end_mv = np.asarray(
+            self.data.read(self.config.market_value_field, asof),
+            dtype=np.float64,
+        )
+
+        start_market_valid = (
+            np.isfinite(start_close)
+            & np.isfinite(start_mv)
+            & (start_close > 0)
+            & (start_mv > 0)
+        )
+        end_market_valid = (
+            np.isfinite(end_close)
+            & np.isfinite(end_mv)
+            & (end_close > 0)
+            & (end_mv > 0)
+        )
+
+        start_weight = np.sum(start_mv[start_market_valid])
+        end_weight = np.sum(end_mv[end_market_valid])
+        if start_weight <= 0 or end_weight <= 0:
+            return result
+        
+        start_market_price = np.sum(
+            start_close[start_market_valid] * start_mv[start_market_valid]
+        ) / start_weight
+        end_market_price = np.sum(
+            end_close[end_market_valid] * end_mv[end_market_valid]
+        ) / end_weight
+        
+        if start_market_price <= 0 or end_market_price <= 0:
+            return result
+        market_momentum = np.log(end_market_price / start_market_price)
+
+        valid = (
+            np.isfinite(start_close)
+            & np.isfinite(end_close)
+            & (start_close > 0)
+            & (end_close > 0)
+        )
+        result[valid] = (
+            np.log(end_close[valid] / start_close[valid])
+            - market_momentum
+        )
+        return result
+
 
 class COVFactor(AlphaBase):
     """Square root of unique current-FY1 reports published in six months."""
@@ -110,4 +202,28 @@ class COVFactor(AlphaBase):
         return np.nan_to_num(values, nan=0.0)
 
 
-__all__ = ["COVConfig", "COVContext", "COVFactor"]
+class CovExMomFactor(COVFactor):
+    """Analyst coverage stripped of same-window excess momentum."""
+
+    meta = AlphaMeta(
+        "cov_ex_mom",
+        "analyst coverage residualized against same-window excess momentum",
+    )
+    dependencies = (
+        "rpt_forecast_stk",
+        "rpt_report_author",
+        "d_essentials/close_adj",
+        "d_essentials/circ_mv",
+    )
+
+    def calculate(self, asof):
+        asof = _date(asof)
+        coverage = self.context.align(
+            self.cross_section(asof), self.column,
+        ).astype(np.float64)
+        momentum = self.context.excess_momentum(asof)
+        values = _residual(coverage, momentum)
+        return np.nan_to_num(values, nan=0.0)
+
+
+__all__ = ["COVConfig", "COVContext", "COVFactor", "CovExMomFactor"]
