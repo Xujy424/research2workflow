@@ -886,6 +886,8 @@ def update_l2_basic(root, date):
 
 if __name__ == '__main__':
 
+    from tqdm import tqdm
+
     L2DATA_PATH = '/data/shanghai/xujiayi/workflow/data/stock/l2'
     # rawpath, outpath = generate_path(L2DATA_PATH, '20260624')
 
@@ -905,20 +907,20 @@ if __name__ == '__main__':
     # sz_closebook_correct = get_closebook('sz', L2DATA_PATH, '20260624')
     # print(sz_closebook_correct.filter(pl.col('SecurityID')==600000))
 
-    # dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
-    # dates = [d for d in dates if not np.isnat(d)]
-    # start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-01-01')), bisect.bisect_right(dates, pd.to_datetime('2026-06-30'))
-    # for date in dates[start_dt:end_dt]:
-    #     date = date.astype('datetime64[D]').astype(str).replace('-', '')
-    #     rawpath, outpath = generate_path(L2DATA_PATH, date)
-    #     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
-    #     szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
+    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    dates = [d for d in dates if not np.isnat(d)]
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-01-03')), bisect.bisect_right(dates, pd.to_datetime('2026-07-24'))
+    for date in tqdm(dates[start_dt:end_dt]):
+        date = date.astype('datetime64[D]').astype(str).replace('-', '')
+        rawpath, outpath = generate_path(L2DATA_PATH, date)
+        shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
+        szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
-    date = '2025-01-02'
-    date = date.replace('-', '')
-    rawpath, outpath = generate_path(L2DATA_PATH, date)
-    shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
-    szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
+    # date = '2025-01-02'
+    # date = date.replace('-', '')
+    # rawpath, outpath = generate_path(L2DATA_PATH, date)
+    # shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
+    # szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
 
     #shutil.rmtree(rawpath)
 
