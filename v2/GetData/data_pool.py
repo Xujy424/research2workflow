@@ -145,6 +145,10 @@ class DataPool:
 
         path = self.asset_root / f"{name}.bin"
         if not path.is_file():
+            legacy_path = self.root / f"{name}.bin"
+            if legacy_path.is_file():
+                path = legacy_path
+        if not path.is_file():
             raise FileNotFoundError(f"field does not exist: {path}")
 
         middle = MIDDLE_BY_FOLDER.get(path.parent.name.lower(), 1)

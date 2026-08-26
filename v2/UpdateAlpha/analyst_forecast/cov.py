@@ -27,7 +27,7 @@ else:
 
 @dataclass(frozen=True)
 class COVConfig:
-    lookback_days: int = 180
+    lookback_days: int = 90
 
 
 class COVContext(AlphaContext):
@@ -48,32 +48,41 @@ class COVContext(AlphaContext):
         start = asof - pd.Timedelta(days=self.config.lookback_days)
         sql = f"""
         SELECT
-            f.id, f.report_id, f.stock_code, f.create_date, f.entrytime,
-            f.forecast_np
+            f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
+            f.report_year, f.report_quarter,
+            f.create_date, f.entrytime,
+            f.forecast_np, f.gg_rating_code AS rating_score,
+            f.target_price_ceiling, f.target_price_floor
         FROM rpt_forecast_stk f
+        JOIN rpt_report_author ra ON ra.report_id = f.report_id
         WHERE f.create_date BETWEEN '{start}' AND '{asof}'
             AND f.entrytime <= '{asof} 23:59:59'
             AND DATEDIFF(day, f.create_date, f.entrytime) BETWEEN 0 AND 7
-            AND f.report_year = {asof.year}
-            AND f.report_quarter = 4
             AND f.forecast_np IS NOT NULL
             AND (f.reliability >= 5 OR f.reliability IS NULL)
-
+            AND f.organ_id IS NOT NULL
+            AND ra.author_id IS NOT NULL
+            AND f.gg_rating_code IN ('1','2','3','5','7')
         """
         reports = (
             pl.read_database(sql, self.conn, infer_schema_length=None)
             .with_columns(
                 pl.col("stock_code").cast(pl.String).str.zfill(6).alias("tick"),
+                pl.col("organ_id").cast(pl.Int64, strict=False),
+                pl.col("author_id").cast(pl.Int64, strict=False),
                 pl.col("create_date").cast(pl.Date, strict=False),
                 pl.col("entrytime").cast(pl.Datetime, strict=False),
                 pl.col("forecast_np").cast(pl.Float64, strict=False),
             )
             .filter(pl.col("tick").is_not_null() & pl.col("forecast_np").is_finite())
             .sort([
-                "tick", "create_date", "entrytime", "report_id", "id",
+                "tick", "author_id", 
+                "report_year", "report_quarter",
+                "create_date", "entrytime", 
+                "report_id", "id",
             ])
             .unique(
-                ["report_id", "tick"],
+                ["report_id", "tick", "organ_id", "author_id", "report_year"],
                 keep="last", maintain_order=True,
             )
         )

@@ -1,4 +1,4 @@
-"""Point-in-time target-price level and revision factors."""
+"""Point-in-time analyst target-price factors."""
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ else:
 @dataclass(frozen=True)
 class TPERConfig:
     lookback_days: int = 180
-    revision_periods: int = 60
     close_field: str = "d_essentials/close"
 
 
@@ -49,6 +48,19 @@ class TPERContext(AlphaContext):
             return self._cache["reports"]
 
         start = asof - pd.Timedelta(days=self.config.lookback_days)
+        bulk = getattr(self, "_bulk_reports", None)
+        if bulk is not None:
+            reports = bulk.filter(
+                pl.col("create_date").is_between(start, asof)
+                & (pl.col("entrytime") <= pd.Timestamp(asof) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1))
+            ).sort([
+                "tick", "organ_id", "author_id", "create_date", "entrytime", "report_id", "id",
+            ]).unique(
+                ["report_id", "tick", "organ_id", "author_id"],
+                keep="last", maintain_order=True,
+            )
+            self._cache = {"asof": asof, "reports": reports}
+            return reports
         sql = f"""
         SELECT
             f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
@@ -164,36 +176,66 @@ class TPERFactor(_TPERFactor):
         )
 
 
-class TPRevision60Factor(_TPERFactor):
-    """Sixty-trading-day revision in consensus target price."""
+class WTRFactor(_TPERFactor):
+    """Mean report target return, based on its prior-trading-day close."""
 
-    meta = AlphaMeta(
-        "tp_revision60",
-        "60-trading-day consensus target-price revision",
-    )
-    dependencies = ("rpt_forecast_stk", "rpt_report_author")
-    column = "tp_revision60"
+    meta = AlphaMeta("wtr", "weighted target-price expected return")
+    dependencies = ("rpt_forecast_stk", "rpt_report_author", "d_essentials/close")
+    column = "wtr"
 
     def cross_section(self, asof):
-        lag_asof = self.trade_date_offset(asof, self.context.config.revision_periods)
-        if lag_asof is None:
-            return pl.DataFrame(
-                schema={"tick": pl.String, self.column: pl.Float64}
+        reports = self.context.reports(asof).with_columns(
+            pl.mean_horizontal(
+                "target_price_ceiling", "target_price_floor"
+            ).alias("target_price")
+        ).filter(pl.col("target_price").is_finite() & (pl.col("target_price") > 0))
+        dates, pieces = self.context.data.axis.trade_dates, []
+        for date in reports["create_date"].unique().to_list():
+            part = reports.filter(pl.col("create_date") == date)
+            pos = int(np.searchsorted(dates, np.datetime64(date, "D"), side="left") - 1)
+            if pos < 0:
+                continue
+            close = self.context.local_values(
+                self.context.config.close_field,
+                pd.Timestamp(dates[pos]).date(),
+                part["tick"].to_list(),
             )
+            pieces.append(part.with_columns(pl.Series("base_close", close)).with_columns(
+                pl.when(pl.col("base_close").is_finite() & (pl.col("base_close") > 0))
+                .then(pl.col("target_price") / pl.col("base_close") - 1)
+                .otherwise(None).alias("expected_return")
+            ))
+        if not pieces:
+            return pl.DataFrame(schema={"tick": pl.String, self.column: pl.Float64})
+        return aggregate(pl.concat(pieces), "expected_return", alias=self.column)
 
+
+class ConsensusExpectedReturnFactor(TPERFactor):
+    """Consensus expected return under an explicit factor name."""
+
+    meta = AlphaMeta("consensus_expected_return", "consensus target return")
+    column = "consensus_expected_return"
+
+
+class WeightedTargetPriceYoYFactor(_TPERFactor):
+    """Current equal-weight target price minus the prior-year value."""
+
+    meta = AlphaMeta("weighted_target_price_yoy", "weighted target-price YoY change")
+    dependencies = ("rpt_forecast_stk", "rpt_report_author")
+    column = "weighted_target_price_yoy"
+
+    def cross_section(self, asof):
+        lag_asof = (pd.Timestamp(asof) - pd.DateOffset(years=1)).date()
         current = self.target_consensus(asof, "target_price_current")
-        previous = self.target_consensus(lag_asof, "target_price_lag60")
+        previous = self.target_consensus(lag_asof, "target_price_last_year")
         return (
             current.join(previous, on="tick", how="inner")
             .with_columns(
                 pl.when(
                     pl.col("target_price_current").is_finite()
-                    & pl.col("target_price_lag60").is_finite()
-                    & (pl.col("target_price_lag60") > 0)
+                    & pl.col("target_price_last_year").is_finite()
                 )
-                .then(
-                    pl.col("target_price_current") / pl.col("target_price_lag60") - 1
-                )
+                .then(pl.col("target_price_current") - pl.col("target_price_last_year"))
                 .otherwise(None)
                 .alias(self.column)
             )
@@ -202,5 +244,6 @@ class TPRevision60Factor(_TPERFactor):
 
 
 __all__ = [
-    "TPERConfig", "TPERContext", "TPERFactor", "TPRevision60Factor",
+    "TPERConfig", "TPERContext", "TPERFactor", "WTRFactor",
+    "ConsensusExpectedReturnFactor", "WeightedTargetPriceYoYFactor",
 ]
