@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 
+import bottleneck as bn
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -31,6 +32,8 @@ DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
 @dataclass(frozen=True)
 class COVConfig:
     lookback_days: int = 90
+    num_groups: int = 10
+    keep_high_groups: int = 2
     close_field: str = "d_essentials/close_adj"
     market_value_field: str = "d_essentials/circ_mv"
 
@@ -166,7 +169,7 @@ class COVContext(AlphaContext):
         end_market_price = np.sum(
             end_close[end_market_valid] * end_mv[end_market_valid]
         ) / end_weight
-        
+
         if start_market_price <= 0 or end_market_price <= 0:
             return result
         market_momentum = np.log(end_market_price / start_market_price)
@@ -193,39 +196,119 @@ class COVFactor(AlphaBase):
     )
     dependencies = ("rpt_forecast_stk",)
     column = "cov"
+    coverage_field = "report_id"
 
     def cross_section(self, asof):
         return self.context.reports(asof).group_by("tick").agg(
-            pl.col("report_id").n_unique().sqrt().alias(self.column)
+            pl.col(self.coverage_field).n_unique().sqrt().alias(self.column)
         )
 
     def calculate(self, asof):
-        values = self.context.align(self.cross_section(_date(asof)), self.column)
-        return np.nan_to_num(values, nan=0.0)
+        values = self.context.align(
+            self.cross_section(_date(asof)), self.column,
+        ).astype(np.float64)
+
+        weights = np.full(values.shape, np.nan, dtype=np.float64)
+        if not np.isfinite(values).any():
+            return weights
+
+        rank = bn.nanrankdata(values)
+        num_signal = np.nanmax(rank)
+        stock_each_group = num_signal // self.context.config.num_groups
+        cutoff = stock_each_group * (
+            self.context.config.num_groups
+            - self.context.config.keep_high_groups
+        )
+        selected = (
+            np.isfinite(rank)
+            & (rank > cutoff)
+            & (rank <= num_signal)
+        )
+        total = np.sum(values[selected])
+        if selected.any() and np.isfinite(total) and total > 0:
+            weights[selected] = values[selected] / total
+        return weights
 
 
-class CovExMomFactor(COVFactor):
-    """Analyst coverage stripped of same-window excess momentum."""
+class COVAuthorFactor(COVFactor):
+    """G9/G10 portfolio based on unique analyst coverage."""
 
     meta = AlphaMeta(
-        "cov_ex_mom",
-        "analyst coverage residualized against same-window excess momentum",
+        "cov_author",
+        "top two deciles of square-root unique analyst coverage",
     )
-    dependencies = (
-        "rpt_forecast_stk",
-        "rpt_report_author",
-        "d_essentials/close_adj",
-        "d_essentials/circ_mv",
+    dependencies = ("rpt_forecast_stk", "rpt_report_author")
+    coverage_field = "author_id"
+
+
+class COVOrganFactor(COVFactor):
+    """G9/G10 portfolio based on unique institution coverage."""
+
+    meta = AlphaMeta(
+        "cov_organ",
+        "top two deciles of square-root unique institution coverage",
     )
-
-    def calculate(self, asof):
-        asof = _date(asof)
-        coverage = self.context.align(
-            self.cross_section(asof), self.column,
-        ).astype(np.float64)
-        momentum = self.context.excess_momentum(asof)
-        values = _residual(coverage, momentum)
-        return np.nan_to_num(values, nan=0.0)
+    dependencies = ("rpt_forecast_stk", "rpt_report_author")
+    coverage_field = "organ_id"
 
 
-__all__ = ["COVConfig", "COVContext", "COVFactor", "CovExMomFactor"]
+__all__ = [
+    "COVConfig", "COVContext", "COVFactor",
+    "COVAuthorFactor", "COVOrganFactor",
+]
+
+
+if __name__ == '__main__':
+    from tqdm import tqdm
+    import matplotlib.pyplot as plt
+
+    with COVContext() as context:
+        cov = COVFactor(context)
+        trade_dates = context.data["trade_dates"]
+
+        for trade_date in tqdm(trade_dates, desc="Updating COV"):
+            cov.update(trade_date)
+
+        pred = context.data.load("factor_pool/cov").copy()
+        pred = pred[
+            :context.data.axis.date_count,
+            :context.data.axis.tick_count,
+        ]
+        tradable = context.data.read(
+            "basic/tradable",
+            start_date=0,
+            end_date=pred.shape[0] - 1,
+        )
+        pct = context.data.read(
+            "d_essentials/pct",
+            start_date=0,
+            end_date=pred.shape[0] - 1,
+        ) / 100.0
+        circ_mv = context.data.read(
+            "d_essentials/circ_mv",
+            start_date=0,
+            end_date=pred.shape[0] - 1,
+        )
+        mv = circ_mv.copy()
+        mv[1:] = mv[:-1]
+        mv[0,:] = np.nan
+        m_pct = np.divide(
+            np.sum(mv * pct,axis=1),
+            np.sum(mv, axis=1),
+            out=np.full_like(pct,np.nan),
+            where=np.sum(mv,axis=1)!=0
+        )
+
+        r = pct.copy()
+        r[:-2] = r[2:]
+        r[-2:] = np.nan
+        mr = m_pct.copy()
+        mr[:-2] = mr[2:]
+        mr[-2:] = np.nan
+
+        pr = np.cumsum(np.sum(cov*r,axis=1))
+        alpha = pr-mr
+        plt.plot(alpha)
+        plt.show()
+        
+        

@@ -1,9 +1,0 @@
-/conf/config.ini
-__pycache__/
-*.ipynb
-.ipynb_checkpoints/
-.vscode/
-*.bat
-*.swp
-uv.lock
-*.sh

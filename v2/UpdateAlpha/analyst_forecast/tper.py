@@ -42,25 +42,12 @@ class TPERContext(AlphaContext):
         super().__init__(DataPool(root, asset="stock"))
 
     def reports(self, asof):
-        """Read recent target-price reports and expand them to analysts."""
+        """Read one as-of PIT report window without choosing factor grain."""
         asof = _date(asof)
         if self._cache.get("asof") == asof:
             return self._cache["reports"]
 
         start = asof - pd.Timedelta(days=self.config.lookback_days)
-        bulk = getattr(self, "_bulk_reports", None)
-        if bulk is not None:
-            reports = bulk.filter(
-                pl.col("create_date").is_between(start, asof)
-                & (pl.col("entrytime") <= pd.Timestamp(asof) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1))
-            ).sort([
-                "tick", "organ_id", "author_id", "create_date", "entrytime", "report_id", "id",
-            ]).unique(
-                ["report_id", "tick", "organ_id", "author_id"],
-                keep="last", maintain_order=True,
-            )
-            self._cache = {"asof": asof, "reports": reports}
-            return reports
         sql = f"""
         SELECT
             f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
@@ -90,10 +77,6 @@ class TPERContext(AlphaContext):
             .sort([
                 "tick", "organ_id", "author_id", "create_date", "entrytime", "report_id", "id",
             ])
-            .unique(
-                ["report_id", "tick", "organ_id", "author_id"],
-                keep="last", maintain_order=True,
-            )
         )
         self._cache = {"asof": asof, "reports": reports}
         return reports
@@ -112,6 +95,26 @@ class TPERContext(AlphaContext):
 
 class _TPERFactor(AlphaBase):
     column = ""
+    report_grain = ("report_id", "tick", "organ_id", "author_id")
+
+    def factor_reports(self, asof):
+        """Apply this factor's report grain to the context's raw PIT rows."""
+        frame = self.context.reports(asof)
+        grain = list(self.report_grain)
+        missing = set(grain).difference(frame.columns)
+        if missing:
+            raise ValueError(
+                f"TPER report grain contains missing columns: {sorted(missing)}"
+            )
+        order = [
+            column for column in [
+                "tick", "organ_id", "author_id", "create_date", "entrytime", "report_id", "id",
+            ]
+            if column in frame.columns
+        ]
+        return frame.sort(order).unique(
+            grain, keep="last", maintain_order=True,
+        )
 
     def cross_section(self, asof):
         raise NotImplementedError
@@ -123,7 +126,7 @@ class _TPERFactor(AlphaBase):
     def target_consensus(self, asof, alias="target_price"):
         """Aggregate latest analysts, then equal-weight their institutions."""
         reports = (
-            self.context.reports(asof)
+            self.factor_reports(asof)
             .with_columns(
                 pl.mean_horizontal(
                     "target_price_ceiling", "target_price_floor"
@@ -184,7 +187,7 @@ class WTRFactor(_TPERFactor):
     column = "wtr"
 
     def cross_section(self, asof):
-        reports = self.context.reports(asof).with_columns(
+        reports = self.factor_reports(asof).with_columns(
             pl.mean_horizontal(
                 "target_price_ceiling", "target_price_floor"
             ).alias("target_price")
