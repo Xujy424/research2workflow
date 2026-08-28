@@ -878,7 +878,7 @@ def update_l2_basic(root, date):
     rawpath, outpath = generate_path(root, date)
     shwt, shcj, shcd = process_SH_level2(rawpath, True, outpath)
     szwt, szcj, szcd = process_SZ_level2(rawpath, True, outpath)
-    #shutil.rmtree(rawpath)
+    shutil.rmtree(rawpath)
 
 
 
@@ -909,7 +909,7 @@ if __name__ == '__main__':
 
     dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
     dates = [d for d in dates if not np.isnat(d)]
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-01-03')), bisect.bisect_right(dates, pd.to_datetime('2026-07-24'))
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2024-01-01')), bisect.bisect_right(dates, pd.to_datetime('2024-12-31'))
     for date in tqdm(dates[start_dt:end_dt]):
         date = date.astype('datetime64[D]').astype(str).replace('-', '')
         rawpath, outpath = generate_path(L2DATA_PATH, date)

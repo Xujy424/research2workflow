@@ -846,8 +846,17 @@ if __name__ == "__main__":
     # result.write_parquet(output, compression="gzip")
     # print(f"saved {result.height} rows to {output}")
 
+    import numpy as np
+    import pandas as pd
+    import bisect
+    from tqdm import tqdm
 
     root = Path('/data/shanghai/xujiayi/workflow/data/stock/l2')
-    date = '2025-01-02'
-    date = date.replace('-', '')
-    update_snapshot(root, date, '1m', 10)
+    
+    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    dates = [d for d in dates if not np.isnat(d)]
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-03-11')), bisect.bisect_right(dates, pd.to_datetime('2026-07-24'))
+
+    for date in tqdm(dates[start_dt:end_dt]):
+        date_str = pd.Timestamp(date).strftime("%Y%m%d")
+        update_snapshot(root, date_str, '1m', 10)

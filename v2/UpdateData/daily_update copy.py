@@ -132,73 +132,73 @@ def update_data(
         if str_conn is None:
             str_conn = get_str_engine()
 
-        date = _run_step("date axis", update_date, date, root)
-        _run_step("stock axis", update_stockticks, date, root, jy_conn)
+        # date = _run_step("date axis", update_date, date, root)
+        # _run_step("stock axis", update_stockticks, date, root, jy_conn)
         dates = np.load(dates_path, allow_pickle=False)
         stock_ticks = np.load(ticks_path, allow_pickle=False)
 
-        _run_step(
-            "daily essentials",
-            update_d_essentials,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
         # _run_step(
-        #     "minute essentials",
-        #     update_m_essentials,
-        #     date, dates, stock_ticks, str_conn, stock_root,
+        #     "daily essentials",
+        #     update_d_essentials,
+        #     date, dates, stock_ticks, jy_conn, stock_root,
         # )
         _run_step(
-            "basic and tradable",
-            lambda: (
-                update_basic(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-                update_tradable(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-            ),
+            "minute essentials",
+            update_m_essentials,
+            date, dates, stock_ticks, str_conn, stock_root,
         )
-        _run_step(
-            "industry and sector",
-            lambda: (
-                update_industry(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-                update_sector(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-            ),
-        )
-        _run_step(
-            "index constituents",
-            update_index,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
-        _run_step(
-            "ZYYX consensus",
-            update_zyyx,
-            date,
-            dates,
-            stock_ticks,
-            zyyx_conn,
-            stock_root / "zyyx",
-        )
-        _run_step(
-            "fundamental and dividend",
-            lambda: (
-                update_fundamental(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-                update_dividend(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-            ),
-        )
-        _run_step(
-            "Barra factors",
-            update_barra,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
+        # _run_step(
+        #     "basic and tradable",
+        #     lambda: (
+        #         update_basic(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #         update_tradable(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #     ),
+        # )
+        # _run_step(
+        #     "industry and sector",
+        #     lambda: (
+        #         update_industry(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #         update_sector(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #     ),
+        # )
+        # _run_step(
+        #     "index constituents",
+        #     update_index,
+        #     date, dates, stock_ticks, jy_conn, stock_root,
+        # )
+        # _run_step(
+        #     "ZYYX consensus",
+        #     update_zyyx,
+        #     date,
+        #     dates,
+        #     stock_ticks,
+        #     zyyx_conn,
+        #     stock_root / "zyyx",
+        # )
+        # _run_step(
+        #     "fundamental and dividend",
+        #     lambda: (
+        #         update_fundamental(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #         update_dividend(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #     ),
+        # )
+        # _run_step(
+        #     "Barra factors",
+        #     update_barra,
+        #     date, dates, stock_ticks, jy_conn, stock_root,
+        # )
 
         if update_level2:
             compact_date = date.replace("-", "")
@@ -237,12 +237,14 @@ def update_data(
             "axis_resized": bool(resized and resized.changed),
         }
     finally:
-        if own_jy and jy_conn is not None:
-            _close_connection(jy_conn)
-        if own_zyyx and zyyx_conn is not None:
-            _close_connection(zyyx_conn)
-        if own_str and str_conn is not None:
-            _close_connection(str_conn)
+        # if own_jy and jy_conn is not None:
+        #     _close_connection(jy_conn)
+        # if own_zyyx and zyyx_conn is not None:
+        #     _close_connection(zyyx_conn)
+        # if own_str and str_conn is not None:
+        #     _close_connection(str_conn)
+        return
+        
 
 def update_history(
     root,
@@ -364,7 +366,7 @@ def update_history_l2(
 if __name__ == "__main__":
     update_history(
         root=ROOT,
-        start_date="2025-07-04",
+        start_date="2010-01-01",
         end_date="2026-07-31",
     )
     # update_history_l2(
