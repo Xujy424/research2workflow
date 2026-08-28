@@ -855,7 +855,7 @@ if __name__ == "__main__":
     
     dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
     dates = [d for d in dates if not np.isnat(d)]
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-03-11')), bisect.bisect_right(dates, pd.to_datetime('2026-07-24'))
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2025-12-16')), bisect.bisect_right(dates, pd.to_datetime('2026-07-24'))
 
     for date in tqdm(dates[start_dt:end_dt]):
         date_str = pd.Timestamp(date).strftime("%Y%m%d")
