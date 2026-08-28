@@ -4,9 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import numpy as np
 import pandas as pd
-from .builders import (benchmark_active_weights, event_weights,
+from .builders import (benchmark_active_weights, event_equal_weight_components,
+                       event_weights,
                        quantile_weights, short_only_weights)
-from .config import BacktestConfig, Method, RebalanceFrequency
+from .config import (BacktestConfig, EventPortfolioMode, Method,
+                     RebalanceFrequency)
 from .data import FactorData
 from .metrics import cross_sectional_ic, performance
 
@@ -34,6 +36,11 @@ class SingleFactorBacktester:
             return short_only_weights(signal, tradable, p), {}
         if method == Method.EVENT:
             ind = None if data.industry is None else data.industry.to_numpy()
+            if self.config.event.portfolio_mode == EventPortfolioMode.TRIGGERED_EQUAL_WEIGHT:
+                components = event_equal_weight_components(
+                    signal, tradable, self.config.event
+                )
+                return components["active"], components
             return event_weights(signal, tradable, ind, self.config.event), {}
         if data.benchmark_weight is None:
             raise ValueError("benchmark_hedged requires benchmark_weight")

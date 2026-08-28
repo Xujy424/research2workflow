@@ -32,6 +32,8 @@ DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
 @dataclass(frozen=True)
 class COVConfig:
     lookback_days: int = 90
+    min_window_analysts: int = 3
+    stable_expansion_quantile: float = 0.7
     num_groups: int = 10
     keep_high_groups: int = 2
     close_field: str = "d_essentials/close_adj"
@@ -63,12 +65,19 @@ class COVContext(AlphaContext):
         self._cache = {}
         super().__init__(DataPool(root, asset="stock"))
 
-    def reports(self, asof):
+    def reports(self, asof, lookback_days=None, require_forecast=True):
         """Return unique reports carrying a finite current-FY1 annual forecast."""
         asof = _date(asof)
-        if self._cache.get("asof") == asof:
+        lookback_days = lookback_days or self.config.lookback_days
+        cache_key = (asof, lookback_days, require_forecast)
+        if self._cache.get("key") == cache_key:
             return self._cache["reports"]
-        start = asof - pd.Timedelta(days=self.config.lookback_days)
+        start = asof - pd.Timedelta(days=lookback_days)
+        forecast_filter = (
+            "AND f.forecast_np IS NOT NULL "
+            "AND f.gg_rating_code IN ('1','2','3','5','7')"
+            if require_forecast else ""
+        )
         sql = f"""
         SELECT
             f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
@@ -81,11 +90,10 @@ class COVContext(AlphaContext):
         WHERE f.create_date BETWEEN '{start}' AND '{asof}'
             AND f.entrytime <= '{asof} 23:59:59'
             AND DATEDIFF(day, f.create_date, f.entrytime) BETWEEN 0 AND 7
-            AND f.forecast_np IS NOT NULL
             AND (f.reliability >= 5 OR f.reliability IS NULL)
             AND f.organ_id IS NOT NULL
             AND ra.author_id IS NOT NULL
-            AND f.gg_rating_code IN ('1','2','3','5','7')
+            {forecast_filter}
         """
         reports = (
             pl.read_database(sql, self.conn, infer_schema_length=None)
@@ -97,7 +105,13 @@ class COVContext(AlphaContext):
                 pl.col("entrytime").cast(pl.Datetime, strict=False),
                 pl.col("forecast_np").cast(pl.Float64, strict=False),
             )
-            .filter(pl.col("tick").is_not_null() & pl.col("forecast_np").is_finite())
+            .filter(
+                pl.col("tick").is_not_null()
+                & (
+                    pl.col("forecast_np").is_finite()
+                    if require_forecast else pl.lit(True)
+                )
+            )
             .sort([
                 "tick", "author_id", 
                 "report_year", "report_quarter",
@@ -109,7 +123,7 @@ class COVContext(AlphaContext):
                 keep="last", maintain_order=True,
             )
         )
-        self._cache = {"asof": asof, "reports": reports}
+        self._cache = {"key": cache_key, "reports": reports}
         return reports
 
     def excess_momentum(self, asof):
@@ -252,63 +266,191 @@ class COVOrganFactor(COVFactor):
     coverage_field = "organ_id"
 
 
+
+class _COVAuthorChangeFactor(COVFactor):
+    """Base for analyst-set changes across two adjacent 90-day windows."""
+
+    dependencies = ("rpt_forecast_stk", "rpt_report_author")
+    metric = None
+
+    def author_stats(self, asof):
+        asof = _date(asof)
+        days = self.context.config.lookback_days
+        split, start = (
+            asof - pd.Timedelta(days=days),
+            asof - pd.Timedelta(days=2 * days),
+        )
+        reports = self.context.reports(
+            asof, lookback_days=2 * days, require_forecast=False
+        )
+        recent = reports.filter(
+            (pl.col("create_date") > split) & (pl.col("create_date") <= asof)
+        ).group_by("tick").agg(
+            pl.col("author_id").unique().alias("a1")
+        )
+        previous = reports.filter(
+            (pl.col("create_date") > start) & (pl.col("create_date") <= split)
+        ).group_by("tick").agg(
+            pl.col("author_id").unique().alias("a0")
+        )
+        minimum = self.context.config.min_window_analysts
+        return recent.join(previous, on="tick", how="inner").with_columns(
+            pl.col("a1").list.len().alias("n1"),
+            pl.col("a0").list.len().alias("n0"),
+            pl.col("a1").list.set_intersection("a0").list.len().alias("nc"),
+        ).filter(
+            (pl.col("n0") >= minimum) & (pl.col("n1") >= minimum)
+        ).with_columns(
+            (pl.col("n1") - pl.col("nc")).alias("n_new"),
+            (pl.col("n0") - pl.col("nc")).alias("n_exit"),
+        ).with_columns(
+            (pl.col("nc") / pl.col("n1")).alias("current_overlap"),
+            (pl.col("nc") / pl.col("n0")).alias("retention"),
+            (pl.col("n_new") / pl.col("n1")).alias("new_ratio"),
+            (pl.col("n_new") / (1 + pl.col("n0"))).alias("new_intensity"),
+            (pl.col("n_exit") / pl.col("n0")).alias("exit_ratio"),
+            (
+                pl.col("nc")
+                / (pl.col("n0") + pl.col("n1") - pl.col("nc"))
+            ).alias("jaccard"),
+            (2 * pl.col("nc") / (pl.col("n0") + pl.col("n1"))).alias("dice"),
+            (pl.col("n1").log1p() - pl.col("n0").log1p()).alias(
+                "coverage_growth"
+            ),
+        ).with_columns(
+            (pl.col("retention") * pl.col("n_new").log1p()).alias(
+                "stable_expansion"
+            ),
+            (
+                pl.col("exit_ratio") / (1 + pl.col("n_new"))
+            ).alias("coverage_decay"),
+        )
+
+    def cross_section(self, asof):
+        return self.author_stats(asof).select(
+            "tick", pl.col(self.metric).alias(self.column)
+        )
+
+
+class COVAuthorOverlapFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_author_overlap", "recent analyst current-overlap ratio")
+    column, metric = "cov_author_overlap", "current_overlap"
+
+
+class COVCurrentCoverageFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_current_coverage", "log current analyst coverage")
+    column, metric = "cov_current_coverage", "n1"
+
+    def cross_section(self, asof):
+        return self.author_stats(asof).select(
+            "tick", pl.col("n1").log1p().alias(self.column)
+        )
+
+
+class COVCoverageGrowthFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_coverage_growth", "log analyst coverage growth")
+    column, metric = "cov_coverage_growth", "coverage_growth"
+
+
+class COVRetentionFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_retention", "prior analyst retention rate")
+    column, metric = "cov_retention", "retention"
+
+
+class COVNewRatioFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_new_ratio", "new analyst share")
+    column, metric = "cov_new_ratio", "new_ratio"
+
+
+class COVNewIntensityFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_new_intensity", "new analysts relative to prior coverage")
+    column, metric = "cov_new_intensity", "new_intensity"
+
+
+class COVExitRatioFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_exit_ratio", "prior analyst exit rate")
+    column, metric = "cov_exit_ratio", "exit_ratio"
+
+
+class COVStableExpansionFactor(_COVAuthorChangeFactor):
+    meta = AlphaMeta("cov_stable_expansion", "retention times log new analysts")
+    column, metric = "cov_stable_expansion", "stable_expansion"
+
+
+class COVCoverageDecayFactor(_COVAuthorChangeFactor):
+    """Severity of coverage decay conditional on at least one analyst exit."""
+
+    meta = AlphaMeta(
+        "cov_coverage_decay",
+        "positive analyst exit rate discounted by new analysts",
+    )
+    column, metric = "cov_coverage_decay", "coverage_decay"
+
+    def cross_section(self, asof):
+        return self.author_stats(asof).filter(
+            pl.col("n_exit") > 0
+        ).select(
+            "tick", pl.col(self.metric).alias(self.column)
+        )
+
+
+class _COVCoverageEventFactor(_COVAuthorChangeFactor):
+    def event_mask(self, stats, quantile):
+        raise NotImplementedError
+
+    def cross_section(self, asof):
+        stats = self.author_stats(asof)
+        if stats.is_empty():
+            return pl.DataFrame(schema={"tick": pl.String, self.column: pl.Float64})
+        selected = self.event_mask(
+            stats, self.context.config.stable_expansion_quantile
+        )
+        return stats.filter(selected).select("tick").with_columns(
+            pl.lit(1.0).alias(self.column)
+        )
+
+
+class COVExpansionEventFactor(_COVCoverageEventFactor):
+    meta = AlphaMeta(
+        "cov_expansion_event", "high retention with high new-analyst intensity"
+    )
+    column = "cov_expansion_event"
+
+    def event_mask(self, stats, quantile):
+        return (
+            (pl.col("retention") > stats["retention"].quantile(quantile))
+            & (
+                pl.col("new_intensity")
+                > stats["new_intensity"].quantile(quantile)
+            )
+        )
+
+
+class COVDecayEventFactor(_COVCoverageEventFactor):
+    meta = AlphaMeta(
+        "cov_decay_event", "high analyst exit with low replacement intensity"
+    )
+    column = "cov_decay_event"
+
+    def event_mask(self, stats, quantile):
+        return (
+            (pl.col("exit_ratio") > stats["exit_ratio"].quantile(quantile))
+            & (
+                pl.col("new_intensity")
+                < stats["new_intensity"].quantile(1 - quantile)
+            )
+        )
+
+
+
+
+
 __all__ = [
     "COVConfig", "COVContext", "COVFactor",
-    "COVAuthorFactor", "COVOrganFactor",
+    "COVAuthorFactor", "COVOrganFactor", "COVAuthorOverlapFactor",
+    "COVCurrentCoverageFactor", "COVCoverageGrowthFactor",
+    "COVRetentionFactor", "COVNewRatioFactor", "COVNewIntensityFactor",
+    "COVExitRatioFactor", "COVStableExpansionFactor",
+    "COVCoverageDecayFactor", "COVExpansionEventFactor",
+    "COVDecayEventFactor",
 ]
-
-
-if __name__ == '__main__':
-    from tqdm import tqdm
-    import matplotlib.pyplot as plt
-
-    with COVContext() as context:
-        cov = COVFactor(context)
-        trade_dates = context.data["trade_dates"]
-
-        for trade_date in tqdm(trade_dates, desc="Updating COV"):
-            cov.update(trade_date)
-
-        pred = context.data.load("factor_pool/cov").copy()
-        pred = pred[
-            :context.data.axis.date_count,
-            :context.data.axis.tick_count,
-        ]
-        tradable = context.data.read(
-            "basic/tradable",
-            start_date=0,
-            end_date=pred.shape[0] - 1,
-        )
-        pct = context.data.read(
-            "d_essentials/pct",
-            start_date=0,
-            end_date=pred.shape[0] - 1,
-        ) / 100.0
-        circ_mv = context.data.read(
-            "d_essentials/circ_mv",
-            start_date=0,
-            end_date=pred.shape[0] - 1,
-        )
-        mv = circ_mv.copy()
-        mv[1:] = mv[:-1]
-        mv[0,:] = np.nan
-        m_pct = np.divide(
-            np.sum(mv * pct,axis=1),
-            np.sum(mv, axis=1),
-            out=np.full_like(pct,np.nan),
-            where=np.sum(mv,axis=1)!=0
-        )
-
-        r = pct.copy()
-        r[:-2] = r[2:]
-        r[-2:] = np.nan
-        mr = m_pct.copy()
-        mr[:-2] = mr[2:]
-        mr[-2:] = np.nan
-
-        pr = np.cumsum(np.sum(cov*r,axis=1))
-        alpha = pr-mr
-        plt.plot(alpha)
-        plt.show()
-        
-        

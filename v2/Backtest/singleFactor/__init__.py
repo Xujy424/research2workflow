@@ -4,7 +4,8 @@ from .capacity import CapacityResult, CapacitySimulator
 from .adapters import factor_data_from_arrays
 from .config import (BacktestConfig, CapacityConfig, EventConfig,
                      ExecutionConfig, PairDefinition, PortfolioConfig,
-                     RebalanceFrequency, ActiveSide, SignalInput)
+                     RebalanceFrequency, ActiveSide, EventPortfolioMode,
+                     SignalInput)
 from .data import FactorData
 from .engine import (BacktestResult, SingleFactorBacktester,
                      compare_rebalance_frequencies)
@@ -17,4 +18,4 @@ __all__ = ["BacktestConfig", "CapacityConfig", "EventConfig", "ExecutionConfig",
            "PairDefinition", "EventStudyResult", "run_event_study",
            "explicit_pair_weights", "RebalanceFrequency",
            "compare_rebalance_frequencies", "factor_data_from_arrays",
-           "ActiveSide", "SignalInput"]
+           "ActiveSide", "EventPortfolioMode", "SignalInput"]

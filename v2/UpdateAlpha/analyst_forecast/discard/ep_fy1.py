@@ -10,10 +10,10 @@ import numpy as np
 import polars as pl
 
 if __package__:
-    from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
-    from ...GetData import DataPool
-    from ...UpdateData.config import ROOT, get_zyyx_conn
-    from .utils import _consensus_fy1_year, _date
+    from ...alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ....GetData import DataPool
+    from ....UpdateData.config import ROOT, get_zyyx_conn
+    from ..utils import _consensus_fy1_year, _date
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
     if str(PROJECT_ROOT) not in sys.path:

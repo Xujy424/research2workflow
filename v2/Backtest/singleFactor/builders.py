@@ -174,3 +174,28 @@ def event_weights(signal, tradable, industry, event: EventConfig):
         if gross > 0:
             out[t] /= gross
     return out
+
+
+def event_equal_weight_components(signal, tradable, event: EventConfig):
+    """Compare an equal-weight triggered portfolio with all tradable stocks."""
+    trigger = event_triggers(signal, tradable, event)
+    portfolio = np.zeros_like(signal, dtype=float)
+    last = np.full(signal.shape[1], -10**9)
+    active = []
+    for t in range(len(signal)):
+        fresh = np.flatnonzero(trigger[t] & (t - last > event.cooldown_days))
+        last[fresh] = t
+        active.extend((j, t + event.holding_days) for j in fresh)
+        active = [item for item in active if item[1] > t]
+        selected = np.unique(np.asarray([j for j, _ in active], dtype=int))
+        selected = selected[tradable[t, selected]]
+        if len(selected):
+            portfolio[t, selected] = 1.0 / len(selected)
+    benchmark = _normalise_rows(tradable.astype(float))
+    active_weight = portfolio - benchmark
+    return {
+        "active": active_weight,
+        "benchmark": benchmark,
+        "total_portfolio": portfolio,
+        "event_portfolio": portfolio,
+    }

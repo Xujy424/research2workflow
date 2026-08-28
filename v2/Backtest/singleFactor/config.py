@@ -35,6 +35,11 @@ class EventTrigger(str, Enum):
     CROSS = "cross"
 
 
+class EventPortfolioMode(str, Enum):
+    ACTIVE = "active"
+    TRIGGERED_EQUAL_WEIGHT = "triggered_equal_weight"
+
+
 class RebalanceFrequency(str, Enum):
     DAILY = "daily"
     WEEKLY = "weekly"
@@ -86,6 +91,7 @@ class EventConfig:
     cooldown_days: int = 0
     cross_sectionalize: bool = True
     pair_within_industry: bool = False
+    portfolio_mode: EventPortfolioMode = EventPortfolioMode.ACTIVE
 
     def __post_init__(self):
         if self.holding_days < 1 or self.cooldown_days < 0:
