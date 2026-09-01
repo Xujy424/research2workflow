@@ -1,6 +1,11 @@
-"""Alpha calculation and matrix-maintenance interfaces."""
+"""Alpha calculation, discovery, and matrix-maintenance interfaces."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 from .alphabase import AlphaBase, AlphaContext, AlphaMeta
+
 from .analyst_forecast.afr import (
     AFRConfig,
     AFRContext,
@@ -33,7 +38,9 @@ from .analyst_forecast.discard.score import (
     update_score_family,
 )
 from .analyst_forecast.discard.tper import TPERFactor
+
 from .analyst_forecast.cov import (
+    COVContext,
     COVFactor,
     COVAuthorFactor,
     COVOrganFactor,
@@ -49,10 +56,149 @@ from .analyst_forecast.cov import (
     COVExpansionEventFactor,
     COVDecayEventFactor,
 )
+from .analyst_forecast.disp import (
+    DISPContext,
+    DISPFreshnessFactor,
+    DISPInstitutionFactor,
+    DISPMidFactor,
+    DISPSeqFactor,
+    DISPEqualFactor,
+)
+from .analyst_forecast.suef_surf import (
+    SUEFSURFContext,
+    SUEFFactor,
+    SURFFactor,
+    SUEFReportFactor,
+    SURFReportFactor,
+)
+from .pricevolume.w_cut_reversal import WCutContext, WCutReversalFactor
+from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
+from .pricevolume.apm import APMContext, APMFactor
+from .pricevolume.split_momentum import (
+    IntradayOvernightMomentumContext,
+    IntradayOvernightMomentumFactor,
+)
+from .pricevolume.active_trade import (
+    ACTContext,
+    ACTPositiveFactor,
+    ACTNegativeFactor,
+)
+
+
+@dataclass(frozen=True)
+class AlphaSpec:
+    """Explicit pairing of a factor with the Context that constructs it."""
+
+    factor_class: type[AlphaBase]
+    context_class: type[AlphaContext]
+    category: str
+
+    @property
+    def name(self) -> str:
+        return self.factor_class.meta.name
+
+    def create_context(self, *, root=None, **context_kwargs) -> AlphaContext:
+        if root is not None:
+            context_kwargs["root"] = root
+        return self.context_class(**context_kwargs)
+
+    def create_factor(self, context: AlphaContext) -> AlphaBase:
+        return self.factor_class(context)
+
+
+def _specs(context_class, factor_classes, category):
+    return (
+        AlphaSpec(factor_class, context_class, category)
+        for factor_class in factor_classes
+    )
+
+
+FACTOR_REGISTRY = {
+    spec.name: spec
+    for spec in (
+        *_specs(
+            AFRContext,
+            (
+                AFRFactor, PAFRFactor, ExpectedInertiaFactor,
+                ExpectedVolatilityFactor,
+            ),
+            "analyst_forecast",
+        ),
+        *_specs(
+            SUEContext,
+            (SUE0Factor, SUE1Factor, SUR0Factor, SUR1Factor),
+            "analyst_forecast",
+        ),
+        *_specs(
+            SUEFSURFContext,
+            (SUEFFactor, SURFFactor, SUEFReportFactor, SURFReportFactor),
+            "analyst_forecast",
+        ),
+        *_specs(
+            COVContext,
+            (
+                COVFactor, COVAuthorFactor, COVOrganFactor,
+                COVAuthorOverlapFactor, COVCurrentCoverageFactor,
+                COVCoverageGrowthFactor, COVRetentionFactor,
+                COVNewRatioFactor, COVNewIntensityFactor,
+                COVExitRatioFactor, COVStableExpansionFactor,
+                COVCoverageDecayFactor, COVExpansionEventFactor,
+                COVDecayEventFactor,
+            ),
+            "analyst_forecast",
+        ),
+        *_specs(
+            DISPContext,
+            (
+                DISPFreshnessFactor, DISPInstitutionFactor, DISPMidFactor,
+                DISPSeqFactor, DISPEqualFactor,
+            ),
+            "analyst_forecast",
+        ),
+        *_specs(WCutContext, (WCutReversalFactor,), "pricevolume"),
+        *_specs(SmartMoneyContext, (SmartMoneyFactor,), "pricevolume"),
+        *_specs(APMContext, (APMFactor,), "pricevolume"),
+        *_specs(
+            IntradayOvernightMomentumContext,
+            (IntradayOvernightMomentumFactor,),
+            "pricevolume",
+        ),
+        *_specs(
+            ACTContext,
+            (ACTPositiveFactor, ACTNegativeFactor),
+            "pricevolume",
+        ),
+    )
+}
+
+
+def get_factor_spec(name: str) -> AlphaSpec:
+    """Return a registered Context/Factor pair by factor meta name."""
+
+    key = name.strip().lower()
+    try:
+        return FACTOR_REGISTRY[key]
+    except KeyError as exc:
+        available = ", ".join(sorted(FACTOR_REGISTRY))
+        raise KeyError(f"unknown factor {name!r}; available: {available}") from exc
+
+
+def create_factor(name: str, *, root=None, **context_kwargs):
+    """Create a context and factor pair; the caller closes the Context."""
+
+    spec = get_factor_spec(name)
+    context = spec.create_context(root=root, **context_kwargs)
+    return context, spec.create_factor(context)
+
+
 __all__ = [
     "AlphaBase",
     "AlphaContext",
     "AlphaMeta",
+    "AlphaSpec",
+    "FACTOR_REGISTRY",
+    "get_factor_spec",
+    "create_factor",
     "AFRConfig",
     "AFRContext",
     "AFRFactor",
@@ -69,12 +215,6 @@ __all__ = [
     "SUR1Factor",
     "calculate_sue_family",
     "update_sue_family",
-    "ConsensusConfig",
-    "ConsensusSnapshot",
-    "ConsensusContext",
-    "EPFY1Factor",
-    "PEGFactor",
-    "SCOREFactor",
     "TPERFactor",
     "COVFactor",
     "COVAuthorFactor",
@@ -90,9 +230,6 @@ __all__ = [
     "COVCoverageDecayFactor",
     "COVExpansionEventFactor",
     "COVDecayEventFactor",
-    "DISPFactor",
-    "calculate_consensus_family",
-    "update_consensus_family",
     "ScoreConfig",
     "ScoreContext",
     "ScoreLevelFactor",
@@ -101,4 +238,26 @@ __all__ = [
     "ScoreAdjustment90Factor",
     "calculate_score_family",
     "update_score_family",
+    "SUEFSURFContext",
+    "SUEFFactor",
+    "SURFFactor",
+    "SUEFReportFactor",
+    "SURFReportFactor",
+    "DISPContext",
+    "DISPFreshnessFactor",
+    "DISPInstitutionFactor",
+    "DISPMidFactor",
+    "DISPSeqFactor",
+    "DISPEqualFactor",
+    "WCutContext",
+    "WCutReversalFactor",
+    "SmartMoneyContext",
+    "SmartMoneyFactor",
+    "APMContext",
+    "APMFactor",
+    "IntradayOvernightMomentumContext",
+    "IntradayOvernightMomentumFactor",
+    "ACTContext",
+    "ACTPositiveFactor",
+    "ACTNegativeFactor",
 ]

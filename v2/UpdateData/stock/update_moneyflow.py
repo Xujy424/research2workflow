@@ -70,9 +70,46 @@ def update_d_moneyflow(root, dates, date, ticks, l2_root=None):
 
 if __name__ == '__main__':
 
-    date = '2024-06-14'
-    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
-    root = Path('D:/data')
+    # date = '2024-06-14'
+    # dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
+    # ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
+    # root = Path('D:/data')
 
-    update_d_moneyflow(root, dates, date, ticks)
+    # update_d_moneyflow(root, dates, date, ticks)
+
+
+    from tqdm import tqdm
+    import numpy as np
+    import pandas as pd
+    from pathlib import Path
+    import tushare as ts
+
+    pro = ts.pro_api('GWVVw1-KZIyDzbRMS_z6ZkVdxVlT_bYDl1gw4OzFctvfBwPn-AuhEgonGno-LBys')
+    pro._DataApi__http_url = "https://goostar.cn/api/dispatch"
+
+    dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
+    valid_dates = [date for date in dates if not np.isnat(date)]
+    ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=True)
+    valid_ticks = [tick for tick in ticks if tick!='']
+
+    for date in tqdm(valid_dates[590+679:]):
+        df = pro.moneyflow(
+            trade_date=pd.Timestamp(date).strftime("%Y%m%d")
+        ).drop(['trade_date'], axis=1).set_index('ts_code')
+        df.index = df.index.str.split('.').str[0]
+        df = df.sort_index().reindex(index=valid_ticks)
+        for col in df.columns:
+            val = df[col].to_numpy().astype(np.float32)
+            val_path = Path('Z:/d_moneyflow') / f"{col}.bin"
+            if not val_path.exists():
+                arr = np.full((len(dates), len(ticks)), np.nan, dtype=np.float32)
+                arr.tofile(val_path)
+            else:
+                arr = np.memmap(val_path, dtype=np.float32, mode='r+', shape=(len(dates), len(ticks)))
+            dt = np.searchsorted(dates,date)
+            arr[dt,:len(valid_ticks)] = val
+            arr.flush()
+
+    # d = np.memmap('Z:/d_moneyflow/buy_sm_vol.bin', dtype=np.float32, mode='r', shape=(len(dates), len(ticks)))
+    # print(d[:591])
+            

@@ -58,7 +58,7 @@ class AlphaBase(ABC):
     def calculate(self, asof) -> np.ndarray:
         """Return one cross-section aligned to valid instrument ticks."""
 
-    def run(self, asof) -> np.ndarray:
+    def _cal_align(self, asof) -> np.ndarray:
         values = np.asarray(self.calculate(asof), dtype=np.float32)
         axis = self.context.data.axis
         if values.ndim != 1:
@@ -82,7 +82,7 @@ class AlphaBase(ABC):
         """Calculate and write the cross-section to its axis date row."""
         axis = self.context.data.axis
         row = axis.date_position(asof)
-        values = self.run(asof)
+        values = self._cal_align(asof)
         path = self.output_path(folder)
         path.parent.mkdir(parents=True, exist_ok=True)
         shape = (len(axis.full_dates), len(axis.full_ticks))
@@ -100,7 +100,7 @@ class AlphaBase(ABC):
         return values
 
     def __call__(self, asof) -> np.ndarray:
-        return self.run(asof)
+        return self._cal_align(asof)
 
 
 __all__ = ["AlphaBase", "AlphaContext", "AlphaMeta"]

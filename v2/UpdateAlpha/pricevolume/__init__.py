@@ -4,10 +4,12 @@ from .w_cut_reversal import WCutReversalFactor
 from .smart_money import SmartMoneyFactor as SmartMoneyV2Factor
 from .apm import APMFactor
 from .split_momentum import IntradayOvernightMomentumFactor
+from .active_trade import ACTPositiveFactor, ACTNegativeFactor
 
 __all__ = [
     "WCutReversalFactor",
     "SmartMoneyV2Factor",
     "APMFactor",
     "IntradayOvernightMomentumFactor",
+    "ACTPositiveFactor", "ACTNegativeFactor"
 ]
