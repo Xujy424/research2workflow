@@ -65,6 +65,9 @@ def _aggregate(context, frame, value, alias="value"):
         frame, value, context.analyst_weights, alias
     )
 
+
+DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
+
 @dataclass(frozen=True)
 class AFRConfig:
     lookback_days: int = 90
@@ -81,7 +84,7 @@ class AFRContext(AlphaContext):
     """Share point-in-time SQL and local matrix reads among factors."""
 
     def __init__(
-        self, root=ROOT, conn=None, config=AFRConfig(), analyst_weights=None
+        self, root=DEFAULT_ROOT, conn=None, config=AFRConfig(), analyst_weights=None
     ):
         self.config = config
         self.analyst_weights = analyst_weights
@@ -405,28 +408,45 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
 
+    # Inclusive date range. Use None to select the first/last available date.
+    START_DATE = "2017-01-01"
+    END_DATE = "2026-06-30"
+
     with AFRContext() as context:
-        afr = AFRFactor(context)
+        alpha = PAFRFactor(context)
         trade_dates = context.data["trade_dates"]
 
-        for trade_date in tqdm(trade_dates, desc="Updating AFR"):
-            afr.update(trade_date)
+        date_index = pd.DatetimeIndex(trade_dates)
+        start_date = pd.Timestamp(START_DATE) if START_DATE else date_index[0]
+        end_date = pd.Timestamp(END_DATE) if END_DATE else date_index[-1]
+        if start_date > end_date:
+            raise ValueError("START_DATE must not be later than END_DATE")
+        selected = np.flatnonzero(
+            (date_index >= start_date) & (date_index <= end_date)
+        )
+        if selected.size == 0:
+            raise ValueError("no trade dates found in the requested range")
+        start_idx, end_idx = selected[0], selected[-1]
+        selected_dates = trade_dates[start_idx:end_idx + 1]
 
-        pred = context.data.load("factor_pool/afr").copy()
+        for trade_date in tqdm(selected_dates, desc="Updating PARF"):
+            alpha.update(trade_date)
+
+        pred = context.data.load("factor_pool/pafr").copy()
         pred = pred[
-            :context.data.axis.date_count,
+            start_idx:end_idx + 1,
             :context.data.axis.tick_count,
         ]
         daily_return = context.data.read(
             "d_essentials/pct",
             start_date=0,
-            end_date=pred.shape[0] - 1,
+            end_date=context.data.axis.date_count - 1,
         ) / 100.0
 
         tradable = context.data.read(
             "basic/tradable",
-            start_date=0,
-            end_date=pred.shape[0] - 1,
+            start_date=start_idx,
+            end_date=end_idx,
         )
         pred = np.where(tradable, pred, np.nan)
 
@@ -443,7 +463,8 @@ if __name__ == "__main__":
             forward_return = np.prod(1.0 + windows, axis=-1) - 1.0
 
             label = np.full(pred.shape, np.nan)
-            label[:len(forward_return)] = forward_return
+            range_forward_return = forward_return[start_idx:end_idx + 1]
+            label[:len(range_forward_return)] = range_forward_return
             ic = IC(pred, label)
             rank_ic = rankIC(pred, label)
             group_return = calc_group_ret(pred, label, 10)
@@ -452,7 +473,7 @@ if __name__ == "__main__":
             for group, values in enumerate(cumulative_return, start=1):
                 suffix = " (Low)" if group == 1 else " (High)" if group == 10 else ""
                 ax.plot(
-                    trade_dates[:len(values)],
+                    selected_dates[:len(values)],
                     values,
                     color=colors[group - 1],
                     linewidth=1.2,
@@ -462,7 +483,7 @@ if __name__ == "__main__":
             mean_ic = np.nanmean(ic)
             mean_rank_ic = np.nanmean(rank_ic)
             ax.set_title(
-                f"AFR {horizon}D Forward Return | "
+                f"PARF {horizon}D Forward Return | "
                 f"Mean IC={mean_ic:.4f}, Mean RankIC={mean_rank_ic:.4f}"
             )
             ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
@@ -473,13 +494,18 @@ if __name__ == "__main__":
                 ax.xaxis.get_major_locator()
             ))
 
-        fig.suptitle("AFR Decile Cumulative Excess Returns", fontsize=15)
+        fig.suptitle("PARF Decile Cumulative Excess Returns", fontsize=15)
         fig.supxlabel("Trade Date")
         fig.supylabel("Cumulative Group Excess Return")
         fig.tight_layout()
 
-        output = Path(__file__).resolve().parents[1] / "output" / "afr_group_returns.png"
-        output.parent.mkdir(parents=True, exist_ok=True)
+        range_tag = f"{date_index[start_idx]:%Y%m%d}_{date_index[end_idx]:%Y%m%d}"
+        output = (
+            Path(__file__).resolve().parents[1]
+            / "output"
+            / f"pafr_group_ret_{range_tag}.png"
+        )
+        # output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=160, bbox_inches="tight")
         plt.close(fig)
         print(f"saved: {output}")
