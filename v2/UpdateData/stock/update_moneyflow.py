@@ -84,7 +84,7 @@ if __name__ == '__main__':
     from pathlib import Path
     import tushare as ts
 
-    pro = ts.pro_api('GWVVw1-KZIyDzbRMS_z6ZkVdxVlT_bYDl1gw4OzFctvfBwPn-AuhEgonGno-LBys')
+    pro = ts.pro_api('OQa740832ihF7m4ZdjKVKMI0rkF6v9xLvw2Phi-EbXIdjAaCfUCSz_5WQ4l3bBxB')
     pro._DataApi__http_url = "https://goostar.cn/api/dispatch"
 
     dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=True)
     valid_ticks = [tick for tick in ticks if tick!='']
 
-    for date in tqdm(valid_dates[590+679:]):
+    for date in tqdm(valid_dates[590+679+793+154+357+214+87+67:]):
         df = pro.moneyflow(
             trade_date=pd.Timestamp(date).strftime("%Y%m%d")
         ).drop(['trade_date'], axis=1).set_index('ts_code')

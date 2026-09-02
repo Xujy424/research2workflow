@@ -50,7 +50,7 @@ def select_period(context: AlphaContext, start_date=None, end_date=None):
     date_index = pd.DatetimeIndex(trade_dates)
     start = pd.Timestamp(start_date) if start_date else date_index[0]
     end = pd.Timestamp(end_date) if end_date else date_index[-1]
-    
+
     if start > end:
         raise ValueError("start_date must not be later than end_date")
     selected = np.flatnonzero((date_index >= start) & (date_index <= end))
@@ -59,53 +59,6 @@ def select_period(context: AlphaContext, start_date=None, end_date=None):
     
     start_idx, end_idx = int(selected[0]), int(selected[-1])
     return trade_dates[start_idx:end_idx + 1], start_idx, end_idx
-
-
-def cal_alpha(
-    context_class,
-    factor_class,
-    start_date=None,
-    end_date=None,
-    *,
-    root=DEFAULT_ROOT,
-    folder="factor_pool",
-    context_kwargs=None,
-):
-    """Calculate one factor class over an inclusive trade-date range."""
-
-    kwargs = dict(context_kwargs or {})
-    kwargs.setdefault("root", root)
-    with context_class(**kwargs) as context:
-        factor = factor_class(context)
-        selected_dates, _, _ = select_period(context, start_date, end_date)
-        for trade_date in tqdm(
-            selected_dates, desc=f"Updating {factor.meta.name}"
-        ):
-            factor.update(trade_date, folder=folder)
-    return factor.meta.name
-
-
-def calculate_registered(
-    name,
-    start_date=None,
-    end_date=None,
-    *,
-    root=DEFAULT_ROOT,
-    folder="factor_pool",
-    context_kwargs=None,
-):
-    """Resolve a registered factor, calculate it, and persist its matrix."""
-
-    spec = get_factor_spec(name)
-    return cal_alpha(
-        spec.context_class,
-        spec.factor_class,
-        start_date,
-        end_date,
-        root=root,
-        folder=folder,
-        context_kwargs=context_kwargs,
-    )
 
 
 def _forward_label(
@@ -117,7 +70,6 @@ def _forward_label(
     return_offset,
 ):
     """Build labels using pct[t + offset : t + offset + horizon]."""
-
     windows = np.lib.stride_tricks.sliding_window_view(
         daily_return[return_offset:], horizon, axis=0
     )
@@ -260,6 +212,9 @@ def run_registered(
     start_date=None,
     end_date=None,
     *,
+    factor_class=None,
+    context_class=None,
+    category="custom",
     root=DEFAULT_ROOT,
     calculate=True,
     folder="factor_pool",
@@ -271,9 +226,15 @@ def run_registered(
 ):
     """Calculate and/or plot one registered factor."""
 
-    spec = get_factor_spec(name)
+    spec = get_factor_spec(
+        name,
+        factor_class=factor_class,
+        context_class=context_class,
+        category=category,
+    )
     kwargs = dict(context_kwargs or {})
     kwargs.setdefault("root", root)
+    
     with spec.context_class(**kwargs) as context:
         factor = spec.factor_class(context)
         if calculate:
@@ -282,6 +243,7 @@ def run_registered(
                 selected_dates, desc=f"Updating {factor.meta.name}"
             ):
                 factor.update(trade_date, folder=folder)
+
         return plot_group_ret(
             factor.meta.name,
             context,
@@ -297,8 +259,6 @@ def run_registered(
 
 
 def list_factors():
-    """Return the registry as a display-friendly DataFrame."""
-
     return pd.DataFrame(
         [
             {
@@ -312,6 +272,9 @@ def list_factors():
             for name, spec in sorted(FACTOR_REGISTRY.items())
         ]
     )
+
+
+
 
 
 def _parse_args(argv=None):
@@ -367,5 +330,60 @@ def main(argv=None):
     return 0
 
 
+def run_from_ide(
+    factors,
+    *,
+    start_date=None,
+    end_date=None,
+    root=DEFAULT_ROOT,
+    calculate=True,
+    folder="factor_pool",
+    horizons=DEFAULT_HORIZONS,
+    num_groups=10,
+    return_offset=2,
+    output_dir=None,
+):
+    """Run one or more factors directly from Python without parsing argv."""
+
+    results = {}
+    for name in factors:
+        output, stats = run_registered(
+            name,
+            start_date,
+            end_date,
+            root=Path(root),
+            calculate=calculate,
+            folder=folder,
+            horizons=horizons,
+            num_groups=num_groups,
+            return_offset=return_offset,
+            output_dir=output_dir,
+        )
+        results[name] = {"output": output, "stats": stats}
+        print(stats.to_string(index=False))
+        print(f"completed: {output}")
+    return results
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # IDE direct-run configuration. Factor names are shown by list_factors().
+    FACTORS = ("apm",)
+    START_DATE = "2017-01-01"
+    END_DATE = "2026-06-30"
+
+    # True: calculate factor values first and then plot.
+    # False: plot an existing factor_pool matrix only.
+    CALCULATE = True
+
+    run_from_ide(
+        FACTORS,
+        start_date=START_DATE,
+        end_date=END_DATE,
+        root=DEFAULT_ROOT,
+        calculate=CALCULATE,
+        folder="factor_pool",
+        horizons=(1, 5, 10, 20),
+        num_groups=10,
+        return_offset=2,
+        output_dir=None,
+    )

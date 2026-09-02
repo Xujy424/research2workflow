@@ -172,20 +172,38 @@ FACTOR_REGISTRY = {
 }
 
 
-def get_factor_spec(name: str) -> AlphaSpec:
-    """Return a registered Context/Factor pair by factor meta name."""
+def get_factor_spec(
+    name: str,
+    *,
+    factor_class=None,
+    context_class=None,
+    category="custom",
+) -> AlphaSpec:
+    """Return a registered spec, creating and caching one when classes are given."""
 
     key = name.strip().lower()
-    try:
-        return FACTOR_REGISTRY[key]
-    except KeyError as exc:
-        available = ", ".join(sorted(FACTOR_REGISTRY))
-        raise KeyError(f"unknown factor {name!r}; available: {available}") from exc
+    spec = FACTOR_REGISTRY.get(key)
+    if spec is not None:
+        return spec
+
+    if factor_class is not None and context_class is not None:
+        spec = AlphaSpec(factor_class, context_class, category)
+        if spec.name != key:
+            raise ValueError(
+                f"factor name {name!r} does not match meta.name {spec.name!r}"
+            )
+        FACTOR_REGISTRY[key] = spec
+        return spec
+
+    available = ", ".join(sorted(FACTOR_REGISTRY))
+    raise KeyError(
+        f"unknown factor {name!r}; pass factor_class and context_class "
+        f"to register it, or choose from: {available}"
+    )
 
 
 def create_factor(name: str, *, root=None, **context_kwargs):
     """Create a context and factor pair; the caller closes the Context."""
-
     spec = get_factor_spec(name)
     context = spec.create_context(root=root, **context_kwargs)
     return context, spec.create_factor(context)
