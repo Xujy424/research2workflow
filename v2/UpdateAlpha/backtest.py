@@ -14,7 +14,6 @@ Plot an existing factor matrix without recalculating:
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 import sys
 
@@ -240,7 +239,9 @@ def run_registered(
         if calculate:
             selected_dates, _, _ = select_period(context, start_date, end_date)
             for trade_date in tqdm(
-                selected_dates, desc=f"Updating {factor.meta.name}"
+                selected_dates,
+                desc=f"Updating {factor.meta.name}",
+                file=sys.stdout,
             ):
                 factor.update(trade_date, folder=folder)
 
@@ -274,60 +275,6 @@ def list_factors():
     )
 
 
-
-
-
-def _parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("factors", nargs="*", help="registered factor meta names")
-    parser.add_argument("--list", action="store_true", help="list registered factors")
-    parser.add_argument("--start", help="inclusive start date")
-    parser.add_argument("--end", help="inclusive end date")
-    parser.add_argument("--root", default=str(DEFAULT_ROOT))
-    parser.add_argument("--folder", default="factor_pool")
-    parser.add_argument(
-        "--plot-only",
-        action="store_true",
-        help="skip calculation and plot existing factor matrices",
-    )
-    parser.add_argument("--output", help="output directory for plots")
-    parser.add_argument(
-        "--horizons", nargs="+", type=int, default=list(DEFAULT_HORIZONS)
-    )
-    parser.add_argument("--groups", type=int, default=10)
-    parser.add_argument(
-        "--return-offset",
-        type=int,
-        default=2,
-        help="first pct row relative to signal t; project default is 2",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv=None):
-    args = _parse_args(argv)
-    if args.list:
-        print(list_factors().to_string(index=False))
-        return 0
-    if not args.factors:
-        raise SystemExit("provide at least one factor name or use --list")
-
-    for name in args.factors:
-        output, stats = run_registered(
-            name,
-            args.start,
-            args.end,
-            root=Path(args.root),
-            calculate=not args.plot_only,
-            folder=args.folder,
-            horizons=args.horizons,
-            num_groups=args.groups,
-            return_offset=args.return_offset,
-            output_dir=args.output,
-        )
-        print(stats.to_string(index=False))
-        print(f"completed: {output}")
-    return 0
 
 
 def run_from_ide(
