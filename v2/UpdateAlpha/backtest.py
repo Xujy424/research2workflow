@@ -193,7 +193,7 @@ def plot_group_ret(
     destination = (
         Path(output_dir)
         if output_dir is not None
-        else Path.cwd() / "output" / name
+        else Path.cwd() / "v2"/"UpdateAlpha"/"output" / name
     )
     destination.mkdir(parents=True, exist_ok=True)
     first_date = pd.Timestamp(selected_dates[0])
@@ -314,8 +314,8 @@ def run_from_ide(
 
 if __name__ == "__main__":
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("apm",)
-    START_DATE = "2017-01-01"
+    FACTORS = ("qua",)
+    START_DATE = "2025-01-01"
     END_DATE = "2026-06-30"
 
     # True: calculate factor values first and then plot.

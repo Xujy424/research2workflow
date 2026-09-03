@@ -74,6 +74,7 @@ from .analyst_forecast.suef_surf import (
 from .pricevolume.w_cut_reversal import WCutContext, WCutReversalFactor
 from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
 from .pricevolume.apm import APMContext, APMFactor
+from .pricevolume.qua import QUAContext, QUAFactor, MTSFactor, MTEFactor
 from .pricevolume.split_momentum import (
     IntradayOvernightMomentumContext,
     IntradayOvernightMomentumFactor,
@@ -158,6 +159,7 @@ FACTOR_REGISTRY = {
         *_specs(WCutContext, (WCutReversalFactor,), "pricevolume"),
         *_specs(SmartMoneyContext, (SmartMoneyFactor,), "pricevolume"),
         *_specs(APMContext, (APMFactor,), "pricevolume"),
+        *_specs(QUAContext, (QUAFactor, MTSFactor, MTEFactor), "pricevolume"),
         *_specs(
             IntradayOvernightMomentumContext,
             (IntradayOvernightMomentumFactor,),
@@ -273,6 +275,10 @@ __all__ = [
     "SmartMoneyFactor",
     "APMContext",
     "APMFactor",
+    "QUAContext",
+    "QUAFactor",
+    "MTSFactor",
+    "MTEFactor",
     "IntradayOvernightMomentumContext",
     "IntradayOvernightMomentumFactor",
     "ACTContext",

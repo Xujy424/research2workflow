@@ -84,15 +84,22 @@ if __name__ == '__main__':
     from pathlib import Path
     import tushare as ts
 
-    pro = ts.pro_api('OQa740832ihF7m4ZdjKVKMI0rkF6v9xLvw2Phi-EbXIdjAaCfUCSz_5WQ4l3bBxB')
-    pro._DataApi__http_url = "https://goostar.cn/api/dispatch"
+    token = '006af74e990e3531f7ab1dfb5912cdb34005e2f5526ed17915bf8483e47d'
+    pro = ts.pro_api(token)
+    pro._DataApi__token = token
+    pro._DataApi__http_url = 'https://tuaremax.top'  # 保证有这个代码，不然不可以获取
+
+    # df = pro.daily(ts_code='000001.SZ', start_date='20240101', end_date='20240131')
+    # print(df)
+
+
 
     dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
     valid_dates = [date for date in dates if not np.isnat(date)]
     ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=True)
     valid_ticks = [tick for tick in ticks if tick!='']
 
-    for date in tqdm(valid_dates[590+679+793+154+357+214+87+67:]):
+    for date in tqdm(valid_dates):
         df = pro.moneyflow(
             trade_date=pd.Timestamp(date).strftime("%Y%m%d")
         ).drop(['trade_date'], axis=1).set_index('ts_code')
@@ -100,16 +107,18 @@ if __name__ == '__main__':
         df = df.sort_index().reindex(index=valid_ticks)
         for col in df.columns:
             val = df[col].to_numpy().astype(np.float32)
-            val_path = Path('Z:/d_moneyflow') / f"{col}.bin"
+            val_path = Path('Z:/stock/d_moneyflow') / f"{col}.bin"
             if not val_path.exists():
                 arr = np.full((len(dates), len(ticks)), np.nan, dtype=np.float32)
                 arr.tofile(val_path)
+                arr = np.memmap(val_path, dtype=np.float32, mode='r+', shape=(len(dates), len(ticks)))
             else:
                 arr = np.memmap(val_path, dtype=np.float32, mode='r+', shape=(len(dates), len(ticks)))
             dt = np.searchsorted(dates,date)
             arr[dt,:len(valid_ticks)] = val
             arr.flush()
+    # 2025-10-14
 
     # d = np.memmap('Z:/d_moneyflow/buy_sm_vol.bin', dtype=np.float32, mode='r', shape=(len(dates), len(ticks)))
-    # print(d[:591])
+    # print(valid_dates[590+679+793+154+357+214+87+67+226+222+81+15+72+79+86+107])
             
