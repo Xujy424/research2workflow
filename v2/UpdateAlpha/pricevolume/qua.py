@@ -86,28 +86,20 @@ def _minute_trade_statistics(path: Path) -> pl.LazyFrame:
             (pl.col("Price") > 0)
             & (pl.col("OrderQty") > 0)
             & (
-                pl.col("TransactTime").is_between(
-                    time(9, 30), time(11, 30), closed="left"
-                )
-                | pl.col("TransactTime").is_between(
-                    time(13, 0), time(15, 0), closed="left"
-                )
+                pl.col("TransactTime").is_between(time(9, 30), time(11, 30), closed="left")
+                | pl.col("TransactTime").is_between(time(13, 0), time(14, 57), closed="left")
             )
         )
         .with_columns(
             pl.col("SecurityID").cast(pl.String).str.pad_start(6, "0").alias("tick"),
-            # Polars Time is stored as nanoseconds since midnight.  Integer
-            # minute keys avoid an unsupported Time.dt.truncate operation.
-            (
-                pl.col("TransactTime").cast(pl.Int64) // 60_000_000_000
-            ).alias("minute"),
+            (pl.col("TransactTime").cast(pl.Int64) // 60_000_000_000).alias("minute"),
             (pl.col("Price") * pl.col("OrderQty")).alias("trade_amount"),
         )
         .group_by("tick", "minute")
         .agg(
             pl.col("trade_amount").mean().alias("average_trade_amount"),
             pl.col("trade_amount").sum().alias("total_amount"),
-            pl.col("Price").sort_by("TransactTime").last().alias("close"),
+            pl.col("Price").sort_by("TransactTime").last().alias("close"),   # 这里好像有点问题，收盘价格是否等于最后一笔成交价格？
         )
     )
 
@@ -130,10 +122,7 @@ def _daily_qua(l2_root: Path, date, config: QUAConfig) -> pl.DataFrame:
         return _empty_daily("qua")
 
     minute = minute.with_columns(
-        pl.col("average_trade_amount")
-        .rank(method="ordinal", descending=True)
-        .over("tick")
-        .alias("large_rank"),
+        pl.col("average_trade_amount").rank(method="ordinal", descending=True).over("tick").alias("large_rank"),
         pl.len().over("tick").alias("minute_count"),
     )
     retained = minute.filter(
@@ -145,9 +134,7 @@ def _daily_qua(l2_root: Path, date, config: QUAConfig) -> pl.DataFrame:
         .agg(
             pl.col("average_trade_amount").min().alias("minimum"),
             pl.col("average_trade_amount").max().alias("maximum"),
-            pl.col("average_trade_amount")
-            .quantile(config.quantile, interpolation="linear")
-            .alias("q10"),
+            pl.col("average_trade_amount").quantile(config.quantile, interpolation="linear").alias("q10"),
         )
         .with_columns(
             pl.when(pl.col("maximum") > pl.col("minimum"))
@@ -197,7 +184,6 @@ def _daily_mte(l2_root: Path, date, config: QUAConfig) -> pl.DataFrame:
 
 class _RollingMinuteFactor(AlphaBase):
     daily_column: str
-
     dependencies = ("l2/proc/shcj.pq", "l2/proc/szcj.pq")
 
     def calculate(self, asof):
