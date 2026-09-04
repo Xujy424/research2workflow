@@ -183,6 +183,7 @@ def _daily_mte(l2_root: Path, date, config: QUAConfig) -> pl.DataFrame:
 
 
 class _RollingMinuteFactor(AlphaBase):
+    filter_tradable: bool = False
     daily_column: str
     dependencies = ("l2/proc/shcj.pq", "l2/proc/szcj.pq")
 
@@ -202,6 +203,16 @@ class _RollingMinuteFactor(AlphaBase):
             ]
         )
         valid = np.isfinite(daily)
+        if self.filter_tradable:
+            tradable = np.asarray(
+                self.context.data.read(
+                    "basic/tradable",
+                    start_date=start,
+                    end_date=end,
+                ),
+                dtype=bool,
+            )
+            valid &= tradable
         count = valid.sum(axis=0)
         result = np.divide(
             np.where(valid, daily, 0).sum(axis=0),
@@ -209,6 +220,8 @@ class _RollingMinuteFactor(AlphaBase):
             out=np.full(axis.tick_count, np.nan),
             where=count >= config.min_valid_days,
         )
+        if self.filter_tradable:
+            result = np.where(tradable[-1], result, np.nan)
         return result.astype(np.float32)
 
 
@@ -225,6 +238,8 @@ class QUAFactor(_RollingMinuteFactor):
 
 class MTSFactor(_RollingMinuteFactor):
     """20-day mean correlation of average trade amount and total amount."""
+
+    filter_tradable = True
 
     meta = AlphaMeta(
         "mts",

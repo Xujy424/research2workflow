@@ -298,33 +298,7 @@ class _ConsensusSurpriseFactor(AlphaBase):
         return self.context.align(self.cross_section(_date(asof)), self.column)
 
 
-class _SimpleConsensusSurpriseFactor(_ConsensusSurpriseFactor):
-    """Simple surprise: (actual quarter - expected quarter) / |expected quarter|."""
 
-    def cross_section(self, asof):
-        events = self.context.actual_events(asof)
-        if events.is_empty():
-            return pl.DataFrame(schema={"tick": pl.String, self.column: pl.Float64})
-        events = events.with_columns(pl.col("publish_date").alias("cutoff"))
-        prior, actual_q, prior_fy, prior_before, prior_q = self._quarter_fields(
-            events, self.actual_column
-        )
-        forecast = self._forecast(events)
-        expected_q = prior_q * (
-            1.0 + _growth(forecast - prior, prior_fy - prior_before)
-        )
-        surprise = np.divide(
-            actual_q - expected_q,
-            np.abs(expected_q),
-            out=np.full_like(expected_q, np.nan, dtype=float),
-            where=np.isfinite(expected_q) & (expected_q != 0),
-        )
-        return (
-            events.with_columns(pl.Series(self.column, surprise))
-            .sort(["tick", "publish_date", "end_date"])
-            .unique("tick", keep="last", maintain_order=True)
-            .select("tick", self.column)
-        )
 
 
 class SUEFFactor(_ConsensusSurpriseFactor):
@@ -357,8 +331,42 @@ class SURFReportFactor(SURFFactor):
     source = "reports"
 
 
+
+
+
+class _SimpleConsensusSurpriseFactor(_ConsensusSurpriseFactor):
+    """Daily simple surprise using the original SUEF/SURF expected-quarter logic."""
+
+    def cross_section(self, asof):
+        events = self.context.actual_events(asof)
+        if events.is_empty():
+            return pl.DataFrame(schema={"tick": pl.String, self.column: pl.Float64})
+        events = events.with_columns(pl.col("publish_date").alias("cutoff"))
+        prior, actual_q, prior_fy, prior_before, prior_q = self._quarter_fields(
+            events, self.actual_column
+        )
+        annual_forecast = self._forecast(events)
+        expected_q = prior_q * (
+            1.0 + _growth(annual_forecast - prior, prior_fy - prior_before)
+        )
+        surprise = np.divide(
+            actual_q - expected_q,
+            np.abs(expected_q),
+            out=np.full_like(expected_q, np.nan, dtype=float),
+            where=np.isfinite(expected_q) & (expected_q != 0),
+        )
+        return (
+            events.with_columns(pl.Series(self.column, surprise))
+            .sort(["tick", "publish_date", "end_date"])
+            .unique("tick", keep="last", maintain_order=True)
+            .select("tick", self.column)
+        )
+
+
 class SUEFSimpleFactor(_SimpleConsensusSurpriseFactor):
-    meta = AlphaMeta("suef_simple", "local-consensus earnings surprise / expected")
+    meta = AlphaMeta(
+        "suef_simple", "daily earnings surprise / abs(expected quarter)"
+    )
     column = "suef_simple"
     actual_column = "net_profit_accum"
     local_field = SUEFSURFConfig.local_np_field
@@ -366,32 +374,17 @@ class SUEFSimpleFactor(_SimpleConsensusSurpriseFactor):
 
 
 class SURFSimpleFactor(_SimpleConsensusSurpriseFactor):
-    meta = AlphaMeta("surf_simple", "local-consensus revenue surprise / expected")
+    meta = AlphaMeta(
+        "surf_simple", "daily revenue surprise / abs(expected quarter)"
+    )
     column = "surf_simple"
     actual_column = "revenue_accum"
     local_field = SUEFSURFConfig.local_revenue_field
     report_column = "forecast_or"
 
-
-class SUEFReportSimpleFactor(SUEFSimpleFactor):
-    meta = AlphaMeta(
-        "suef_reports_simple", "90D report-consensus earnings surprise / expected"
-    )
-    source = "reports"
-
-
-class SURFReportSimpleFactor(SURFSimpleFactor):
-    meta = AlphaMeta(
-        "surf_reports_simple", "90D report-consensus revenue surprise / expected"
-    )
-    source = "reports"
-
-
 __all__ = [
     "SUEFSURFConfig", "SUEFSURFContext", "SUEFFactor", "SURFFactor",
     "SUEFReportFactor", "SURFReportFactor",
-    "SUEFSimpleFactor", "SURFSimpleFactor",
-    "SUEFReportSimpleFactor", "SURFReportSimpleFactor",
 ]
 
 
