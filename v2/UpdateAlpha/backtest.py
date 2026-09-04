@@ -314,9 +314,9 @@ def run_from_ide(
 
 if __name__ == "__main__":
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("suef_simple",)
-    START_DATE = "2023-01-01"
-    END_DATE = "2026-06-30"
+    FACTORS = ("mts",)
+    START_DATE = "2026-01-01"
+    END_DATE = "2026-07-24"
 
     # True: calculate factor values first and then plot.
     # False: plot an existing factor_pool matrix only.
