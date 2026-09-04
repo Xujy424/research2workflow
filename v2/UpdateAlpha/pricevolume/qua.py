@@ -239,7 +239,7 @@ class QUAFactor(_RollingMinuteFactor):
 class MTSFactor(_RollingMinuteFactor):
     """20-day mean correlation of average trade amount and total amount."""
 
-    filter_tradable = True
+    filter_tradable = False
 
     meta = AlphaMeta(
         "mts",
