@@ -70,8 +70,6 @@ from .analyst_forecast.suef_surf import (
     SURFFactor,
     SUEFReportFactor,
     SURFReportFactor,
-    SUEFSimpleFactor,
-    SURFSimpleFactor,
 )
 from .pricevolume.w_cut_reversal import WCutContext, WCutReversalFactor
 from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
@@ -136,7 +134,6 @@ FACTOR_REGISTRY = {
             SUEFSURFContext,
             (
                 SUEFFactor, SURFFactor, SUEFReportFactor, SURFReportFactor,
-                SUEFSimpleFactor, SURFSimpleFactor,
             ),
             "analyst_forecast",
         ),
@@ -268,8 +265,6 @@ __all__ = [
     "SURFFactor",
     "SUEFReportFactor",
     "SURFReportFactor",
-    "SUEFSimpleFactor",
-    "SURFSimpleFactor",
     "DISPContext",
     "DISPFreshnessFactor",
     "DISPInstitutionFactor",
