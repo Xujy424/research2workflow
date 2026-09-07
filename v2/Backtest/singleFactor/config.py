@@ -125,11 +125,18 @@ class CapacityConfig:
     capital: tuple[float, ...] = (1e7, 5e7, 1e8, 5e8)
     max_participation: float = 0.10
     commission_bps: float = 10.0
+    # Percentage coefficient in impact = value * coefficient/100 * sqrt(participation).
     impact_coefficient: float = 0.001
     lot_size: int = 100
+    min_fill_ratio: float = 0.80
+    min_sharpe: float = 1.0
 
     def __post_init__(self):
         if not 0 < self.max_participation <= 1:
             raise ValueError("max_participation must be in (0, 1]")
         if self.lot_size < 1 or any(x <= 0 for x in self.capital):
             raise ValueError("capital and lot_size must be positive")
+        if self.commission_bps < 0 or self.impact_coefficient < 0:
+            raise ValueError("execution costs must be non-negative")
+        if not 0 <= self.min_fill_ratio <= 1:
+            raise ValueError("min_fill_ratio must be in [0, 1]")
