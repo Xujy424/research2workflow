@@ -188,9 +188,15 @@ def run_event(event_signal, stock_return, tradable, industry=None,
 
 
 def run_capacity(target_weight, next_open, next_amount):
-    simulator = CapacitySimulator(CapacityConfig(
-        capital=(1e7, 5e7, 1e8, 5e8), max_participation=.1,
-        commission_bps=10, impact_coefficient=.001, lot_size=100))
+    simulator = CapacitySimulator(
+        CapacityConfig(
+            capital=(1e7, 5e7, 1e8, 5e8), 
+            max_participation=.1,
+            commission_bps=10, 
+            impact_coefficient=.001, 
+            lot_size=100
+        )
+    )
     return simulator.run(target_weight, next_open, next_amount)
 
 
