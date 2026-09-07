@@ -30,8 +30,10 @@ class CapacitySimulator:
         for frame in (execution_price, traded_amount):
             if not target_weight.index.equals(frame.index) or not target_weight.columns.equals(frame.columns):
                 raise ValueError("capacity inputs must have identical axes")
+            
         price, amount = execution_price.to_numpy(float), traded_amount.to_numpy(float)
         target = target_weight.to_numpy(float)
+
         summaries, curves, fills = [], {}, {}
         for initial in self.config.capital:
             cash, shares = float(initial), np.zeros(target.shape[1])
