@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-from .builders import event_triggers
+from .builders import event_directions, event_triggers
 from .config import EventConfig
 from .data import FactorData
 
@@ -36,40 +36,124 @@ def _hac_mean_test(values, max_lag):
     return t_value, p_value
 
 
-def _forward_path(returns, start, horizon):
-    block = returns[start + 1:start + horizon + 1]
-    if len(block) < horizon or not np.isfinite(block).all():
-        return np.nan
-    return np.prod(1 + block) - 1
+def _forward_return_matrix(returns, horizon):
+    """Vectorized forward compounded returns for every date and asset."""
+    if not isinstance(horizon, (int, np.integer)) or horizon < 1:
+        raise ValueError("horizons must contain positive integers")
+    out = np.full(returns.shape, np.nan, dtype=float)
+    if len(returns) <= horizon:
+        return out
+
+    windows = np.lib.stride_tricks.sliding_window_view(
+        returns[2:], window_shape=horizon, axis=0
+    )
+    valid = np.isfinite(windows).all(axis=-1)
+    compounded = np.prod(
+        1.0 + np.where(np.isfinite(windows), windows, 0.0),
+        axis=-1,
+    ) - 1.0
+    out[:len(compounded)] = np.where(valid, compounded, np.nan)
+    return out
+
+
+def _row_peer_mean(forward, eligible):
+    """Nan-aware equal-weight peer return for every date."""
+    valid = eligible & np.isfinite(forward)
+    count = valid.sum(axis=1)
+    total = np.where(valid, forward, 0.0).sum(axis=1)
+    return np.divide(
+        total, count,
+        out=np.full(forward.shape[0], np.nan, dtype=float),
+        where=count > 0,
+    )
+
+
+def _industry_peer_return(forward, tradable, industry, event_t, event_j):
+    """Industry peer means for event observations without per-event loops."""
+    peer_return = np.full(len(event_t), np.nan, dtype=float)
+    if not len(event_t):
+        return peer_return   # event_t是有重复日期的事件序列，非时间序列
+
+    # 找出每个事件日期的起始位置
+    dates, starts = np.unique(event_t, return_index=True)
+    stops = np.r_[starts[1:], len(event_t)]
+    for t, start, stop in zip(dates, starts, stops):
+        positions = np.arange(start, stop)
+        event_inds = industry[t, event_j[positions]]
+        for ind in np.unique(event_inds[np.isfinite(event_inds)]):
+            same_code = event_inds == ind  # 某个行业的filter
+            peers = (
+                tradable[t]
+                & np.isfinite(forward[t])
+                & (industry[t] == ind)
+            )
+            if peers.any():
+                peer_return[positions[same_code]] = forward[t, peers].mean()
+    return peer_return
 
 
 def run_event_study(raw: FactorData, event=EventConfig(),
                     horizons=(1, 3, 5, 10, 20), adjustment="none"):
     """Measure event returns after t, optionally market/industry adjusted."""
+    horizons = tuple(horizons)
     data = raw.aligned()
     if adjustment not in {"none", "market", "industry"}:
         raise ValueError("adjustment must be none, market or industry")
     if adjustment == "industry" and data.industry is None:
         raise ValueError("industry adjustment requires industry")
+    
     signal, returns = data.signal.to_numpy(), data.returns.to_numpy()
     tradable = data.tradable.to_numpy()
+    if data.benchmark_weight is not None:
+        benchmark = data.benchmark_weight.to_numpy(float)
+        tradable = (
+            tradable
+            & np.isfinite(benchmark)
+            & (benchmark > 0)
+        )
     trigger = event_triggers(signal, tradable, event)
-    rows = []
-    for t, j in zip(*np.where(trigger)):
-        direction = np.sign(signal[t, j]) or 1.0
-        peers = tradable[t].copy()
-        if adjustment == "industry":
-            peers &= data.industry.to_numpy()[t] == data.industry.to_numpy()[t, j]
-        for horizon in horizons:
-            value = _forward_path(returns[:, j], t, horizon)
-            if adjustment != "none":
-                peer_values = [_forward_path(returns[:, k], t, horizon)
-                               for k in np.flatnonzero(peers)]
-                value -= np.nanmean(peer_values)
-            rows.append((data.signal.index[t], data.signal.columns[j], horizon,
-                         direction, direction * value))
-    observations = pd.DataFrame(rows, columns=[
-        "event_date", "asset", "horizon", "direction", "return"])
+    direction = event_directions(signal, event)
+    trigger &= direction != 0
+
+    event_t, event_j = np.where(trigger)
+    event_direction = direction[event_t, event_j]
+    event_dates = data.signal.index.to_numpy()[event_t]
+    event_assets = data.signal.columns.to_numpy()[event_j]
+    industry = (
+        None if data.industry is None else data.industry.to_numpy()
+    )
+
+    adjusted_returns = []
+    for horizon in horizons:
+        forward = _forward_return_matrix(returns, horizon)
+        event_return = forward[event_t, event_j]
+        if adjustment == "market":
+            peer_return = _row_peer_mean(forward, tradable)[event_t]
+            event_return = event_return - peer_return
+        elif adjustment == "industry":
+            peer_return = _industry_peer_return(
+                forward, tradable, industry, event_t, event_j
+            )
+            event_return = event_return - peer_return
+
+        adjusted_returns.append(event_return)
+
+    if len(event_t) and horizons:
+        return_matrix = (
+            event_direction[:, None] * np.column_stack(adjusted_returns)
+        )
+        observations = pd.DataFrame({
+            "event_date": np.repeat(event_dates, len(horizons)),
+            "asset": np.repeat(event_assets, len(horizons)),
+            "horizon": np.tile(horizons, len(event_t)), # eg:(1,3,5)*2
+            "direction": np.repeat(event_direction, len(horizons)),
+            "return": return_matrix.ravel(),
+        })
+    else:
+        observations = pd.DataFrame(columns=[
+            "event_date", "asset", "horizon", "direction", "return"
+        ])
+    
     stats = []
     for horizon in horizons:
         values = observations.loc[

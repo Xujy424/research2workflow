@@ -30,14 +30,15 @@ class SignalInput(str, Enum):
 
 
 class EventTrigger(str, Enum):
-    NONZERO = "nonzero"
-    CHANGE = "change"
-    CROSS = "cross"
+    NONZERO = "nonzero"   # 事件发生
+    CHANGE = "change"     # 事件双向变化达到阈值
+    CROSS = "cross"       # 事件在阈值之上
 
 
 class EventPortfolioMode(str, Enum):
-    ACTIVE = "active"
-    TRIGGERED_EQUAL_WEIGHT = "triggered_equal_weight"
+    ACTIVE = "active"                                  # 事件信号中心化、gross归一化，检验纯事件Alpha
+    TRIGGERED_EQUAL_WEIGHT = "triggered_equal_weight"  # 事件股票等权纯多头，实际持有事件股票，并于基准比较
+    BENCHMARK_ENHANCED = "benchmark_enhanced"          # benchmark+中性化事件权重，用事件alpha做指数增强
 
 
 class RebalanceFrequency(str, Enum):
@@ -90,7 +91,7 @@ class EventConfig:
     holding_days: int = 5
     cooldown_days: int = 0
     cross_sectionalize: bool = True
-    pair_within_industry: bool = False
+    neutralize_within_industry: bool = False
     portfolio_mode: EventPortfolioMode = EventPortfolioMode.ACTIVE
 
     def __post_init__(self):

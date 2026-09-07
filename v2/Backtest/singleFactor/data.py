@@ -20,8 +20,7 @@ class FactorData:
             raise ValueError("signal dates must be increasing")
         if self.signal.index.has_duplicates or self.signal.columns.has_duplicates:
             raise ValueError("signal axes must be unique")
-        optional = (self.tradable, self.industry, self.benchmark_weight,
-                    self.market_weight)
+        optional = (self.tradable, self.industry, self.benchmark_weight, self.market_weight)
         for frame in (self.returns, *[x for x in optional if x is not None]):
             if not self.signal.index.equals(frame.index):
                 raise ValueError("all inputs must have identical date axes")
