@@ -21,8 +21,12 @@ class CapacitySimulator:
     def __init__(self, config=CapacityConfig()):
         self.config = config
 
-    def run(self, target_weight: pd.DataFrame, execution_price: pd.DataFrame,
-            traded_amount: pd.DataFrame) -> CapacityResult:
+    def run(
+        self, 
+        target_weight: pd.DataFrame, 
+        execution_price: pd.DataFrame,
+        traded_amount: pd.DataFrame
+    ) -> CapacityResult:
         for frame in (execution_price, traded_amount):
             if not target_weight.index.equals(frame.index) or not target_weight.columns.equals(frame.columns):
                 raise ValueError("capacity inputs must have identical axes")
