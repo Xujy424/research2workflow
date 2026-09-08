@@ -17,6 +17,21 @@ class CapacityResult:
     turnover: dict[float, pd.Series] = field(default_factory=dict)
     commission_cost_ratio: dict[float, pd.Series] = field(default_factory=dict)
     impact_cost_ratio: dict[float, pd.Series] = field(default_factory=dict)
+    actual_weight: dict[float, pd.DataFrame] = field(default_factory=dict)
+    weight_deviation: dict[float, pd.Series] = field(default_factory=dict)
+    net_exposure_deviation: dict[float, pd.Series] = field(default_factory=dict)
+    group_exposure_deviation: dict[float, pd.Series] = field(default_factory=dict)
+
+    def report(self, print_summary=True, plot=True, show=True,
+               figsize=(14, 18)):
+        """Print the statistics table and optionally build diagnostic plots."""
+        return report_capacity_result(
+            self,
+            print_summary=print_summary,
+            plot=plot,
+            show=show,
+            figsize=figsize,
+        )
 
 
 class CapacitySimulator:
@@ -42,24 +57,65 @@ class CapacitySimulator:
         )
         return float(gross_value), float(commission), float(impact)
 
+    @staticmethod
+    def _repair_bucket_exposure(requested, candidate, price, groups=None):
+        """Match buy/sell completion rates inside each exposure bucket."""
+        repaired = candidate.copy()
+        requested_value = requested * price
+        candidate_value = candidate * price
+        if groups is None:
+            bucket_masks = [np.ones(len(requested), dtype=bool)]
+        else:
+            finite = np.isfinite(groups)
+            bucket_masks = [
+                groups == code for code in np.unique(groups[finite])
+            ]
+            if (~finite).any():
+                bucket_masks.append(~finite)
+
+        for bucket in bucket_masks:
+            buy = bucket & (requested_value > 0)
+            sell = bucket & (requested_value < 0)
+            requested_buy = requested_value[buy].sum()
+            requested_sell = -requested_value[sell].sum()
+            if requested_buy <= 0 or requested_sell <= 0:
+                continue
+
+            candidate_buy = candidate_value[buy].sum()
+            candidate_sell = -candidate_value[sell].sum()
+            buy_fill = candidate_buy / requested_buy
+            sell_fill = candidate_sell / requested_sell
+            common_fill = min(buy_fill, sell_fill)
+            if candidate_buy > 0:
+                repaired[buy] *= common_fill / buy_fill
+            if candidate_sell > 0:
+                repaired[sell] *= common_fill / sell_fill
+        return repaired
+
+    def _buy_cash_required(self, candidate, scale, price, amount):
+        gross, commission, impact = self._costs(
+            candidate * scale, price, amount
+        )
+        return gross + commission + impact
+
     def _cash_limited_buys(self, candidate, price, amount, cash):
-        """Scale buys so gross consideration plus all costs fits in cash."""
+        """Apply only the minimum buy haircut needed to pay all costs."""
         if cash <= 0 or not np.any(candidate > 0):
             return np.zeros_like(candidate)
 
-        def required(scale):
-            gross, commission, impact = self._costs(
-                candidate * scale, price, amount
-            )
-            return gross + commission + impact
-
-        if required(1.0) <= cash:
+        full_requirement = self._buy_cash_required(
+            candidate, 1.0, price, amount
+        )
+        if full_requirement <= cash:
             return candidate
 
         low, high = 0.0, 1.0
         for _ in range(50):
             middle = 0.5 * (low + high)
-            if required(middle) <= cash:
+            requirement = self._buy_cash_required(
+                candidate, middle, price, amount
+            )
+            if requirement <= cash:
                 low = middle
             else:
                 high = middle
@@ -69,30 +125,44 @@ class CapacitySimulator:
         self, 
         target_weight: pd.DataFrame, 
         execution_price: pd.DataFrame,
-        traded_amount: pd.DataFrame
+        traded_amount: pd.DataFrame,
+        exposure_group: pd.DataFrame | None = None,
     ) -> CapacityResult:
-        for frame in (execution_price, traded_amount):
+        '''
+            允许出现由“现金和交易成本约束”产生的小幅实际敞口偏差
+            但不允许 ADV 流动性差异直接造成大的多空或行业失衡
+        '''
+        optional = () if exposure_group is None else (exposure_group,)
+        for frame in (execution_price, traded_amount, *optional):
             if not target_weight.index.equals(frame.index) or not target_weight.columns.equals(frame.columns):
                 raise ValueError("capacity inputs must have identical axes")
             
         price, amount = execution_price.to_numpy(float), traded_amount.to_numpy(float)
         target = target_weight.to_numpy(float)
+        groups = (
+            None if exposure_group is None else exposure_group.to_numpy(float)
+        )
 
         summaries, curves, fills = [], {}, {}
         return_curves, turnovers = {}, {}
         commission_curves, impact_curves = {}, {}
+        actual_weights, weight_deviations = {}, {}
+        net_deviations, group_deviations = {}, {}
         for initial in self.config.capital:
             cash, shares = float(initial), np.zeros(target.shape[1])
             equity_curve, fill_curve = np.zeros(len(target)), np.ones(len(target))
             turnover_curve = np.zeros(len(target))
             commission_curve = np.zeros(len(target))
             impact_curve = np.zeros(len(target))
+            actual_weight_curve = np.zeros_like(target, dtype=float)
+            weight_deviation_curve = np.zeros(len(target))
+            net_deviation_curve = np.zeros(len(target))
+            group_deviation_curve = np.full(len(target), np.nan)
             last_price = np.zeros(target.shape[1], dtype=float)
             for t in range(len(target)):
                 valid_price = np.isfinite(price[t]) & (price[t] > 0)
                 last_price[valid_price] = price[t, valid_price]
-                mark = last_price
-                equity = cash + np.sum(shares * mark)
+                equity = cash + np.sum(shares * last_price)  # 持仓*更新价格
 
                 # An unavailable price means no trade, not liquidation at zero.
                 desired = shares.copy()
@@ -108,51 +178,45 @@ class CapacitySimulator:
                     amount_t * self.config.max_participation
                 )
 
-                # Sell first so proceeds are available for buys. This also
-                # handles opening/increasing short positions.
-                requested_sell = np.maximum(-requested, 0.0)
-                sell_value = requested_sell * np.where(
-                    valid_price, price[t], 0.0
-                )
-                sell_ratio = np.divide(
+                execution_mark = np.where(valid_price, price[t], 0.0)
+                requested_value = np.abs(requested * execution_mark)
+                fill_limit = np.divide(
                     capacity_value,
-                    sell_value,
-                    out=np.ones_like(sell_value),
-                    where=sell_value > 0,
+                    requested_value,
+                    out=np.ones_like(requested_value),
+                    where=requested_value > 0,
                 ).clip(0.0, 1.0)
-                sold = requested_sell * sell_ratio
+                candidate = requested * fill_limit
+                candidate = self._repair_bucket_exposure(
+                    requested,
+                    candidate,
+                    execution_mark,
+                    None if groups is None else groups[t],
+                )
+
+                # Repair the material ADV-driven exposure mismatch first.
+                # Then sell before buying so only the minimum cash-related buy
+                # haircut is allowed to create a residual implementation gap.
+                sold = np.maximum(-candidate, 0.0)
                 sell_gross, sell_commission, sell_impact = self._costs(
-                    sold, np.where(valid_price, price[t], 0.0), amount_t
+                    sold, execution_mark, amount_t
                 )
                 shares -= sold
                 cash += sell_gross - sell_commission - sell_impact
 
-                requested_buy = np.maximum(requested, 0.0)
-                buy_value = requested_buy * np.where(
-                    valid_price, price[t], 0.0
-                )
-                buy_ratio = np.divide(
-                    capacity_value,
-                    buy_value,
-                    out=np.ones_like(buy_value),
-                    where=buy_value > 0,
-                ).clip(0.0, 1.0)
-                candidate_buy = requested_buy * buy_ratio
+                candidate_buy = np.maximum(candidate, 0.0)
                 bought = self._cash_limited_buys(
-                    candidate_buy,
-                    np.where(valid_price, price[t], 0.0),
-                    amount_t,
-                    cash,
+                    candidate_buy, execution_mark, amount_t, cash
                 )
                 buy_gross, buy_commission, buy_impact = self._costs(
-                    bought, np.where(valid_price, price[t], 0.0), amount_t
+                    bought, execution_mark, amount_t
                 )
                 shares += bought
                 cash -= buy_gross + buy_commission + buy_impact
 
                 total_commission = sell_commission + buy_commission
                 total_impact = sell_impact + buy_impact
-                equity_curve[t] = cash + np.sum(shares * mark)
+                equity_curve[t] = cash + np.sum(shares * last_price)
                 base_equity = max(abs(equity_curve[t]), 1e-12)
                 turnover_curve[t] = (
                     0.5 * (sell_gross + buy_gross) / base_equity
@@ -172,6 +236,30 @@ class CapacitySimulator:
                     )
                     fill_curve[t] = np.mean(actual_ratio)
 
+                actual_weight_curve[t] = np.divide(
+                    shares * last_price,
+                    equity_curve[t],
+                    out=np.zeros_like(shares),
+                    where=equity_curve[t] != 0,
+                )
+                valid_comparison = np.isfinite(target[t])
+                deviation = np.where(
+                    valid_comparison,
+                    actual_weight_curve[t] - target[t],
+                    0.0,
+                )
+                weight_deviation_curve[t] = np.abs(deviation).sum()  # 股票平均权重偏差
+                net_deviation_curve[t] = deviation.sum()             # 净敞口偏差
+                if groups is not None:
+                    group_t = groups[t]
+                    finite_group = np.isfinite(group_t)
+                    group_values = [
+                        abs(deviation[group_t == code].sum())
+                        for code in np.unique(group_t[finite_group])
+                    ]
+                    if group_values:
+                        group_deviation_curve[t] = max(group_values)  # 最大行业通敞口偏差
+
             equity_series = pd.Series(equity_curve, target_weight.index, name="equity")
             previous_equity = np.r_[initial, equity_curve[:-1]]
             daily_return = np.divide(
@@ -189,6 +277,14 @@ class CapacitySimulator:
             stat["average_turnover"] = turnover_curve.mean()
             stat["average_commission_cost"] = commission_curve.mean()
             stat["average_impact_cost"] = impact_curve.mean()
+            stat["average_weight_deviation"] = weight_deviation_curve.mean()
+            stat["average_abs_net_exposure_deviation"] = np.mean(
+                np.abs(net_deviation_curve)
+            )
+            stat["average_max_group_exposure_deviation"] = (
+                np.nanmean(group_deviation_curve)
+                if groups is not None else np.nan
+            )
             stat["online_decision"] = (
                 "Pass"
                 if (
@@ -214,6 +310,26 @@ class CapacitySimulator:
                 target_weight.index,
                 name="impact_cost_ratio",
             )
+            actual_weights[initial] = pd.DataFrame(
+                actual_weight_curve,
+                target_weight.index,
+                target_weight.columns,
+            )
+            weight_deviations[initial] = pd.Series(
+                weight_deviation_curve,
+                target_weight.index,
+                name="weight_deviation",
+            )
+            net_deviations[initial] = pd.Series(
+                net_deviation_curve,
+                target_weight.index,
+                name="net_exposure_deviation",
+            )
+            group_deviations[initial] = pd.Series(
+                group_deviation_curve,
+                target_weight.index,
+                name="max_group_exposure_deviation",
+            )
         return CapacityResult(
             summary=pd.DataFrame(summaries).set_index("capital"),
             equity=curves,
@@ -222,4 +338,164 @@ class CapacitySimulator:
             turnover=turnovers,
             commission_cost_ratio=commission_curves,
             impact_cost_ratio=impact_curves,
+            actual_weight=actual_weights,
+            weight_deviation=weight_deviations,
+            net_exposure_deviation=net_deviations,
+            group_exposure_deviation=group_deviations,
         )
+
+
+def _capital_label(capital):
+    if capital >= 1e8:
+        return f"{capital / 1e8:g}e8"
+    if capital >= 1e4:
+        return f"{capital / 1e4:g}e4"
+    return f"{capital:g}"
+
+
+def report_capacity_result(
+    result: CapacityResult,
+    print_summary=True,
+    plot=True,
+    show=True,
+    figsize=(14, 18),
+):
+    """Print a capacity table and plot all aggregate result diagnostics.
+
+    Returns a summary and figure tuple. The figure is None when plot is false.
+    Stock-level actual weights remain available on the result; the plot shows
+    their net, gross and maximum single-name exposures.
+    """
+    summary = result.summary.copy()
+    if print_summary:
+        print(summary.to_string())
+    if not plot:
+        return summary, None
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError(
+            "matplotlib is required when plot=True"
+        ) from exc
+
+    figure, axes = plt.subplots(
+        5, 2, figsize=figsize, constrained_layout=True
+    )
+    axes = axes.ravel()
+
+    for capital, series in result.equity.items():
+        axes[0].plot(
+            series.index,
+            series / float(capital),
+            label=_capital_label(capital),
+        )
+    axes[0].set_title("Normalized equity")
+    axes[0].set_ylabel("NAV")
+
+    for capital, series in result.returns.items():
+        axes[1].plot(
+            series.index, series,
+            label=_capital_label(capital),
+            alpha=0.8,
+        )
+    axes[1].set_title("Daily return")
+    axes[1].set_ylabel("Return")
+
+    for capital, series in result.fill_ratio.items():
+        axes[2].plot(
+            series.index, series,
+            label=_capital_label(capital),
+        )
+    axes[2].axhline(1.0, color="grey", linewidth=0.8)
+    axes[2].set_title("Fill ratio")
+    axes[2].set_ylabel("Ratio")
+
+    for capital, series in result.turnover.items():
+        axes[3].plot(
+            series.index, series,
+            label=_capital_label(capital),
+        )
+    axes[3].set_title("One-sided turnover")
+    axes[3].set_ylabel("Ratio")
+
+    for capital, series in result.commission_cost_ratio.items():
+        label = f"{_capital_label(capital)} commission"
+        axes[4].plot(series.index, series, label=label)
+    for capital, series in result.impact_cost_ratio.items():
+        label = f"{_capital_label(capital)} impact"
+        axes[4].plot(
+            series.index, series,
+            linestyle="--",
+            label=label,
+        )
+    axes[4].set_title("Execution costs")
+    axes[4].set_ylabel("Cost / equity")
+
+    for capital, weight in result.actual_weight.items():
+        label = _capital_label(capital)
+        axes[5].plot(
+            weight.index,
+            weight.sum(axis=1),
+            label=f"{label} net",
+        )
+        axes[5].plot(
+            weight.index,
+            weight.abs().sum(axis=1),
+            linestyle="--",
+            label=f"{label} gross",
+        )
+        axes[5].plot(
+            weight.index,
+            weight.abs().max(axis=1),
+            linestyle=":",
+            label=f"{label} max name",
+        )
+    axes[5].set_title("Actual portfolio exposure")
+    axes[5].set_ylabel("Weight")
+
+    for capital, series in result.weight_deviation.items():
+        axes[6].plot(
+            series.index, series,
+            label=_capital_label(capital),
+        )
+    axes[6].set_title("L1 target-weight deviation")
+    axes[6].set_ylabel("Absolute weight")
+
+    for capital, series in result.net_exposure_deviation.items():
+        axes[7].plot(
+            series.index, series,
+            label=_capital_label(capital),
+        )
+    axes[7].axhline(0.0, color="grey", linewidth=0.8)
+    axes[7].set_title("Net-exposure deviation")
+    axes[7].set_ylabel("Weight")
+
+    has_group = False
+    for capital, series in result.group_exposure_deviation.items():
+        if series.notna().any():
+            has_group = True
+            axes[8].plot(
+                series.index, series,
+                label=_capital_label(capital),
+            )
+    axes[8].set_title("Maximum group-exposure deviation")
+    axes[8].set_ylabel("Absolute weight")
+    if not has_group:
+        axes[8].text(
+            0.5, 0.5, "No exposure_group supplied",
+            ha="center", va="center",
+            transform=axes[8].transAxes,
+        )
+
+    axes[9].axis("off")
+    for axis in axes[:9]:
+        axis.grid(alpha=0.2)
+        axis.tick_params(axis="x", rotation=30)
+        handles, labels = axis.get_legend_handles_labels()
+        if handles:
+            axis.legend(fontsize="small")
+
+    if show:
+        plt.show()
+    return summary, figure

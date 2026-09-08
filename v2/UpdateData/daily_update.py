@@ -135,7 +135,7 @@ def update_data(
             str_conn = get_str_engine()
 
         date = _run_step("date axis", update_date, date, root)
-        #_run_step("stock axis", update_stockticks, date, root, jy_conn)
+        _run_step("stock axis", update_stockticks, date, root, jy_conn)
         dates = np.load(dates_path, allow_pickle=False)
         stock_ticks = np.load(ticks_path, allow_pickle=False)
 

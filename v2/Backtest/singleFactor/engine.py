@@ -20,6 +20,17 @@ class BacktestResult:
     summary: pd.DataFrame
     diagnostics: dict[str, object]
 
+    def report(self, print_summary=True, plot=True, show=True,
+               figsize=(14, 12)):
+        """Print the performance table and optionally show diagnostics."""
+        return report_backtest_result(
+            self,
+            print_summary=print_summary,
+            plot=plot,
+            show=show,
+            figsize=figsize,
+        )
+
 
 class SingleFactorBacktester:
     def __init__(self, config=BacktestConfig()):
@@ -131,6 +142,7 @@ class SingleFactorBacktester:
         if portfolio_gross_return is not None:
             return_columns.update({
                 "portfolio_gross": portfolio_gross_return,
+                "portfolio_net": benchmark_return + pnl,
                 "benchmark": benchmark_return,
             })
         returns = pd.DataFrame(return_columns, index=data.signal.index)
@@ -154,6 +166,135 @@ class SingleFactorBacktester:
             diagnostics["benchmark_weight"] = weights["benchmark"]
             diagnostics["portfolio_gross"] = weights["portfolio"].abs().sum(axis=1)
         return BacktestResult(returns, weights, summary, diagnostics)
+
+
+def _nav(series):
+    clean = series.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return (1.0 + clean).cumprod()
+
+
+def _drawdown(series):
+    nav = _nav(series)
+    return nav / nav.cummax() - 1.0
+
+
+def report_backtest_result(
+    result: BacktestResult,
+    print_summary=True,
+    plot=True,
+    show=True,
+    figsize=(14, 12),
+):
+    """Report portfolio performance, costs, IC and implementation diagnostics."""
+    summary = result.summary.copy()
+    if print_summary:
+        print(summary.to_string(index=False))
+    if not plot:
+        return summary, None
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError("matplotlib is required when plot=True") from exc
+
+    figure, axes = plt.subplots(
+        3, 2, figsize=figsize, constrained_layout=True
+    )
+    axes = axes.ravel()
+    returns = result.returns
+
+    nav_columns = (
+        ["portfolio_net", "portfolio_gross", "benchmark"]
+        if "portfolio_net" in returns
+        else ["net", "active_gross"]
+    )
+    for column in nav_columns:
+        axes[0].plot(
+            returns.index, _nav(returns[column]), label=column
+        )
+    axes[0].set_title("Portfolio and benchmark NAV")
+    axes[0].set_ylabel("NAV")
+
+    axes[1].plot(
+        returns.index, _nav(returns["active_gross"]),
+        label="active gross",
+    )
+    axes[1].plot(
+        returns.index, _nav(returns["net"]), label="active net"
+    )
+    cost_drag = (
+        returns["active_gross"] - returns["net"]
+    ).fillna(0.0).cumsum()
+    axes[1].plot(
+        returns.index, cost_drag, label="cumulative cost drag",
+        linestyle="--",
+    )
+    axes[1].set_title("Active PnL before and after costs")
+    axes[1].set_ylabel("NAV / cumulative cost")
+
+    rank_ic = result.diagnostics.get("rank_ic")
+    if isinstance(rank_ic, pd.Series):
+        axes[2].plot(rank_ic.index, rank_ic, label="daily RankIC", alpha=0.45)
+        axes[2].plot(
+            rank_ic.index,
+            rank_ic.rolling(20, min_periods=5).mean(),
+            label="20-day mean",
+        )
+        axes[2].plot(
+            rank_ic.index,
+            rank_ic.expanding(min_periods=5).mean(),
+            label="expanding mean",
+            linestyle="--",
+        )
+    axes[2].axhline(0.0, color="grey", linewidth=0.8)
+    axes[2].set_title("Cross-sectional RankIC")
+    axes[2].set_ylabel("Correlation")
+
+    turnover = result.diagnostics.get("turnover")
+    if isinstance(turnover, pd.Series):
+        axes[3].plot(turnover.index, turnover, label="daily turnover")
+        axes[3].plot(
+            turnover.index,
+            turnover.rolling(20, min_periods=5).mean(),
+            label="20-day mean",
+        )
+    axes[3].set_title("One-sided turnover")
+    axes[3].set_ylabel("Ratio")
+
+    for key, label in (
+        ("gross_exposure", "active gross"),
+        ("net_exposure", "active net"),
+        ("portfolio_gross", "portfolio gross"),
+    ):
+        series = result.diagnostics.get(key)
+        if isinstance(series, pd.Series):
+            axes[4].plot(series.index, series, label=label)
+    axes[4].axhline(0.0, color="grey", linewidth=0.8)
+    axes[4].set_title("Portfolio exposure")
+    axes[4].set_ylabel("Weight")
+
+    drawdown_columns = (
+        ["portfolio_net", "portfolio_gross", "benchmark"]
+        if "portfolio_net" in returns
+        else ["net", "active_gross"]
+    )
+    for column in drawdown_columns:
+        axes[5].plot(
+            returns.index, _drawdown(returns[column]), label=column
+        )
+    axes[5].set_title("Drawdown")
+    axes[5].set_ylabel("Drawdown")
+
+    for axis in axes:
+        axis.grid(alpha=0.2)
+        axis.tick_params(axis="x", rotation=30)
+        handles, labels = axis.get_legend_handles_labels()
+        if handles:
+            axis.legend(fontsize="small")
+
+    if show:
+        plt.show()
+    return summary, figure
 
 
 def _rebalance_mask(index, frequency, every_n_days=1):

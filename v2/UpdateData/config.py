@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
@@ -12,7 +13,14 @@ from pathlib import Path
 from .level2.cifsLoader import CIFSLoader
 
 
-ROOT = Path('/data/shanghai/xujiayi/workflow/data/')
+_LINUX_ROOT = Path("/data/shanghai/xujiayi/workflow/data")
+_WINDOWS_ROOT = Path("Z:/")
+ROOT = Path(
+    os.environ.get(
+        "RESEARCH_DATA_ROOT",
+        _WINDOWS_ROOT if os.name == "nt" else _LINUX_ROOT,
+    )
+)
 
 
 JY_CONFIG = {

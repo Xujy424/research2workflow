@@ -13,7 +13,7 @@ if __package__:
                    compare_rebalance_frequencies, explicit_pair_weights,
                    factor_data_from_arrays, run_event_study)
     from .config import (ActiveSide, EventPortfolioMode, EventTrigger, Method,
-                         SignalInput, Weighting)
+                         RebalanceFrequency, SignalInput, Weighting)
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT
 else:
@@ -27,8 +27,8 @@ else:
         explicit_pair_weights, factor_data_from_arrays, run_event_study,
     )
     from v2.Backtest.singleFactor.config import (
-        ActiveSide, EventPortfolioMode, EventTrigger, Method, SignalInput,
-        Weighting,
+        ActiveSide, EventPortfolioMode, EventTrigger, Method,
+        RebalanceFrequency, SignalInput, Weighting,
     )
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
@@ -187,7 +187,9 @@ def run_event(event_signal, stock_return, tradable, industry=None,
     return portfolio, study
 
 
-def run_capacity(target_weight, next_open, next_amount):
+def run_capacity(target_weight, execution_price, traded_amount,
+                 exposure_group=None, show_report=True):
+    """Run the capacity simulation and optionally print/plot its report."""
     simulator = CapacitySimulator(
         CapacityConfig(
             capital=(1e7, 5e7, 1e8, 5e8), 
@@ -197,7 +199,15 @@ def run_capacity(target_weight, next_open, next_amount):
             lot_size=100
         )
     )
-    return simulator.run(target_weight, next_open, next_amount)
+    result = simulator.run(
+        target_weight,
+        execution_price,
+        traded_amount,
+        exposure_group=exposure_group,
+    )
+    if show_report:
+        result.report()
+    return result
 
 
 def build_pair_book(pair_signal):
@@ -207,8 +217,12 @@ def build_pair_book(pair_signal):
     return explicit_pair_weights(pair_signal, (pair,), holding_days=5)
 
 
-def load_cov_inputs(root, start_date, end_date, benchmark="zzfull"):
-    """Load the aligned local matrices used by the COV example."""
+def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
+                         execution_lag=1):
+    """Load factor inputs and execution-day capacity inputs on one date axis."""
+    if not isinstance(execution_lag, (int, np.integer)) or execution_lag < 0:
+        raise ValueError("execution_lag must be a non-negative integer")
+
     with DataPool(root, asset="stock") as data:
         dates = pd.DatetimeIndex(data.axis.trade_dates)
         selected = np.flatnonzero(
@@ -218,12 +232,31 @@ def load_cov_inputs(root, start_date, end_date, benchmark="zzfull"):
             raise ValueError("no trade dates found in the requested range")
 
         start, end = int(selected[0]), int(selected[-1])
+        execution_start = start + execution_lag
+        execution_end = end + execution_lag
+        if execution_end >= len(dates):
+            raise ValueError(
+                "requested range does not have enough future trade dates for "
+                f"execution_lag={execution_lag}"
+            )
+
+        next_vwap = np.asarray(
+            data.read("d_essentials/open", execution_end, execution_start),
+            dtype=float,
+        )
+        next_amount = np.asarray(
+            data.read("d_essentials/amount", execution_end, execution_start),
+            dtype=float,
+        )
+
         args = {
-            "cov": data.read("factor_pool/cov", end, start),
+            "factor": data.read(f"factor_pool/{name}", end, start),
             "stock_return": data.read("d_essentials/pct", end, start) / 100.0,
             "tradable": data.read("basic/tradable", end, start),
             "industry": data.read("industry/industry", end, start),
             "index_weight": data.read(f"index/weight/{benchmark}_weight", end, start),
+            "next_vwap": next_vwap,
+            "next_amount": next_amount,
         }
         index = dates[start:end + 1]
         columns = pd.Index(data.axis.ticks, name="tick")
@@ -240,22 +273,77 @@ if __name__ == "__main__":
     START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
     BENCHMARK = "zzfull"
+    SIGNAL_LAG = 2
 
-    cov_inputs = load_cov_inputs(
+    # 输入与参数设置
+    inputs = load_backtest_inputs(
         ROOT_PATH,
+        name="sue0",
         start_date=START_DATE,
         end_date=END_DATE,
         benchmark=BENCHMARK,
+        execution_lag=SIGNAL_LAG,
     )
-    cov_result = run_cov(**cov_inputs)
+    inputs["factor"][~inputs["tradable"]] = np.nan
+    data = FactorData(
+        inputs["factor"],
+        inputs["stock_return"],
+        inputs["tradable"],
+        inputs["industry"],
+        inputs["index_weight"],
+    )
+    p_config = PortfolioConfig(
+        method=Method.BENCHMARK_HEDGED, 
+        quantiles=10, 
+        top_groups=2,
+        weighting=Weighting.SIGNAL, 
+        industry_align=True,
+        active_side=ActiveSide.LONG, 
+        active_gross=1.0
+    )
+    exe_config = ExecutionConfig(
+        signal_lag=SIGNAL_LAG, 
+        rebalance_frequency=RebalanceFrequency.WEEKLY,
+        cost_bps=10
+    )
+    config = BacktestConfig(
+        portfolio=p_config,
+        execution=exe_config,
+    )
 
-    print("COV backtest summary")
-    print(cov_result.summary.to_string(index=False))
+    # 运行单因子计算与分组收益
+    backtest_result = SingleFactorBacktester(config).run(data)
+
+    print("SUE0 backtest summary")
     print(
         f"Average turnover: "
-        f"{cov_result.diagnostics['turnover'].mean():.6f}"
+        f"{backtest_result.diagnostics['turnover'].mean():.6f}"
     )
     print(
         f"Mean RankIC: "
-        f"{cov_result.diagnostics['rank_ic'].mean():.6f}"
+        f"{backtest_result.diagnostics['rank_ic'].mean():.6f}"
     )
+    backtest_result.report(show=False)
+
+    # 运行回测模拟器
+    target = backtest_result.weights["portfolio"]
+
+    simulator = CapacitySimulator(
+            CapacityConfig(
+                capital=(1e7, 5e7, 1e8, 5e8), 
+                max_participation=.1,
+                commission_bps=10, 
+                impact_coefficient=.001, 
+                lot_size=100
+            )
+        )
+    result = simulator.run(
+        target_weight=target,
+        execution_price=inputs["next_vwap"],
+        traded_amount=inputs["next_amount"],
+        exposure_group=inputs["industry"],
+    )
+    result.report(show=False)
+
+    import matplotlib.pyplot as plt
+    plt.show()

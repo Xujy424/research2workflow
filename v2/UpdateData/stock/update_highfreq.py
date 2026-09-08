@@ -36,6 +36,37 @@ TABLES = (
 )
 
 
+def _validate_canonical_axes(root, dates, ticks):
+    """Reject writes whose caller axes differ from the persisted stock axes."""
+    data_root = Path(root).parent
+    dates_path = data_root / "axis" / "dates.npy"
+    ticks_path = data_root / "axis" / "stock_ticks.npy"
+    if not dates_path.is_file() or not ticks_path.is_file():
+        raise FileNotFoundError(
+            f"canonical stock axes are missing below {data_root / 'axis'}"
+        )
+
+    canonical_dates = np.load(dates_path, allow_pickle=False)
+    canonical_ticks = np.load(ticks_path, allow_pickle=False)
+    dates = np.asarray(dates)
+    ticks = np.asarray(ticks)
+    same_dates = (
+        dates.shape == canonical_dates.shape
+        and np.array_equal(dates, canonical_dates, equal_nan=True)
+    )
+    same_ticks = (
+        ticks.shape == canonical_ticks.shape
+        and np.array_equal(ticks, canonical_ticks)
+    )
+    if not same_dates or not same_ticks:
+        raise ValueError(
+            "highfreq axes do not match the canonical persisted axes: "
+            f"received dates={dates.shape}, ticks={ticks.shape}; "
+            f"canonical dates={canonical_dates.shape}, "
+            f"ticks={canonical_ticks.shape}"
+        )
+
+
 def _snake_case(name):
     name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
     name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
@@ -107,6 +138,8 @@ def update_highfreq(date, dates, ticks, conn, root):
     if root is None:
         raise ValueError("stock root is required")
 
+    _validate_canonical_axes(root, dates, ticks)
+
     asof = _asof(date)
     date_position = _date_index(asof, dates)
     valid_ticks, positions = valid_stock_ticks(ticks)
@@ -140,6 +173,5 @@ __all__ = [
     "TABLES",
     "update_highfreq",
 ]
-
 
 
