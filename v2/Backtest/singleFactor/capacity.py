@@ -23,7 +23,7 @@ class CapacityResult:
     group_exposure_deviation: dict[float, pd.Series] = field(default_factory=dict)
 
     def report(self, print_summary=True, plot=True, show=True,
-               figsize=(14, 18)):
+               figsize=(14, 10)):
         """Print the statistics table and optionally build diagnostic plots."""
         return report_capacity_result(
             self,
@@ -150,7 +150,8 @@ class CapacitySimulator:
         net_deviations, group_deviations = {}, {}
         for initial in self.config.capital:
             cash, shares = float(initial), np.zeros(target.shape[1])
-            equity_curve, fill_curve = np.zeros(len(target)), np.ones(len(target))
+            equity_curve = np.zeros(len(target))
+            fill_curve = np.full(len(target), np.nan)
             turnover_curve = np.zeros(len(target))
             commission_curve = np.zeros(len(target))
             impact_curve = np.zeros(len(target))
@@ -224,17 +225,14 @@ class CapacitySimulator:
                 commission_curve[t] = total_commission / base_equity
                 impact_curve[t] = total_impact / base_equity
 
-                requested_abs = np.abs(requested)
-                actual_abs = sold + bought
-                active = requested_abs > 0
-                if active.any():
-                    actual_ratio = np.divide(
-                        actual_abs[active],
-                        requested_abs[active],
-                        out=np.zeros(active.sum(), dtype=float),
-                        where=requested_abs[active] > 0,
+                requested_gross = requested_value.sum()
+                if requested_gross > 0:
+                    actual_gross = np.sum(
+                        (sold + bought) * execution_mark
                     )
-                    fill_curve[t] = np.mean(actual_ratio)
+                    fill_curve[t] = np.clip(
+                        actual_gross / requested_gross, 0.0, 1.0
+                    )
 
                 actual_weight_curve[t] = np.divide(
                     shares * last_price,
@@ -273,7 +271,10 @@ class CapacitySimulator:
             ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
             stat = performance(return_series)
             stat["capital"] = initial
-            stat["average_fill_ratio"] = fill_curve.mean()
+            stat["average_fill_ratio"] = (
+                np.nanmean(fill_curve)
+                if np.isfinite(fill_curve).any() else np.nan
+            )
             stat["average_turnover"] = turnover_curve.mean()
             stat["average_commission_cost"] = commission_curve.mean()
             stat["average_impact_cost"] = impact_curve.mean()
@@ -358,13 +359,13 @@ def report_capacity_result(
     print_summary=True,
     plot=True,
     show=True,
-    figsize=(14, 18),
+    figsize=(14, 10),
 ):
-    """Print a capacity table and plot all aggregate result diagnostics.
+    """Print the capacity table and plot NAV plus implementation deviation.
 
     Returns a summary and figure tuple. The figure is None when plot is false.
-    Stock-level actual weights remain available on the result; the plot shows
-    their net, gross and maximum single-name exposures.
+    Detailed time series remain available on CapacityResult; the compact plot
+    focuses on realized NAV and requested-value-weighted fill ratio.
     """
     summary = result.summary.copy()
     if print_summary:
@@ -380,121 +381,65 @@ def report_capacity_result(
         ) from exc
 
     figure, axes = plt.subplots(
-        5, 2, figsize=figsize, constrained_layout=True
+        2, 1, figsize=figsize, constrained_layout=True,
+        gridspec_kw={"height_ratios": (1.15, 1.0)},
     )
-    axes = axes.ravel()
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    plot_colors = [
+        "#f2b6d2" if color.lower() == "#d62728" else color
+        for color in default_colors
+    ]
+    for axis in axes:
+        axis.set_prop_cycle(color=plot_colors)
 
-    for capital, series in result.equity.items():
+    equity_items = list(result.equity.items())
+    for capital, series in equity_items:
         axes[0].plot(
             series.index,
             series / float(capital),
             label=_capital_label(capital),
+            alpha=0.78,
         )
-    axes[0].set_title("Normalized equity")
+    axes[0].set_title("Normalized equity by initial capital")
     axes[0].set_ylabel("NAV")
+    axes[0].grid(alpha=0.2)
+    axes[0].tick_params(axis="x", rotation=30)
+    axes[0].legend(fontsize="small")
 
-    for capital, series in result.returns.items():
-        axes[1].plot(
-            series.index, series,
-            label=_capital_label(capital),
-            alpha=0.8,
-        )
-    axes[1].set_title("Daily return")
-    axes[1].set_ylabel("Return")
-
-    for capital, series in result.fill_ratio.items():
-        axes[2].plot(
-            series.index, series,
-            label=_capital_label(capital),
-        )
-    axes[2].axhline(1.0, color="grey", linewidth=0.8)
-    axes[2].set_title("Fill ratio")
-    axes[2].set_ylabel("Ratio")
-
-    for capital, series in result.turnover.items():
-        axes[3].plot(
-            series.index, series,
-            label=_capital_label(capital),
-        )
-    axes[3].set_title("One-sided turnover")
-    axes[3].set_ylabel("Ratio")
-
-    for capital, series in result.commission_cost_ratio.items():
-        label = f"{_capital_label(capital)} commission"
-        axes[4].plot(series.index, series, label=label)
-    for capital, series in result.impact_cost_ratio.items():
-        label = f"{_capital_label(capital)} impact"
-        axes[4].plot(
-            series.index, series,
-            linestyle="--",
-            label=label,
-        )
-    axes[4].set_title("Execution costs")
-    axes[4].set_ylabel("Cost / equity")
-
-    for capital, weight in result.actual_weight.items():
-        label = _capital_label(capital)
-        axes[5].plot(
-            weight.index,
-            weight.sum(axis=1),
-            label=f"{label} net",
-        )
-        axes[5].plot(
-            weight.index,
-            weight.abs().sum(axis=1),
-            linestyle="--",
-            label=f"{label} gross",
-        )
-        axes[5].plot(
-            weight.index,
-            weight.abs().max(axis=1),
-            linestyle=":",
-            label=f"{label} max name",
-        )
-    axes[5].set_title("Actual portfolio exposure")
-    axes[5].set_ylabel("Weight")
-
-    for capital, series in result.weight_deviation.items():
-        axes[6].plot(
-            series.index, series,
-            label=_capital_label(capital),
-        )
-    axes[6].set_title("L1 target-weight deviation")
-    axes[6].set_ylabel("Absolute weight")
-
-    for capital, series in result.net_exposure_deviation.items():
-        axes[7].plot(
-            series.index, series,
-            label=_capital_label(capital),
-        )
-    axes[7].axhline(0.0, color="grey", linewidth=0.8)
-    axes[7].set_title("Net-exposure deviation")
-    axes[7].set_ylabel("Weight")
-
-    has_group = False
-    for capital, series in result.group_exposure_deviation.items():
-        if series.notna().any():
-            has_group = True
-            axes[8].plot(
-                series.index, series,
-                label=_capital_label(capital),
+    fill_items = list(result.fill_ratio.items())
+    if fill_items:
+        for capital, series in fill_items:
+            observed = series.dropna()
+            if observed.empty:
+                continue
+            axes[1].plot(
+                observed.index,
+                observed,
+                alpha=0.78,
+                label=(
+                    f"{_capital_label(capital)} "
+                    f"(mean={observed.mean():.1%})"
+                ),
             )
-    axes[8].set_title("Maximum group-exposure deviation")
-    axes[8].set_ylabel("Absolute weight")
-    if not has_group:
-        axes[8].text(
-            0.5, 0.5, "No exposure_group supplied",
-            ha="center", va="center",
-            transform=axes[8].transAxes,
+        axes[1].axhline(
+            1.0, color="grey", linestyle="--", linewidth=0.8,
+            label="full fill",
         )
-
-    axes[9].axis("off")
-    for axis in axes[:9]:
-        axis.grid(alpha=0.2)
-        axis.tick_params(axis="x", rotation=30)
-        handles, labels = axis.get_legend_handles_labels()
-        if handles:
-            axis.legend(fontsize="small")
+    else:
+        axes[1].text(
+            0.5, 0.5, "No fill-ratio series",
+            ha="center", va="center", transform=axes[1].transAxes,
+        )
+    axes[1].set_title(
+        "Fill ratio on trade-request dates"
+    )
+    axes[1].set_xlabel("Target date")
+    axes[1].set_ylabel("Executed value / requested value")
+    axes[1].grid(alpha=0.2)
+    axes[1].tick_params(axis="x", rotation=30)
+    handles, labels = axes[1].get_legend_handles_labels()
+    if handles:
+        axes[1].legend(fontsize="small")
 
     if show:
         plt.show()

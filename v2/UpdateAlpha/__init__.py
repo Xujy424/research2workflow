@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .alphabase import AlphaBase, AlphaContext, AlphaMeta
+from .analyst_forecast.aog import (
+    AOGConfig, AOGContext, AOGFactor, AOGRankFactor, AOGDemaxFactor,
+    AOGQuantileFactor, AOGLowDemaxFactor, AOGLowQuantileFactor, AOG_FACTORS,
+)
 
 from .analyst_forecast.afr import (
     AFRConfig,
@@ -115,6 +119,7 @@ def _specs(context_class, factor_classes, category):
 FACTOR_REGISTRY = {
     spec.name: spec
     for spec in (
+        *_specs(AOGContext, AOG_FACTORS, "analyst_forecast"),
         *_specs(
             AFRContext,
             (

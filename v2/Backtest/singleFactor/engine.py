@@ -21,7 +21,7 @@ class BacktestResult:
     diagnostics: dict[str, object]
 
     def report(self, print_summary=True, plot=True, show=True,
-               figsize=(14, 12)):
+               figsize=(14, 18)):
         """Print the performance table and optionally show diagnostics."""
         return report_backtest_result(
             self,
@@ -158,9 +158,14 @@ class SingleFactorBacktester:
         future = data.returns.shift(-execution.signal_lag)
         diagnostics = {
             "turnover": pd.Series(turnover, data.signal.index),
-                    "gross_exposure": pd.Series(np.abs(held).sum(1), data.signal.index),
-                    "net_exposure": pd.Series(held.sum(1), data.signal.index),
-                    "rank_ic": cross_sectional_ic(data.signal, future)
+            "gross_exposure": pd.Series(
+                np.abs(held).sum(1), data.signal.index
+            ),
+            "net_exposure": pd.Series(held.sum(1), data.signal.index),
+            "rank_ic": cross_sectional_ic(data.signal, future),
+            "rebalance": pd.Series(
+                rebalance, data.signal.index, name="rebalance"
+            ),
         }
         if "benchmark" in weights:
             diagnostics["benchmark_weight"] = weights["benchmark"]
@@ -178,12 +183,36 @@ def _drawdown(series):
     return nav / nav.cummax() - 1.0
 
 
+def _align_twin_zero(reference_axis, target_axis):
+    """Align a twin y-axis zero with the reference without sharing scale."""
+    reference_low, reference_high = reference_axis.get_ylim()
+    reference_span = reference_high - reference_low
+    if reference_span <= 0 or not (reference_low < 0 < reference_high):
+        return
+
+    zero_fraction = -reference_low / reference_span
+    target_low, target_high = target_axis.get_ylim()
+    negative = max(-target_low, 0.0)
+    positive = max(target_high, 0.0)
+    if negative == 0.0 and positive == 0.0:
+        return
+
+    span = max(
+        negative / zero_fraction,
+        positive / (1.0 - zero_fraction),
+    )
+    target_axis.set_ylim(
+        -zero_fraction * span,
+        (1.0 - zero_fraction) * span,
+    )
+
+
 def report_backtest_result(
     result: BacktestResult,
     print_summary=True,
     plot=True,
     show=True,
-    figsize=(14, 12),
+    figsize=(14, 18),
 ):
     """Report portfolio performance, costs, IC and implementation diagnostics."""
     summary = result.summary.copy()
@@ -198,9 +227,8 @@ def report_backtest_result(
         raise ImportError("matplotlib is required when plot=True") from exc
 
     figure, axes = plt.subplots(
-        3, 2, figsize=figsize, constrained_layout=True
+        4, 1, figsize=figsize, constrained_layout=True
     )
-    axes = axes.ravel()
     returns = result.returns
 
     nav_columns = (
@@ -222,56 +250,66 @@ def report_backtest_result(
     axes[1].plot(
         returns.index, _nav(returns["net"]), label="active net"
     )
-    cost_drag = (
-        returns["active_gross"] - returns["net"]
-    ).fillna(0.0).cumsum()
-    axes[1].plot(
-        returns.index, cost_drag, label="cumulative cost drag",
-        linestyle="--",
-    )
     axes[1].set_title("Active PnL before and after costs")
-    axes[1].set_ylabel("NAV / cumulative cost")
-
-    rank_ic = result.diagnostics.get("rank_ic")
-    if isinstance(rank_ic, pd.Series):
-        axes[2].plot(rank_ic.index, rank_ic, label="daily RankIC", alpha=0.45)
-        axes[2].plot(
-            rank_ic.index,
-            rank_ic.rolling(20, min_periods=5).mean(),
-            label="20-day mean",
-        )
-        axes[2].plot(
-            rank_ic.index,
-            rank_ic.expanding(min_periods=5).mean(),
-            label="expanding mean",
-            linestyle="--",
-        )
-    axes[2].axhline(0.0, color="grey", linewidth=0.8)
-    axes[2].set_title("Cross-sectional RankIC")
-    axes[2].set_ylabel("Correlation")
-
+    axes[1].set_ylabel("NAV")
+    turnover_axis = axes[1].twinx()
     turnover = result.diagnostics.get("turnover")
     if isinstance(turnover, pd.Series):
-        axes[3].plot(turnover.index, turnover, label="daily turnover")
-        axes[3].plot(
-            turnover.index,
-            turnover.rolling(20, min_periods=5).mean(),
-            label="20-day mean",
+        rebalance = result.diagnostics.get("rebalance")
+        if isinstance(rebalance, pd.Series):
+            turnover_mask = rebalance.fillna(False).astype(bool)
+        else:
+            turnover_mask = pd.Series(True, index=turnover.index)
+        selected_turnover = turnover[
+            turnover_mask & turnover.notna() & turnover.ne(0.0)
+        ]
+        turnover_axis.plot(
+            selected_turnover.index, selected_turnover,
+            color="tab:grey", alpha=0.45, linewidth=0.9,
+            label="rebalance turnover",
         )
-    axes[3].set_title("One-sided turnover")
-    axes[3].set_ylabel("Ratio")
+    turnover_axis.set_ylabel("Rebalance turnover")
 
-    for key, label in (
-        ("gross_exposure", "active gross"),
-        ("net_exposure", "active net"),
-        ("portfolio_gross", "portfolio gross"),
-    ):
-        series = result.diagnostics.get(key)
-        if isinstance(series, pd.Series):
-            axes[4].plot(series.index, series, label=label)
-    axes[4].axhline(0.0, color="grey", linewidth=0.8)
-    axes[4].set_title("Portfolio exposure")
-    axes[4].set_ylabel("Weight")
+    rank_ic = result.diagnostics.get("rank_ic")
+    ic_axis = axes[2].twinx()
+    if isinstance(rank_ic, pd.Series):
+        rebalance = result.diagnostics.get("rebalance")
+        if isinstance(rebalance, pd.Series):
+            selected_ic = rank_ic[rebalance.fillna(False).astype(bool)]
+        else:
+            selected_ic = rank_ic
+        selected_ic = selected_ic.dropna()
+        colors = np.where(selected_ic >= 0.0, "tab:red", "tab:green")
+        axes[2].bar(
+            selected_ic.index, selected_ic,
+            width=3.0, color=colors, alpha=0.65,
+            label="rebalance RankIC",
+        )
+        if len(selected_ic):
+            mean_ic = selected_ic.mean()
+            axes[2].axhline(
+                mean_ic,
+                color="tab:orange",
+                linestyle="--",
+                linewidth=1.2,
+                label=f"mean RankIC ({mean_ic:.4f})",
+            )
+        cumulative_ic = selected_ic.cumsum()
+        if len(cumulative_ic):
+            ic_axis.plot(
+                cumulative_ic.index, cumulative_ic,
+                color="tab:blue", alpha=0.55, linewidth=1.2,
+                label="cumulative RankIC",
+            )
+            ic_axis.fill_between(
+                cumulative_ic.index, 0.0, cumulative_ic.to_numpy(),
+                color="tab:blue", alpha=0.10,
+            )
+    axes[2].axhline(0.0, color="grey", linewidth=0.8)
+    axes[2].set_title("RankIC at rebalance dates and cumulative RankIC")
+    axes[2].set_ylabel("Rebalance RankIC")
+    ic_axis.set_ylabel("Cumulative RankIC")
+    _align_twin_zero(axes[2], ic_axis)
 
     drawdown_columns = (
         ["portfolio_net", "portfolio_gross", "benchmark"]
@@ -279,11 +317,17 @@ def report_backtest_result(
         else ["net", "active_gross"]
     )
     for column in drawdown_columns:
-        axes[5].plot(
-            returns.index, _drawdown(returns[column]), label=column
+        drawdown = _drawdown(returns[column])
+        line, = axes[3].plot(
+            returns.index, drawdown, label=column
         )
-    axes[5].set_title("Drawdown")
-    axes[5].set_ylabel("Drawdown")
+        axes[3].fill_between(
+            returns.index, drawdown.to_numpy(), 0.0,
+            color=line.get_color(), alpha=0.10,
+        )
+    axes[3].axhline(0.0, color="grey", linewidth=0.8)
+    axes[3].set_title("Underwater drawdown")
+    axes[3].set_ylabel("Drawdown")
 
     for axis in axes:
         axis.grid(alpha=0.2)
@@ -291,6 +335,23 @@ def report_backtest_result(
         handles, labels = axis.get_legend_handles_labels()
         if handles:
             axis.legend(fontsize="small")
+
+    pnl_handles, pnl_labels = axes[1].get_legend_handles_labels()
+    turnover_handles, turnover_labels = (
+        turnover_axis.get_legend_handles_labels()
+    )
+    axes[1].legend(
+        pnl_handles + turnover_handles,
+        pnl_labels + turnover_labels,
+        fontsize="small",
+    )
+    ic_handles, ic_labels = axes[2].get_legend_handles_labels()
+    cumulative_handles, cumulative_labels = ic_axis.get_legend_handles_labels()
+    axes[2].legend(
+        ic_handles + cumulative_handles,
+        ic_labels + cumulative_labels,
+        fontsize="small",
+    )
 
     if show:
         plt.show()

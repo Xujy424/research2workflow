@@ -273,12 +273,16 @@ if __name__ == "__main__":
     START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
     BENCHMARK = "zzfull"
+    FACTOR_NAME = "qua"
     SIGNAL_LAG = 2
+    SHOW_PLOTS = False
+    OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" /f'{FACTOR_NAME}'
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # 输入与参数设置
     inputs = load_backtest_inputs(
         ROOT_PATH,
-        name="sue0",
+        name=FACTOR_NAME,
         start_date=START_DATE,
         end_date=END_DATE,
         benchmark=BENCHMARK,
@@ -298,7 +302,7 @@ if __name__ == "__main__":
         top_groups=2,
         weighting=Weighting.SIGNAL, 
         industry_align=True,
-        active_side=ActiveSide.LONG, 
+        active_side=ActiveSide.LONG_SHORT, 
         active_gross=1.0
     )
     exe_config = ExecutionConfig(
@@ -314,7 +318,7 @@ if __name__ == "__main__":
     # 运行单因子计算与分组收益
     backtest_result = SingleFactorBacktester(config).run(data)
 
-    print("SUE0 backtest summary")
+    print(f"{FACTOR_NAME.upper()} backtest summary")
     print(
         f"Average turnover: "
         f"{backtest_result.diagnostics['turnover'].mean():.6f}"
@@ -323,7 +327,7 @@ if __name__ == "__main__":
         f"Mean RankIC: "
         f"{backtest_result.diagnostics['rank_ic'].mean():.6f}"
     )
-    backtest_result.report(show=False)
+    _, backtest_figure = backtest_result.report(show=False)
 
     # 运行回测模拟器
     target = backtest_result.weights["portfolio"]
@@ -343,7 +347,19 @@ if __name__ == "__main__":
         traded_amount=inputs["next_amount"],
         exposure_group=inputs["industry"],
     )
-    result.report(show=False)
+    _, capacity_figure = result.report(show=False)
 
     import matplotlib.pyplot as plt
-    plt.show()
+
+    backtest_path = OUTPUT_DIR / f"{FACTOR_NAME}_backtest_report.png"
+    capacity_path = OUTPUT_DIR / f"{FACTOR_NAME}_capacity_report.png"
+    backtest_figure.savefig(backtest_path, dpi=160, bbox_inches="tight")
+    capacity_figure.savefig(capacity_path, dpi=160, bbox_inches="tight")
+    print(f"Backtest chart saved to: {backtest_path}")
+    print(f"Capacity chart saved to: {capacity_path}")
+
+    if SHOW_PLOTS:
+        plt.show()
+    else:
+        plt.close(backtest_figure)
+        plt.close(capacity_figure)
