@@ -270,10 +270,10 @@ def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
 if __name__ == "__main__":
     # 运行方式：python -m v2.Backtest.singleFactor.example_usage
     ROOT_PATH = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
-    START_DATE = "2023-01-01"
+    START_DATE = "2024-01-01"
     END_DATE = "2026-06-30"
     BENCHMARK = "zz1000"
-    FACTOR_NAME = "afr"
+    FACTOR_NAME = "satd_sellhighvolume"
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
     OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" /f'{FACTOR_NAME}'
