@@ -249,36 +249,129 @@ class SATDBuyFlatFactor(_SATDFactor):
         )
 
 class SATDCombinationFactor(AlphaBase):
-    meta = AlphaMeta("satd_combination", "Equal-weight active-sell SATD combination", direction=1)
-    dependencies = _SATDFactor.dependencies
-    component_classes = (
-        SATDSellDownRetFactor,
-        SATDSellLowPriceFactor,
-        SATDSellHighVolumeFactor,
+    """Equal-weight combination computed in one daily Polars aggregation."""
+
+    meta = AlphaMeta(
+        "satd_combination",
+        "Equal-weight active-sell SATD combination",
+        direction=1,
     )
+    dependencies = _SATDFactor.dependencies
+    component_names = ("selldownret", "selllowprice", "sellhighvolume")
 
     def __init__(self, context):
         super().__init__(context)
-        self.components = tuple(cls(context) for cls in self.component_classes)
+        self._daily_cache = OrderedDict()
+
+    def _daily_values(self, date):
+        key = pd.Timestamp(date).strftime("%Y%m%d")
+        cached = self._daily_cache.get(key)
+        if cached is not None:
+            self._daily_cache.move_to_end(key)
+            return cached
+
+        axis = self.context.data.axis
+        minute = self.context.minute_data(date)
+        if minute.is_empty():
+            empty = np.full(axis.tick_count, np.nan, np.float32)
+            result = {name: empty.copy() for name in self.component_names}
+        else:
+            ratio = self.context.config.selection_ratio
+            ranked = (
+                minute.lazy()
+                .with_columns(
+                    pl.len().over("tick").alias("minute_count"),
+                    pl.col("minute_return").is_not_null().sum().over("tick").alias("return_count"),
+                    pl.col("minute_return").rank(method="ordinal").over("tick").alias("return_rank"),
+                    pl.col("close").rank(method="ordinal").over("tick").alias("price_rank"),
+                    pl.col("volume").rank(method="ordinal", descending=True).over("tick").alias("volume_rank"),
+                )
+                .with_columns(
+                    (
+                        pl.col("return_rank")
+                        <= (pl.col("return_count") * ratio).ceil()
+                    ).fill_null(False).alias("selldownret_selected"),
+                    (
+                        pl.col("price_rank")
+                        <= (pl.col("minute_count") * ratio).ceil()
+                    ).alias("selllowprice_selected"),
+                    (
+                        pl.col("volume_rank")
+                        <= (pl.col("minute_count") * ratio).ceil()
+                    ).alias("sellhighvolume_selected"),
+                )
+            )
+            aggregates = [
+                pl.col("all_amount").sum().alias("day_amount"),
+                pl.col("all_count").sum().alias("day_count"),
+                pl.col("minute_count").first().alias("minute_count"),
+            ]
+            for name in self.component_names:
+                selected = pl.col(f"{name}_selected")
+                aggregates.extend([
+                    pl.col("sell_amount").filter(selected).sum().alias(f"{name}_amount"),
+                    pl.col("sell_count").filter(selected).sum().alias(f"{name}_count"),
+                ])
+
+            grouped = ranked.group_by("tick").agg(*aggregates)
+            factor_expressions = []
+            for name in self.component_names:
+                factor_expressions.append(
+                    pl.when(
+                        (pl.col("minute_count") >= self.context.config.min_minutes)
+                        & (pl.col("day_amount") > 0)
+                        & (pl.col(f"{name}_count") > 0)
+                    )
+                    .then(
+                        (pl.col(f"{name}_amount") / pl.col(f"{name}_count"))
+                        / (pl.col("day_amount") / pl.col("day_count"))
+                    )
+                    .otherwise(None)
+                    .alias(name)
+                )
+            daily = (
+                grouped.with_columns(*factor_expressions)
+                .select("tick", *self.component_names)
+                .collect(engine="streaming")
+            )
+            result = {
+                name: self.context.align(daily, name)
+                for name in self.component_names
+            }
+
+        self._daily_cache[key] = result
+        cache_size = self.context.config.lookback_days + 2
+        while len(self._daily_cache) > cache_size:
+            self._daily_cache.popitem(last=False)
+        return result
+
+    def _mean_values(self, values):
+        valid = np.isfinite(values)
+        count = valid.sum(axis=0)
+        return np.divide(
+            np.where(valid, values, 0.0).sum(axis=0), count,
+            out=np.full(values.shape[1], np.nan),
+            where=count >= self.context.config.min_valid_days,
+        ).astype(np.float32)
 
     def calculate(self, asof):
-        dates = self.components[0]._window_dates(asof)
-        if dates is None:
-            return np.full(self.context.data.axis.tick_count, np.nan, np.float32)
+        cfg = self.context.config
+        axis = self.context.data.axis
+        end = axis.date_position(pd.Timestamp(asof).date())
+        start = end - cfg.lookback_days + 1
+        if start < 0:
+            return np.full(axis.tick_count, np.nan, np.float32)
 
-        # Interleave components by date so one small minute cache is enough:
-        # each day's L2 parquet is scanned once and reused by all components.
         daily = [
-            [factor._daily_value(date) for factor in self.components]
-            for date in dates
+            self._daily_values(date)
+            for date in self.context.data["trade_dates"][start:end + 1]
         ]
-        daily = np.asarray(daily)
-        values = np.stack([
-            factor._mean_values(daily[:, index, :])
-            for index, factor in enumerate(self.components)
+        components = np.stack([
+            self._mean_values(np.stack([values[name] for values in daily]))
+            for name in self.component_names
         ])
-        result = np.mean(values, axis=0)
-        result[~np.isfinite(values).all(axis=0)] = np.nan
+        result = np.mean(components, axis=0)
+        result[~np.isfinite(components).all(axis=0)] = np.nan
         return result.astype(np.float32)
 
 SATD_FACTORS = (
@@ -292,3 +385,4 @@ __all__ = [
     "SATDSellLowPriceFactor", "SATDSellHighVolumeFactor",
     "SATDCombinationFactor",
 ]
+
