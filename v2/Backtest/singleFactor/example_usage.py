@@ -1,4 +1,4 @@
-"""单因子回测项目的完整调用示例。"""
+﻿"""单因子回测项目的完整调用示例。"""
 
 from pathlib import Path
 import sys
@@ -89,7 +89,7 @@ def run_continuous_factor_vs_index(factor, stock_return, tradable, industry, ind
 
 
 def compare_cov_rebalance(cov, stock_return, tradable, industry, index_weight):
-    """一次得到日、周、月调仓的绩效汇总及各自完整结果。"""
+    """一次得到日、周、月调仓的绩效汇总以及各自完整结果。"""
     data = FactorData(cov, stock_return, tradable, industry, index_weight)
     config = BacktestConfig(
         portfolio=PortfolioConfig(
@@ -213,7 +213,7 @@ def run_capacity(target_weight, execution_price, traded_amount,
 def build_pair_book(pair_signal):
     pair = PairDefinition(
         left="600000", right="601398", hedge_ratio=1.0,
-        rationale="同业可比公司，价差关系已在样本外验证")
+        rationale="同行可比公司，价差关系已在样本外验证")
     return explicit_pair_weights(pair_signal, (pair,), holding_days=5)
 
 
@@ -268,18 +268,18 @@ def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
 
 
 if __name__ == "__main__":
-    # Run with: python -m v2.Backtest.singleFactor.example_usage
+    # 运行方式：python -m v2.Backtest.singleFactor.example_usage
     ROOT_PATH = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
     START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
-    BENCHMARK = "zzfull"
-    FACTOR_NAME = "qua"
+    BENCHMARK = "zz1000"
+    FACTOR_NAME = "afr"
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
     OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" /f'{FACTOR_NAME}'
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 输入与参数设置
+    # 输入与参数设置；先限定基准股票池，再在池内逐日重新标准化因子。
     inputs = load_backtest_inputs(
         ROOT_PATH,
         name=FACTOR_NAME,
@@ -288,7 +288,12 @@ if __name__ == "__main__":
         benchmark=BENCHMARK,
         execution_lag=SIGNAL_LAG,
     )
-    inputs["factor"][~inputs["tradable"]] = np.nan
+    universe = inputs["tradable"] & (inputs["index_weight"] > 0)
+    factor = inputs["factor"].where(universe)
+    factor = factor.sub(factor.mean(axis=1), axis=0)
+    factor = factor.div(factor.std(axis=1, ddof=0), axis=0)
+    inputs["factor"] = factor
+    inputs["tradable"] = universe
     data = FactorData(
         inputs["factor"],
         inputs["stock_return"],
@@ -302,7 +307,7 @@ if __name__ == "__main__":
         top_groups=2,
         weighting=Weighting.SIGNAL, 
         industry_align=True,
-        active_side=ActiveSide.LONG_SHORT, 
+        active_side=ActiveSide.LONG, 
         active_gross=1.0
     )
     exe_config = ExecutionConfig(
@@ -315,7 +320,7 @@ if __name__ == "__main__":
         execution=exe_config,
     )
 
-    # 运行单因子计算与分组收益
+    # 运行单因子回测与分组收益分析
     backtest_result = SingleFactorBacktester(config).run(data)
 
     print(f"{FACTOR_NAME.upper()} backtest summary")
@@ -329,7 +334,7 @@ if __name__ == "__main__":
     )
     _, backtest_figure = backtest_result.report(show=False)
 
-    # 运行回测模拟器
+    # 运行容量模拟器
     target = backtest_result.weights["portfolio"]
 
     simulator = CapacitySimulator(
@@ -363,3 +368,11 @@ if __name__ == "__main__":
     else:
         plt.close(backtest_figure)
         plt.close(capacity_figure)
+
+
+
+
+
+
+
+

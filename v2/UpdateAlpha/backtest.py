@@ -1,4 +1,4 @@
-"""Unified calculation and grouped-return plots for registered alpha factors.
+﻿"""Unified calculation and grouped-return plots for registered alpha factors.
 
 Examples
 --------
@@ -24,7 +24,7 @@ import pandas as pd
 from tqdm import tqdm
 
 if __package__:
-    from . import FACTOR_REGISTRY, get_factor_spec
+    from . import FACTOR_REGISTRY, discover_factors, get_factor_spec
     from .alphabase import AlphaBase, AlphaContext
     from ..ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
     from ..UpdateData.config import ROOT
@@ -32,7 +32,7 @@ else:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
-    from v2.UpdateAlpha import FACTOR_REGISTRY, get_factor_spec
+    from v2.UpdateAlpha import FACTOR_REGISTRY, discover_factors, get_factor_spec
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext
     from v2.ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
     from v2.UpdateData.config import ROOT
@@ -40,6 +40,33 @@ else:
 
 DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
 DEFAULT_HORIZONS = (1, 5, 10, 20)
+
+
+def _universe_mask(context: AlphaContext, universe, start_idx, end_idx):
+    """Return a date-by-stock mask used only for plotting/evaluation."""
+
+    if universe is None:
+        return None
+    if isinstance(universe, str):
+        key = universe.lower()
+        if key in {"tradable", "basic/tradable"}:
+            values = context.data.read(
+                "basic/tradable", start_date=start_idx, end_date=end_idx
+            )
+            return np.asarray(values, dtype=bool)
+        if key in {"all", "none"}:
+            return None
+        field = (
+            f"index/weight/{key}_weight"
+            if not universe.startswith(("index/", "basic/", "d_"))
+            else universe
+        )
+        values = context.data.read(field, start_date=start_idx, end_date=end_idx)
+        return np.isfinite(values) & (values > 0)
+    values = np.asarray(universe)
+    if values.ndim != 2:
+        raise ValueError("universe array must be 2-D date-by-stock")
+    return values.astype(bool, copy=False)
 
 
 def select_period(context: AlphaContext, start_date=None, end_date=None):
@@ -91,6 +118,7 @@ def plot_group_ret(
     num_groups=10,
     return_offset=2,
     output_dir=None,
+    universe="tradable",
 ):
     """Plot cumulative demeaned group returns for an existing factor matrix."""
 
@@ -101,10 +129,27 @@ def plot_group_ret(
     pred = context.data.load(factor_path)[
         start_idx:end_idx + 1, :context.data.axis.tick_count
     ].copy()
-    tradable = context.data.read(
-        "basic/tradable", start_date=start_idx, end_date=end_idx
+    
+    mask = _universe_mask(context, universe, start_idx, end_idx)
+    if mask is not None:
+        pred = np.where(mask[:, :context.data.axis.tick_count], pred, np.nan)
+
+    valid = np.isfinite(pred)
+    count = valid.sum(axis=1, keepdims=True)
+    mean = np.divide(
+        np.nansum(np.where(valid, pred, 0.0), axis=1, keepdims=True),
+        count,
+        out=np.full((pred.shape[0], 1), np.nan),
+        where=count > 0,
     )
-    pred = np.where(tradable, pred, np.nan)
+    centered = pred - mean
+    std = np.sqrt(np.divide(
+        np.nansum(np.where(valid, centered * centered, 0.0), axis=1, keepdims=True),
+        count,
+        out=np.full((pred.shape[0], 1), np.nan),
+        where=count > 1,
+    ))
+    pred = np.divide(centered, std, out=np.full_like(pred, np.nan), where=std > 0)
 
     direction = factor_class.meta.direction if factor_class is not None else 1
     test_pred = pred * direction
@@ -221,6 +266,7 @@ def run_registered(
     num_groups=10,
     return_offset=2,
     output_dir=None,
+    universe="tradable",
     context_kwargs=None,
 ):
     """Calculate and/or plot one registered factor."""
@@ -256,10 +302,12 @@ def run_registered(
             num_groups=num_groups,
             return_offset=return_offset,
             output_dir=output_dir,
+            universe=universe,
         )
 
 
 def list_factors():
+    discover_factors()
     return pd.DataFrame(
         [
             {
@@ -289,6 +337,7 @@ def run_from_ide(
     num_groups=10,
     return_offset=2,
     output_dir=None,
+    universe="tradable",
 ):
     """Run one or more factors directly from Python without parsing argv."""
 
@@ -305,6 +354,7 @@ def run_from_ide(
             num_groups=num_groups,
             return_offset=return_offset,
             output_dir=output_dir,
+            universe=universe,
         )
         results[name] = {"output": output, "stats": stats}
         print(stats.to_string(index=False))
@@ -314,8 +364,8 @@ def run_from_ide(
 
 if __name__ == "__main__":
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("sue1",)  # cov, cov_current, cov_decay_optimized
-    START_DATE = "2023-01-01"
+    FACTORS = ("satd_combination",)  # cov, cov_current, cov_decay_optimized
+    START_DATE = "2024-01-01"
     END_DATE = "2026-06-30"
 
     # True: calculate factor values first and then plot.
@@ -333,4 +383,12 @@ if __name__ == "__main__":
         num_groups=10,
         return_offset=2,
         output_dir=None,
+        universe="tradable",
     )
+
+
+
+
+
+
+

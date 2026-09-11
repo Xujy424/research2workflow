@@ -109,8 +109,7 @@ class SUEFSURFContext(AlphaContext):
         if x.is_empty(): self._cache[key]=x; return x
         x=(
             x.filter(pl.col("end_date").dt.month().is_in([3,6,9,12]))
-           .sort(["tick","end_date","publish_date","id"])
-           .unique(["tick","end_date"],keep="first",maintain_order=True)
+           .pipe(self.latest_report_fields)
            .with_columns(
                pl.col("end_date").dt.year().alias("year"),
                (pl.col("end_date").dt.month()//3).alias("quarter"),
@@ -118,6 +117,22 @@ class SUEFSURFContext(AlphaContext):
         )
         self._cache[key]=x
         return x
+
+    @staticmethod
+    def latest_report_fields(frame):
+        """Latest finite field and its own disclosure date, within PIT inputs."""
+        expressions = [pl.col("id").last(), pl.col("publish_date").last()]
+        for field in ("net_profit_accum", "revenue_accum"):
+            valid = pl.col(field).is_finite().fill_null(False)
+            expressions.extend([
+                pl.col(field).filter(valid).last().alias(field),
+                pl.col("publish_date").filter(valid).last().alias(f"{field}_date"),
+            ])
+        return (
+            frame.sort(["tick", "end_date", "publish_date", "id"])
+            .group_by(["tick", "end_date"], maintain_order=True)
+            .agg(expressions)
+        )
 
     def local_consensus(self, events, field):
         axis=self.data.axis
@@ -267,7 +282,12 @@ class _ConsensusSurpriseFactor(AlphaBase):
         events = self.context.actual_events(asof)
         if events.is_empty():
             return pl.DataFrame(schema={"tick": pl.String, self.column: pl.Float64})
-        events = events.with_columns(pl.col("publish_date").alias("cutoff"))
+        # A later report may update profit but omit revenue (or vice versa).
+        # Match each actual to forecasts preceding its own disclosure.
+        events = events.with_columns(
+            pl.col(f"{self.actual_column}_date").alias("publish_date"),
+            pl.col(f"{self.actual_column}_date").alias("cutoff"),
+        ).filter(pl.col("cutoff").is_not_null())
         prior, actual_q, prior_fy, prior_before, prior_q = self._quarter_fields(
             events, self.actual_column
         )

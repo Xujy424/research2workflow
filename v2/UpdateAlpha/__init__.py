@@ -1,13 +1,19 @@
-"""Alpha calculation, discovery, and matrix-maintenance interfaces."""
+﻿"""Alpha calculation, discovery, and matrix-maintenance interfaces."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
+import inspect
+import pkgutil
 
 from .alphabase import AlphaBase, AlphaContext, AlphaMeta
 from .analyst_forecast.aog import (
     AOGConfig, AOGContext, AOGFactor, AOGRankFactor, AOGDemaxFactor,
-    AOGQuantileFactor, AOGLowDemaxFactor, AOGLowQuantileFactor, AOG_FACTORS,
+AOGQuantileFactor, AOGDemaxDecayFactor,
+    AOGQuantileDecayFactor,
+    AOGLowDemaxFactor, AOGLowQuantileFactor,
+    AOG_FACTORS,
 )
 
 from .analyst_forecast.afr import (
@@ -88,6 +94,15 @@ from .pricevolume.active_trade import (
 )
 
 
+from .pricevolume.satd import (
+    SATDContext,
+    SATDSellDownRetFactor,
+    SATDSellLowPriceFactor,
+    SATDSellHighVolumeFactor,
+    SATDBuyFlatFactor,
+    SATDCombinationFactor,
+    SATD_FACTORS,
+)
 @dataclass(frozen=True)
 class AlphaSpec:
     """Explicit pairing of a factor with the Context that constructs it."""
@@ -183,6 +198,46 @@ FACTOR_REGISTRY = {
 }
 
 
+_DISCOVERY_CATEGORIES = ("analyst_forecast", "pricevolume")
+_DISCOVERED_MODULES = set()
+
+
+def discover_factors(target=None):
+    """Discover factor/context pairs from first-level alpha modules.
+
+    A module is auto-registered when it defines exactly one AlphaContext
+    subclass. Every concrete AlphaBase subclass in that module with AlphaMeta
+    is paired with that context. Explicit FACTOR_REGISTRY entries still win.
+    """
+    key = target.strip().lower() if target is not None else None
+    for category in _DISCOVERY_CATEGORIES:
+        package = importlib.import_module(f"{__name__}.{category}")
+        for module_info in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
+            if module_info.ispkg or module_info.name in _DISCOVERED_MODULES:
+                continue
+            module = importlib.import_module(module_info.name)
+            _DISCOVERED_MODULES.add(module_info.name)
+            classes = [
+                value for value in vars(module).values()
+                if inspect.isclass(value) and value.__module__ == module.__name__
+            ]
+            contexts = [
+                cls for cls in classes
+                if cls is not AlphaContext and issubclass(cls, AlphaContext)
+            ]
+            factors = [
+                cls for cls in classes
+                if cls is not AlphaBase
+                and issubclass(cls, AlphaBase)
+                and isinstance(getattr(cls, "meta", None), AlphaMeta)
+            ]
+            if len(contexts) == 1:
+                for spec in _specs(contexts[0], factors, category):
+                    FACTOR_REGISTRY.setdefault(spec.name, spec)
+            if key is not None and key in FACTOR_REGISTRY:
+                return FACTOR_REGISTRY[key]
+    return FACTOR_REGISTRY.get(key) if key is not None else None
+
 def get_factor_spec(
     name: str,
     *,
@@ -204,6 +259,10 @@ def get_factor_spec(
                 f"factor name {name!r} does not match meta.name {spec.name!r}"
             )
         FACTOR_REGISTRY[key] = spec
+        return spec
+
+    spec = discover_factors(key)
+    if spec is not None:
         return spec
 
     available = ", ".join(sorted(FACTOR_REGISTRY))
@@ -290,3 +349,10 @@ __all__ = [
     "ACTPositiveFactor",
     "ACTNegativeFactor",
 ]
+
+
+
+
+
+
+
