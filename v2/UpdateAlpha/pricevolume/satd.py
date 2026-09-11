@@ -30,7 +30,7 @@ class SATDConfig:
     selection_ratio: float = 0.10
     min_valid_days: int = 20
     min_minutes: int = 20
-    cache_days: int = 32
+    cache_days: int = 2
 
     def __post_init__(self):
         if self.lookback_days < 1:
@@ -121,64 +121,83 @@ class _SATDFactor(AlphaBase):
     side = -1
     dependencies = ("l2/proc/shcj.pq", "l2/proc/szcj.pq")
 
+    def __init__(self, context):
+        super().__init__(context)
+        self._daily_cache = OrderedDict()
+
     def _selected_minutes(self, minute):
         raise NotImplementedError
 
     def _daily_value(self, date):
-        minute = self.context.minute_data(date)
-        if minute.is_empty():
-            return np.full(self.context.data.axis.tick_count, np.nan, np.float32)
+        key = pd.Timestamp(date).strftime("%Y%m%d")
+        cached = self._daily_cache.get(key)
+        if cached is not None:
+            self._daily_cache.move_to_end(key)
+            return cached
         if self.side not in (-1, 1):
             raise ValueError("factor side must be 1 (active buy) or -1 (active sell)")
-        side_name = "buy" if self.side == 1 else "sell"
-        selected = self._selected_minutes(minute.lazy())
-        daily = (
-            selected.group_by("tick")
-            .agg(
-                pl.col("all_amount").sum().alias("day_amount"),
-                pl.col("all_count").sum().alias("day_count"),
-                pl.col(f"{side_name}_amount").filter(pl.col("selected")).sum().alias("selected_amount"),
-                pl.col(f"{side_name}_count").filter(pl.col("selected")).sum().alias("selected_count"),
-                pl.len().alias("minute_count"),
-            )
-            .with_columns(
-                pl.when(
-                    (pl.col("minute_count") >= self.context.config.min_minutes)
-                    & (pl.col("day_amount") > 0)
-                    & (pl.col("selected_count") > 0)
-                )
-                .then(
-                    (pl.col("selected_amount") / pl.col("selected_count"))
-                    / (pl.col("day_amount") / pl.col("day_count"))
-                )
-                .otherwise(None)
-                .alias("value")
-            )
-            .select("tick", "value")
-            .collect(engine="streaming")
-        )
-        return self.context.align(daily)
 
-    def calculate(self, asof):
+        minute = self.context.minute_data(date)
+        if minute.is_empty():
+            result = np.full(self.context.data.axis.tick_count, np.nan, np.float32)
+        else:
+            side_name = "buy" if self.side == 1 else "sell"
+            selected = self._selected_minutes(minute.lazy())
+            daily = (
+                selected.group_by("tick")
+                .agg(
+                    pl.col("all_amount").sum().alias("day_amount"),
+                    pl.col("all_count").sum().alias("day_count"),
+                    pl.col(f"{side_name}_amount").filter(pl.col("selected")).sum().alias("selected_amount"),
+                    pl.col(f"{side_name}_count").filter(pl.col("selected")).sum().alias("selected_count"),
+                    pl.len().alias("minute_count"),
+                )
+                .with_columns(
+                    pl.when(
+                        (pl.col("minute_count") >= self.context.config.min_minutes)
+                        & (pl.col("day_amount") > 0)
+                        & (pl.col("selected_count") > 0)
+                    )
+                    .then(
+                        (pl.col("selected_amount") / pl.col("selected_count"))
+                        / (pl.col("day_amount") / pl.col("day_count"))
+                    )
+                    .otherwise(None)
+                    .alias("value")
+                )
+                .select("tick", "value")
+                .collect(engine="streaming")
+            )
+            result = self.context.align(daily)
+
+        self._daily_cache[key] = result
+        cache_size = self.context.config.lookback_days + 2
+        while len(self._daily_cache) > cache_size:
+            self._daily_cache.popitem(last=False)
+        return result
+
+    def _window_dates(self, asof):
         cfg = self.context.config
-        axis = self.context.data.axis
-        end = axis.date_position(pd.Timestamp(asof).date())
+        end = self.context.data.axis.date_position(pd.Timestamp(asof).date())
         start = end - cfg.lookback_days + 1
         if start < 0:
-            return np.full(axis.tick_count, np.nan, np.float32)
-        values = np.stack([
-            self._daily_value(date)
-            for date in self.context.data["trade_dates"][start:end + 1]
-        ])
+            return None
+        return self.context.data["trade_dates"][start:end + 1]
+
+    def _mean_values(self, values):
         valid = np.isfinite(values)
         count = valid.sum(axis=0)
-        result = np.divide(
+        return np.divide(
             np.where(valid, values, 0.0).sum(axis=0), count,
-            out=np.full(axis.tick_count, np.nan),
-            where=count >= cfg.min_valid_days,
-        )
-        return result.astype(np.float32)
+            out=np.full(values.shape[1], np.nan),
+            where=count >= self.context.config.min_valid_days,
+        ).astype(np.float32)
 
+    def calculate(self, asof):
+        dates = self._window_dates(asof)
+        if dates is None:
+            return np.full(self.context.data.axis.tick_count, np.nan, np.float32)
+        return self._mean_values(np.stack([self._daily_value(date) for date in dates]))
 
 class SATDSellDownRetFactor(_SATDFactor):
     meta = AlphaMeta("satd_selldownret", "20D active-sell SATD at lowest-return minutes", direction=1)
@@ -232,19 +251,35 @@ class SATDBuyFlatFactor(_SATDFactor):
 class SATDCombinationFactor(AlphaBase):
     meta = AlphaMeta("satd_combination", "Equal-weight active-sell SATD combination", direction=1)
     dependencies = _SATDFactor.dependencies
+    component_classes = (
+        SATDSellDownRetFactor,
+        SATDSellLowPriceFactor,
+        SATDSellHighVolumeFactor,
+    )
+
+    def __init__(self, context):
+        super().__init__(context)
+        self.components = tuple(cls(context) for cls in self.component_classes)
 
     def calculate(self, asof):
-        factors = (
-            SATDSellDownRetFactor(self.context),
-            SATDSellLowPriceFactor(self.context),
-            SATDSellHighVolumeFactor(self.context),
-        )
-        values = np.stack([factor.calculate(asof) for factor in factors])
+        dates = self.components[0]._window_dates(asof)
+        if dates is None:
+            return np.full(self.context.data.axis.tick_count, np.nan, np.float32)
+
+        # Interleave components by date so one small minute cache is enough:
+        # each day's L2 parquet is scanned once and reused by all components.
+        daily = [
+            [factor._daily_value(date) for factor in self.components]
+            for date in dates
+        ]
+        daily = np.asarray(daily)
+        values = np.stack([
+            factor._mean_values(daily[:, index, :])
+            for index, factor in enumerate(self.components)
+        ])
         result = np.mean(values, axis=0)
         result[~np.isfinite(values).all(axis=0)] = np.nan
         return result.astype(np.float32)
-
-
 
 SATD_FACTORS = (
     SATDSellDownRetFactor, SATDSellLowPriceFactor,
@@ -257,14 +292,3 @@ __all__ = [
     "SATDSellLowPriceFactor", "SATDSellHighVolumeFactor",
     "SATDCombinationFactor",
 ]
-
-
-
-
-
-
-
-
-
-
-
