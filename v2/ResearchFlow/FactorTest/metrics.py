@@ -1,4 +1,4 @@
-"""中文说明：本脚本提供当前模块的量化研究或生产能力。"""
+﻿"""中文说明：本脚本提供当前模块的量化研究或生产能力。"""
 
 
 import numpy as np
@@ -32,26 +32,8 @@ def rankIC(y_, y):
 
 # 中文说明：`calc_group_ret`：计算研究或生产指标。
 def calc_group_ret(alpha, label, num_group=10):
-    rank = bn.nanrankdata(alpha, axis=-1)
-    num_signal = np.nanmax(rank, axis=-1)
-    stock_each_group = num_signal // num_group
-    group_ret = np.full((num_group, num_signal.shape[0]), np.nan)
-    for i in range(num_group):
-        if i==num_group-1:
-            group_ix = (rank.T > stock_each_group * i) & (rank.T <= num_signal)
-        else:
-            group_ix = (rank.T > stock_each_group * i) & (rank.T <= stock_each_group * (i + 1)) # n_stock, n_date
-        temp_ret = label.copy()
-        temp_ret[~group_ix.T] = np.nan
-        group_ret[i] = np.nanmean(temp_ret, axis=-1)
-    group_ret = group_ret - np.nanmean(group_ret, axis=0)
-    col_list = list(range(1, num_group + 1))[::-1]
-    # group_ret = pd.DataFrame(
-    #     group_ret.T,
-    #     columns=col_list,
-    #     index=alpha.index,
-    # )
-    return group_ret
+    from ..matrix_math import calc_group_ret as _calc_group_ret
+    return _calc_group_ret(alpha, label, num_group)
 
 # 中文说明：`calc_annret`：计算研究或生产指标。
 def calc_annret(ret_df):

@@ -1,4 +1,4 @@
-"""Standardized unexpected earnings (SUE) and revenue (SUR) factors."""
+﻿"""Standardized unexpected earnings (SUE) and revenue (SUR) factors."""
 
 from __future__ import annotations
 
@@ -42,12 +42,12 @@ class SUEConfig:
 class SUEContext(AlphaContext):
     """Point-in-time financial-report data shared by SUE/SUR factors."""
 
-    def __init__(self, root=DEFAULT_ROOT, conn=None, config=SUEConfig()):
+    def __init__(self, root=DEFAULT_ROOT, conn=None, config=SUEConfig(), universe="self"):
         self.config = config
         self.conn = conn or get_jy_conn()
         self._owns_conn = conn is None
         self._cache = {}
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     @staticmethod
     def latest_report_fields(frame):

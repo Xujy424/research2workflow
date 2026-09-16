@@ -1,4 +1,4 @@
-"""QUA factor based on minute-level average trade amount."""
+﻿"""QUA factor based on minute-level average trade amount."""
 
 from __future__ import annotations
 
@@ -49,14 +49,14 @@ class QUAConfig:
 
 
 class QUAContext(AlphaContext):
-    def __init__(self, root=DEFAULT_ROOT, config=QUAConfig(), l2_root=None):
+    def __init__(self, root=DEFAULT_ROOT, config=QUAConfig(), l2_root=None, universe="self"):
         self.config = config
         self.l2_root = (
             Path(l2_root) if l2_root is not None
             else Path(root) / "stock" / "l2"
         )
         self._daily_cache = OrderedDict()
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     def daily_values(self, date, name):
         key = (name, pd.Timestamp(date).strftime("%Y%m%d"))

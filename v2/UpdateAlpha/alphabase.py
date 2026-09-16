@@ -39,8 +39,45 @@ class AlphaPreprocessConfig:
 class AlphaContext:
     """Minimal data environment shared by every alpha factor."""
 
-    def __init__(self, data):
+    market_value_field = "d_essentials/circ_mv"
+    tradable_field = "basic/tradable"
+
+    def __init__(self, data, universe="self"):
         self.data = data
+        self.universe = universe
+
+    def read_row(self, field, day):
+        return np.asarray(self.data.read(field, int(day)), dtype=float)
+
+    def _universe_weight_field(self):
+        if self.universe in (None, "", "self"):
+            return None
+        if not isinstance(self.universe, str):
+            raise TypeError("universe must be None or a string")
+        if "/" in self.universe:
+            return self.universe
+        return f"index/weight/{self.universe}_weight"
+
+    def calculate_benchmark(self, values, weight_day):
+        """Weighted benchmark value for the configured universe."""
+        field = self._universe_weight_field() or self.market_value_field
+        weights = self.read_row(field, weight_day)[: len(values)]
+        valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+        if not valid.any():
+            return np.nan
+        return np.average(values[valid], weights=weights[valid])
+
+    def filter_factor_universe(self, values, day):
+        """Keep tradable stocks, and restrict to index members when set."""
+        n = self.data.axis.tick_count
+        result = np.full_like(values, np.nan, dtype=float)
+        mask = self.read_row(self.tradable_field, day)[:n] == 1
+        field = self._universe_weight_field()
+        if field is not None:
+            weights = self.read_row(field, max(0, int(day) - 1))[:n]
+            mask &= np.isfinite(weights) & (weights > 0)
+        result[:n] = np.where(mask, values[:n], np.nan)
+        return result
 
     def close(self):
         self.data.close()
@@ -64,7 +101,6 @@ class AlphaContext:
 
     def __exit__(self, *_):
         self.close()
-
 
 class AlphaBase(ABC):
     """Base class for one date-by-instrument float32 alpha matrix."""
@@ -100,13 +136,7 @@ class AlphaBase(ABC):
         """Mask stocks that cannot be traded on the signal/execution date."""
         axis = self.context.data.axis
         row = axis.date_position(asof)
-        n = axis.tick_count
-        tradable = np.asarray(
-            self.context.data.read(self.preprocess_config.tradable_field, row),
-            dtype=bool,
-        )[:n]
-        result = np.full_like(values, np.nan, dtype=float)
-        result[:n] = np.where(tradable, values[:n], np.nan)
+        result = self.context.filter_factor_universe(values, row)
         return result
 
     def winsorize(self, values: np.ndarray) -> np.ndarray:

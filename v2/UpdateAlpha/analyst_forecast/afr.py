@@ -84,13 +84,14 @@ class AFRContext(AlphaContext):
     """Share point-in-time SQL and local matrix reads among factors."""
 
     def __init__(
-        self, root=DEFAULT_ROOT, conn=None, config=AFRConfig(), analyst_weights=None
+        self, root=DEFAULT_ROOT, conn=None, config=AFRConfig(),
+        analyst_weights=None, universe="self"
     ):
         self.config = config
         self.analyst_weights = analyst_weights
         self.conn = conn or get_zyyx_conn()
         self._owns_conn = conn is None
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
         self._cache = {}
 
 
@@ -220,10 +221,10 @@ class AFRFactor(AlphaBase):
             ((pl.col("forecast_np") - pl.col("prior_np")) / pl.col("prior_np").abs()).clip(-cfg.revision_limit, cfg.revision_limit).alias("afr_event"),
         )
         return events.filter(
-            pl.col("prior_date").is_not_null()  # å»æ‰é¦–æ¬¡é¢„æµ‹ï¼Œå˜ç›¸ä¿è¯ä¸€ä¸ªåˆ†æå¸ˆå¯¹æŸè‚¡ç¥¨è‡³å°‘ä¸¤æ¬¡é¢„æµ‹
-            & (pl.col("create_date") >= _date(asof) - pd.Timedelta(days=cfg.lookback_days))  # å›çœ‹90å¤©
+            pl.col("prior_date").is_not_null()  # È¥µôÊ×´ÎÔ¤²â£¬±äÏà±£Ö¤Ò»¸ö·ÖÎöÊ¦¶ÔÄ³¹ÉÆ±ÖÁÉÙÁ½´ÎÔ¤²â
+            & (pl.col("create_date") >= _date(asof) - pd.Timedelta(days=cfg.lookback_days))  # »Ø¿´90Ìì
             & pl.col("afr_event").is_finite()
-            & (pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions)  # å‰”é™¤å°‘äºä¸‰ä»½é¢„æµ‹æŠ¥å‘Šçš„è‚¡ç¥¨
+            & (pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions)  # ÌŞ³ıÉÙÓÚÈı·İÔ¤²â±¨¸æµÄ¹ÉÆ±
         )
 
     def calculate(self, asof):

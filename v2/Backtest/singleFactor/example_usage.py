@@ -1,4 +1,4 @@
-﻿"""单因子回测项目的完整调用示例。"""
+﻿"""Single-factor backtest usage examples."""
 
 from pathlib import Path
 import sys
@@ -38,17 +38,17 @@ def run_cov(cov, stock_return, tradable, industry, index_weight):
     data = FactorData(cov, stock_return, tradable, industry, index_weight)
     config = BacktestConfig(
         portfolio=PortfolioConfig(
-            method=Method.BENCHMARK_HEDGED, 
-            quantiles=10, 
+            method=Method.BENCHMARK_HEDGED,
+            quantiles=10,
             top_groups=2,
-            weighting=Weighting.SIGNAL, 
+            weighting=Weighting.SIGNAL,
             industry_align=True,
-            active_side=ActiveSide.LONG, 
+            active_side=ActiveSide.LONG,
             active_gross=1.0
         ),
         execution=ExecutionConfig(
-            signal_lag=2, 
-            rebalance_days=5, 
+            signal_lag=2,
+            rebalance_days=5,
             cost_bps=5
         ),
     )
@@ -136,14 +136,12 @@ def run_event(event_signal, stock_return, tradable, industry=None,
               study_adjustment=None,
               active_gross=0.20):
     """Run event alpha, an event-only book, or an event index overlay.
-
     portfolio_mode selects standalone neutralized alpha, a long-only event
     portfolio, or a benchmark plus neutralized event-alpha overlay.
     """
     portfolio_mode = EventPortfolioMode(portfolio_mode)
     if (portfolio_mode == EventPortfolioMode.BENCHMARK_ENHANCED and index_weight is None):
         raise ValueError("benchmark_enhanced requires index_weight")
-
     data = FactorData(
         signal=event_signal,
         returns=stock_return,
@@ -172,7 +170,6 @@ def run_event(event_signal, stock_return, tradable, industry=None,
         event=event,
     )
     portfolio = SingleFactorBacktester(config).run(data)
-
     study = None
     if run_study:
         adjustment = study_adjustment
@@ -192,10 +189,10 @@ def run_capacity(target_weight, execution_price, traded_amount,
     """Run the capacity simulation and optionally print/plot its report."""
     simulator = CapacitySimulator(
         CapacityConfig(
-            capital=(1e7, 5e7, 1e8, 5e8), 
+            capital=(1e7, 5e7, 1e8, 5e8),
             max_participation=.1,
-            commission_bps=10, 
-            impact_coefficient=.001, 
+            commission_bps=10,
+            impact_coefficient=.001,
             lot_size=100
         )
     )
@@ -217,12 +214,11 @@ def build_pair_book(pair_signal):
     return explicit_pair_weights(pair_signal, (pair,), holding_days=5)
 
 
-def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
+def load_backtest_inputs(root, name, start_date, end_date, universe="self",
                          execution_lag=1):
     """Load factor inputs and execution-day capacity inputs on one date axis."""
     if not isinstance(execution_lag, (int, np.integer)) or execution_lag < 0:
         raise ValueError("execution_lag must be a non-negative integer")
-
     with DataPool(root, asset="stock") as data:
         dates = pd.DatetimeIndex(data.axis.trade_dates)
         selected = np.flatnonzero(
@@ -230,7 +226,6 @@ def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
         )
         if selected.size == 0:
             raise ValueError("no trade dates found in the requested range")
-
         start, end = int(selected[0]), int(selected[-1])
         execution_start = start + execution_lag
         execution_end = end + execution_lag
@@ -239,7 +234,6 @@ def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
                 "requested range does not have enough future trade dates for "
                 f"execution_lag={execution_lag}"
             )
-
         next_vwap = np.asarray(
             data.read("d_essentials/open", execution_end, execution_start),
             dtype=float,
@@ -248,52 +242,51 @@ def load_backtest_inputs(root, name, start_date, end_date, benchmark="zzfull",
             data.read("d_essentials/amount", execution_end, execution_start),
             dtype=float,
         )
-
         args = {
             "factor": data.read(f"factor_pool/{name}", end, start),
             "stock_return": data.read("d_essentials/pct", end, start) / 100.0,
             "tradable": data.read("basic/tradable", end, start),
             "industry": data.read("industry/industry", end, start),
-            "index_weight": data.read(f"index/weight/{benchmark}_weight", end, start),
+            "index_weight": _read_universe_weight(data, universe, start, end),
             "next_vwap": next_vwap,
             "next_amount": next_amount,
         }
         index = dates[start:end + 1]
         columns = pd.Index(data.axis.ticks, name="tick")
-
     return {
         name: pd.DataFrame(values, index=index, columns=columns)
         for name, values in args.items()
     }
 
 
+def _read_universe_weight(data, universe, start, end):
+    if universe in (None, "", "self"):
+        return data.read("d_essentials/circ_mv", end, start)
+    field = universe if "/" in universe else f"index/weight/{universe}_weight"
+    return data.read(field, end, start)
+
+
 if __name__ == "__main__":
-    # 运行方式：python -m v2.Backtest.singleFactor.example_usage
     ROOT_PATH = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
-    START_DATE = "2024-01-01"
+    START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
-    BENCHMARK = "zz1000"
-    FACTOR_NAME = "satd_sellhighvolume"
+    UNIVERSE = 'hs300'
+    FACTOR_NAME = "aog_rank_demax_20d_decay"
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
-    OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" /f'{FACTOR_NAME}'
+    OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / FACTOR_NAME
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 输入与参数设置；先限定基准股票池，再在池内逐日重新标准化因子。
     inputs = load_backtest_inputs(
         ROOT_PATH,
         name=FACTOR_NAME,
         start_date=START_DATE,
         end_date=END_DATE,
-        benchmark=BENCHMARK,
+        universe=UNIVERSE,
         execution_lag=SIGNAL_LAG,
     )
-    universe = inputs["tradable"] & (inputs["index_weight"] > 0)
-    factor = inputs["factor"].where(universe)
-    factor = factor.sub(factor.mean(axis=1), axis=0)
-    factor = factor.div(factor.std(axis=1, ddof=0), axis=0)
-    inputs["factor"] = factor
-    inputs["tradable"] = universe
+    inputs["tradable"] = inputs["tradable"] & (inputs["index_weight"] > 0)
+
     data = FactorData(
         inputs["factor"],
         inputs["stock_return"],
@@ -302,27 +295,27 @@ if __name__ == "__main__":
         inputs["index_weight"],
     )
     p_config = PortfolioConfig(
-        method=Method.BENCHMARK_HEDGED, 
-        quantiles=10, 
-        top_groups=2,
-        weighting=Weighting.SIGNAL, 
+        method=Method.BENCHMARK_HEDGED,
+        quantiles=10,
+        # top_groups=2,
+        long_groups=(10,),
+        short_groups=(1,),
+        weighting=Weighting.SIGNAL,
         industry_align=True,
-        active_side=ActiveSide.LONG, 
+        active_side=ActiveSide.LONG_SHORT,
         active_gross=1.0
     )
     exe_config = ExecutionConfig(
-        signal_lag=SIGNAL_LAG, 
-        rebalance_frequency=RebalanceFrequency.WEEKLY,
+        signal_lag=SIGNAL_LAG,
+        rebalance_frequency=RebalanceFrequency.DAILY,
         cost_bps=10
     )
     config = BacktestConfig(
         portfolio=p_config,
         execution=exe_config,
     )
-
     # 运行单因子回测与分组收益分析
     backtest_result = SingleFactorBacktester(config).run(data)
-
     print(f"{FACTOR_NAME.upper()} backtest summary")
     print(
         f"Average turnover: "
@@ -333,16 +326,14 @@ if __name__ == "__main__":
         f"{backtest_result.diagnostics['rank_ic'].mean():.6f}"
     )
     _, backtest_figure = backtest_result.report(show=False)
-
     # 运行容量模拟器
     target = backtest_result.weights["portfolio"]
-
     simulator = CapacitySimulator(
             CapacityConfig(
-                capital=(1e7, 5e7, 1e8, 5e8), 
+                capital=(1e7, 5e7, 1e8, 5e8),
                 max_participation=.1,
-                commission_bps=10, 
-                impact_coefficient=.001, 
+                commission_bps=10,
+                impact_coefficient=.001,
                 lot_size=100
             )
         )
@@ -353,26 +344,15 @@ if __name__ == "__main__":
         exposure_group=inputs["industry"],
     )
     _, capacity_figure = result.report(show=False)
-
     import matplotlib.pyplot as plt
-
     backtest_path = OUTPUT_DIR / f"{FACTOR_NAME}_backtest_report.png"
     capacity_path = OUTPUT_DIR / f"{FACTOR_NAME}_capacity_report.png"
     backtest_figure.savefig(backtest_path, dpi=160, bbox_inches="tight")
     capacity_figure.savefig(capacity_path, dpi=160, bbox_inches="tight")
     print(f"Backtest chart saved to: {backtest_path}")
     print(f"Capacity chart saved to: {capacity_path}")
-
     if SHOW_PLOTS:
         plt.show()
     else:
         plt.close(backtest_figure)
         plt.close(capacity_figure)
-
-
-
-
-
-
-
-

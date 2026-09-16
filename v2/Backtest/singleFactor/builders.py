@@ -16,20 +16,34 @@ def _allocate(score, selected, weighting):
     return raw / raw.sum()
 
 
+def _quantile_mask(score, eligible, quantiles, selected_groups):
+    """Select explicit 1-based quantiles; G1 is low and GQ is high."""
+    selected = np.zeros_like(eligible, dtype=bool)
+    positions = np.flatnonzero(eligible)
+    if len(positions) < quantiles:
+        return selected
+    ranks = rankdata(score[positions], method="average")
+    group = np.ceil(ranks * quantiles / len(positions)).astype(int)
+    selected[positions] = np.isin(group, selected_groups)
+    return selected
+
+
 def quantile_weights(signal, tradable, config: PortfolioConfig, long_only=False):
     out = np.zeros_like(signal, dtype=float)
     for t in range(len(signal)):
         ok = tradable[t] & np.isfinite(signal[t])
         if ok.sum() < config.quantiles:
             continue
-        ranks = np.zeros(signal.shape[1]); ranks[ok] = rankdata(signal[t, ok])
-        size = ok.sum() / config.quantiles
-        top = ok & (ranks > size * (config.quantiles - config.top_groups))
+        top = _quantile_mask(
+            signal[t], ok, config.quantiles, config.resolved_long_groups
+        )
         lw = _allocate(signal[t], top, config.weighting)
         if long_only:
             out[t] = lw * config.gross_exposure
             continue
-        short = ok & (ranks <= size * config.bottom_groups)
+        short = _quantile_mask(
+            signal[t], ok, config.quantiles, config.resolved_short_groups
+        )
         sw = _allocate(signal[t], short, config.weighting)
         out[t] = .5 * config.gross_exposure * (lw - sw)
     return out
@@ -52,8 +66,10 @@ def industry_aligned_long(signal, tradable, industry, benchmark, config):
             eligible = member & (benchmark[t] > 0) & tradable[t] & np.isfinite(signal[t])
             if budget <= 0 or eligible.sum() == 0:
                 continue
-            ranks = rankdata(signal[t, eligible])
-            selected = np.flatnonzero(eligible)[ranks > eligible.sum() * (1-config.top_groups/config.quantiles)]
+            selected = np.flatnonzero(_quantile_mask(
+                signal[t], eligible, config.quantiles,
+                config.resolved_long_groups,
+            ))
             if not len(selected):
                 selected = np.array([np.flatnonzero(eligible)[np.argmax(signal[t, eligible])]])
             local = _allocate(signal[t], np.isin(np.arange(signal.shape[1]), selected), config.weighting)
@@ -89,11 +105,14 @@ def _benchmark_sleeve(signal, tradable, industry, benchmark, config, side):
             if config.signal_input == SignalInput.PREBUILT_WEIGHT:
                 selected = positions[np.abs(signal[t, positions]) > 0]
             else:
-                count = max(1, int(np.ceil(
-                    len(positions) * (config.top_groups if side == ActiveSide.LONG else config.bottom_groups) / config.quantiles
-                    )))
-                order = np.argsort(signal[t, positions], kind="stable")
-                selected = positions[order[-count:] if side == ActiveSide.LONG else order[:count]]
+                groups = (
+                    config.resolved_long_groups
+                    if side == ActiveSide.LONG
+                    else config.resolved_short_groups
+                )
+                selected = np.flatnonzero(_quantile_mask(
+                    signal[t], member, config.quantiles, groups
+                ))
             if not len(selected) or budget <= 0:
                 sleeve[t, benchmark_member] += benchmark[t, benchmark_member]
                 continue

@@ -254,21 +254,23 @@ def calc_group_weights(alpha, *, num_group: int = 5, long_only: bool = True) -> 
     return 0.5 * weights - 0.5 * short
 
 
-def calc_group_ret(alpha, label, num_group=10, *, demean: bool = True):
+def calc_group_ret(alpha, label, num_group=10):
     alpha_values = _as_matrix(alpha)
     label_values = _as_matrix(label)
-    groups = group_membership(alpha_values, num_group=num_group)
-    group_ret = np.full((num_group, alpha_values.shape[0]), np.nan, dtype=float)
+    rank = bn.nanrankdata(alpha_values, axis=-1)
+    num_signal = np.nanmax(rank, axis=-1)
+    stock_each_group = num_signal // num_group
+    group_ret = np.full((num_group, num_signal.shape[0]), np.nan)
     for i in range(num_group):
-        count = groups[i].sum(axis=1)
-        total = np.nansum(np.where(groups[i], label_values, 0.0), axis=1)
-        group_ret[i] = np.divide(total, count, out=np.full(alpha_values.shape[0], np.nan), where=count > 0)
-    if demean:
-        group_ret = group_ret - np.nanmean(group_ret, axis=0)
-    if isinstance(alpha, pd.DataFrame):
-        col_list = list(range(1, num_group + 1))[::-1]
-        return pd.DataFrame(group_ret.T, columns=col_list, index=alpha.index)
-    return group_ret.T
+        if i == num_group - 1:
+            group_ix = (rank.T > stock_each_group * i) & (rank.T <= num_signal)
+        else:
+            group_ix = (rank.T > stock_each_group * i) & (rank.T <= stock_each_group * (i + 1))
+        temp_ret = label_values.copy()
+        temp_ret[~group_ix.T] = np.nan
+        group_ret[i] = np.nanmean(temp_ret, axis=-1)
+    group_ret = group_ret - np.nanmean(group_ret, axis=0)
+    return group_ret
 
 
 def calc_annret(ret_df):

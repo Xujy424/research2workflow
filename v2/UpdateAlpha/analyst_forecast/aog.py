@@ -4,8 +4,7 @@ Daily close-time signals: sample on an announcement reaction day, then carry
 until the next event (optionally expire). Date-only announcements default to
 the strictly following session; set announcement_same_day=True only after
 verifying the provider's pre-open publication-date convention.
-The default market return is synthetic zzfull. With benchmark_field=None,
-use current-day tradable stocks weighted by prior-session market value.
+With ``universe="self"``, use tradable stocks weighted by prior-session market value. A supplied index name both defines the market-adjustment benchmark and restricts factor output to that stock pool.
 Signals are available at day close; tradable/amount can contain intraday data.
 """
 from __future__ import annotations
@@ -40,8 +39,8 @@ class AOGConfig:
     event_cache_size: int = 2048
     max_event_age: int | None = None
     announcement_same_day: bool = False
-    benchmark_field: str | None = "index/weight/zzfull_weight"
-    market_value_field: str = "d_essentials/circ_mv"
+    include_performance_forecasts: bool = False
+    excess_adjust: bool = True
 
     def __post_init__(self):
         if not 1 <= self.min_observations <= self.lookback_days:
@@ -70,8 +69,8 @@ class AOGContext(AlphaContext):
     """Read point-in-time latest announcements and local market rows."""
 
     def __init__(self, root=DEFAULT_ROOT, conn=None, config=AOGConfig(),
-                 announcements=None):
-        super().__init__(DataPool(root, asset="stock"))
+                 announcements=None, universe="self"):
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
         self.config, self.conn = config, conn
         self._owns_conn = False
         self._supplied = (
@@ -120,6 +119,20 @@ class AOGContext(AlphaContext):
                       {bulletin}
                       AND s.SecuCategory=1 AND s.SecuMarket IN (83, 90)
                 """)
+            if self.config.include_performance_forecasts:
+                parts.append(f"""
+                    SELECT DISTINCT
+                        s.SecuCode AS tick,
+                        f.EndDate AS end_date,
+                        f.InfoPublDate AS publish_date
+                    FROM dbo.DZ_PerformanceForecast f
+                    INNER JOIN dbo.SecuMain s
+                        ON f.CompanyCode=s.CompanyCode
+                    WHERE f.InfoPublDate >= '{query_start:%Y-%m-%d}'
+                      AND f.InfoPublDate < DATEADD(day, 1, '{cutoff:%Y-%m-%d}')
+                      AND f.ForecastObject=10
+                      AND s.SecuCategory=1 AND s.SecuMarket IN (83, 90)
+                """)
             union = " UNION ALL ".join(parts)
             sql = f"""
                 WITH announcements AS ({union}), ranked AS (
@@ -161,15 +174,13 @@ class AOGContext(AlphaContext):
             .tail(max_events)
         )
 
-    def read_row(self, field, day):
-        return np.asarray(self.data.read(field, int(day)), dtype=float)
-
 
 class _AOGFactor(AlphaBase):
     feature = "open"
     dependencies = ("LC_IncomeStatementAll", "LC_STIBIncomeState",
                     "d_essentials/open_adj", "d_essentials/close_adj",
-                    "d_essentials/amount")
+                    "d_essentials/amount", "d_essentials/circ_mv",
+                    "basic/tradable")
 
     def __init__(self, context):
         super().__init__(context)
@@ -185,10 +196,15 @@ class _AOGFactor(AlphaBase):
         amount = read("d_essentials/amount", day)
         valid = (np.isfinite(price) & (price > 0) & np.isfinite(previous)
                  & (previous > 0) & np.isfinite(amount) & (amount > 0))
-        if self.context.config.benchmark_field is None:
-            tradable = read("basic/tradable", day)
-            valid &= np.isfinite(tradable) & (tradable == 1)
-        return np.divide(price, previous, out=np.full(n, np.nan), where=valid) - 1
+        gap = np.divide(
+            price, previous, out=np.full(n, np.nan), where=valid
+        ) - 1
+        if self.context.config.excess_adjust:
+            benchmark = self.context.calculate_benchmark(gap, day - 1)
+            if not np.isfinite(benchmark):
+                return np.full(n, np.nan)
+            gap = gap - benchmark
+        return self.context.filter_factor_universe(gap, day)
 
     def _daily_value(self, day, daily=None):
         raise NotImplementedError
@@ -231,23 +247,14 @@ class _AOGFactor(AlphaBase):
 
 
 class AOGFactor(_AOGFactor):
-    meta = AlphaMeta("aog", "announcement open gap minus synthetic market gap")
+    meta = AlphaMeta("aog", "announcement open gap minus benchmark gap")
 
     def _daily_value(self, day, daily=None):
-        raw = self._raw(day)
-        if day <= 0:
-            return raw
-        config = self.context.config
-        field = config.market_value_field if config.benchmark_field is None else config.benchmark_field
-        weights = self.context.read_row(field, day - 1)
-        eligible = np.isfinite(raw) & np.isfinite(weights) & (weights > 0)
-        if not eligible.any():
-            return np.full(raw.shape, np.nan)
-        return raw - np.average(raw[eligible], weights=weights[eligible])
+        return self._raw(day)
 
 
 class AOGRankFactor(_AOGFactor):
-    meta = AlphaMeta("aog_rank", "announcement open-gap cross-sectional percentile")
+    meta = AlphaMeta("aog_rank", "announcement excess open-gap cross-sectional percentile")
 
     def _daily_value(self, day, daily=None):
         key = (self.feature, day)
@@ -276,7 +283,7 @@ class _AOGWindowFactor(AOGRankFactor):
 
 
 class AOGDemaxFactor(_AOGWindowFactor):
-    meta = AlphaMeta("aog_rank_demax_20d", "event rank minus pre-event 20D maximum")
+    meta = AlphaMeta("aog_rank_demax_20d", "excess-gap event rank minus pre-event 20D maximum")
 
     def _reduce(self, history):
         return np.nanmax(history, axis=0)
@@ -287,7 +294,7 @@ class AOGDemaxFactor(_AOGWindowFactor):
 
 
 class AOGQuantileFactor(_AOGWindowFactor):
-    meta = AlphaMeta("aog_rank_pre_quantile_20_20d", "pre-event 20D rank 20th percentile")
+    meta = AlphaMeta("aog_rank_pre_quantile_20_20d", "pre-event 20D excess-gap rank 20th percentile")
 
     def _reduce(self, history):
         return np.nanquantile(history, self.context.config.quantile, axis=0)
@@ -367,14 +374,14 @@ class AOGQuantileDecayFactor(_AOGDecayFactor, AOGQuantileFactor):
 
 
 class AOGLowDemaxFactor(AOGDemaxFactor):
-    meta = AlphaMeta("aog_low_rank_demax_20d", "announcement low-return rank DEMAX")
+    meta = AlphaMeta("aog_low_rank_demax_20d", "announcement excess low-gap rank DEMAX")
     feature = "low"
     dependencies = _AOGFactor.dependencies + ("d_essentials/low_adj",)
 
 
 
 class AOGLowQuantileFactor(AOGQuantileFactor):
-    meta = AlphaMeta("aog_low_rank_pre_quantile_20_20d", "pre-event low-return rank quantile")
+    meta = AlphaMeta("aog_low_rank_pre_quantile_20_20d", "pre-event excess low-gap rank quantile")
     feature = "low"
     dependencies = AOGLowDemaxFactor.dependencies
 

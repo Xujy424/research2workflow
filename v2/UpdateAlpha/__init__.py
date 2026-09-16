@@ -15,6 +15,7 @@ AOGQuantileFactor, AOGDemaxDecayFactor,
     AOGLowDemaxFactor, AOGLowQuantileFactor,
     AOG_FACTORS,
 )
+from .analyst_forecast.oer import OERConfig, OERContext, OERFactor
 
 from .analyst_forecast.afr import (
     AFRConfig,
@@ -75,9 +76,7 @@ from .analyst_forecast.disp import (
 from .analyst_forecast.suef_surf import (
     SUEFSURFContext,
     SUEFFactor,
-    SURFFactor,
     SUEFReportFactor,
-    SURFReportFactor,
 )
 from .pricevolume.w_cut_reversal import WCutContext, WCutReversalFactor
 from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
@@ -135,6 +134,7 @@ FACTOR_REGISTRY = {
     spec.name: spec
     for spec in (
         *_specs(AOGContext, AOG_FACTORS, "analyst_forecast"),
+        *_specs(OERContext, (OERFactor,), "analyst_forecast"),
         *_specs(
             AFRContext,
             (
@@ -151,7 +151,7 @@ FACTOR_REGISTRY = {
         *_specs(
             SUEFSURFContext,
             (
-                SUEFFactor, SURFFactor, SUEFReportFactor, SURFReportFactor,
+                SUEFFactor, SUEFReportFactor,
             ),
             "analyst_forecast",
         ),
@@ -324,9 +324,7 @@ __all__ = [
     "ScoreDowngradeEventFactor",
     "SUEFSURFContext",
     "SUEFFactor",
-    "SURFFactor",
     "SUEFReportFactor",
-    "SURFReportFactor",
     "DISPContext",
     "DISPFreshnessFactor",
     "DISPInstitutionFactor",
@@ -348,6 +346,9 @@ __all__ = [
     "ACTContext",
     "ACTPositiveFactor",
     "ACTNegativeFactor",
+    "OERConfig",
+    "OERContext",
+    "OERFactor",
 ]
 
 

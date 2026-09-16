@@ -1,4 +1,4 @@
-"""Improved APM factor from Kaiyuan Securities microstructure series (5)."""
+﻿"""Improved APM factor from Kaiyuan Securities microstructure series (5)."""
 
 from __future__ import annotations
 
@@ -36,9 +36,9 @@ class APMConfig:
 
 
 class APMContext(AlphaContext):
-    def __init__(self, root=DEFAULT_ROOT, config=APMConfig()):
+    def __init__(self, root=DEFAULT_ROOT, config=APMConfig(), universe="self"):
         self.config = config
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
 
 def _ratio_return(numerator, denominator):

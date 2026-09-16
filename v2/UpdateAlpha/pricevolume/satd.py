@@ -53,11 +53,11 @@ class SATDContext(AlphaContext):
         "minute_return": pl.Float64,
     }
 
-    def __init__(self, root=DEFAULT_ROOT, config=SATDConfig(), l2_root=None):
+    def __init__(self, root=DEFAULT_ROOT, config=SATDConfig(), l2_root=None, universe="self"):
         self.config = config
         self.l2_root = Path(l2_root) if l2_root else Path(root) / "stock" / "l2"
         self._minute_cache = OrderedDict()
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     def minute_data(self, date):
         key = pd.Timestamp(date).strftime("%Y%m%d")

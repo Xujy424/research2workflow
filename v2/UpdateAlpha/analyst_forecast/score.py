@@ -1,4 +1,4 @@
-"""Point-in-time analyst-consensus rating upgrade/downgrade events.
+﻿"""Point-in-time analyst-consensus rating upgrade/downgrade events.
 
 The local con_rating_strength series is the vendor-maintained consensus
 rating based on ratings available in the trailing 180 calendar days. A rise
@@ -42,9 +42,9 @@ class ScoreEventConfig:
 class ScoreEventContext(AlphaContext):
     """Read-only local environment for point-in-time rating events."""
 
-    def __init__(self, root=DEFAULT_ROOT, config=ScoreEventConfig()):
+    def __init__(self, root=DEFAULT_ROOT, config=ScoreEventConfig(), universe="self"):
         self.config = config
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     def rating_change(self, asof) -> tuple[np.ndarray, np.ndarray]:
         """Return daily change and the finite current/prior observation mask."""

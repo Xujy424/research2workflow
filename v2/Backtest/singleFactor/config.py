@@ -68,6 +68,8 @@ class PortfolioConfig:
     quantiles: int = 10
     top_groups: int = 1
     bottom_groups: int = 1
+    long_groups: tuple[int, ...] | None = None
+    short_groups: tuple[int, ...] | None = None
     weighting: Weighting = Weighting.EQUAL
     gross_exposure: float = 1.0
     industry_align: bool = False
@@ -78,10 +80,54 @@ class PortfolioConfig:
     def __post_init__(self):
         if self.quantiles < 2 or self.top_groups < 1:
             raise ValueError("quantiles >= 2 and top_groups >= 1 are required")
-        if self.top_groups + self.bottom_groups > self.quantiles:
+        if self.bottom_groups < 1:
+            raise ValueError("bottom_groups must be >= 1")
+        uses_both_sides = (
+            self.method == Method.QUANTILE_LONG_SHORT
+            or (
+                self.method == Method.BENCHMARK_HEDGED
+                and self.active_side == ActiveSide.LONG_SHORT
+            )
+        )
+        if uses_both_sides and self.long_groups is None and self.short_groups is None and (
+            self.top_groups + self.bottom_groups > self.quantiles
+        ):
+            raise ValueError("long and short groups overlap")
+        for name, groups in (
+            ("long_groups", self.long_groups),
+            ("short_groups", self.short_groups),
+        ):
+            if groups is None:
+                continue
+            if not groups:
+                raise ValueError(f"{name} cannot be empty")
+            if len(set(groups)) != len(groups):
+                raise ValueError(f"{name} cannot contain duplicates")
+            if any(group < 1 or group > self.quantiles for group in groups):
+                raise ValueError(
+                    f"{name} must contain group numbers in [1, quantiles]"
+                )
+        if uses_both_sides and (
+            set(self.resolved_long_groups) & set(self.resolved_short_groups)
+        ):
             raise ValueError("long and short groups overlap")
         if self.active_gross <= 0:
             raise ValueError("active_gross must be positive")
+
+    @property
+    def resolved_long_groups(self) -> tuple[int, ...]:
+        """Explicit long groups, or the legacy highest ``top_groups``."""
+        if self.long_groups is not None:
+            return self.long_groups
+        start = self.quantiles - self.top_groups + 1
+        return tuple(range(start, self.quantiles + 1))
+
+    @property
+    def resolved_short_groups(self) -> tuple[int, ...]:
+        """Explicit short groups, or the legacy lowest ``bottom_groups``."""
+        if self.short_groups is not None:
+            return self.short_groups
+        return tuple(range(1, self.bottom_groups + 1))
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""Point-in-time analyst coverage factors."""
+﻿"""Point-in-time analyst coverage factors."""
 
 from __future__ import annotations
 
@@ -40,12 +40,12 @@ class COVConfig:
 class COVContext(AlphaContext):
     """Current-FY1 annual forecasts used to measure active analyst coverage."""
 
-    def __init__(self, root=DEFAULT_ROOT, conn=None, config=COVConfig()):
+    def __init__(self, root=DEFAULT_ROOT, conn=None, config=COVConfig(), universe="self"):
         self.config = config
         self.conn = conn or get_zyyx_conn()
         self._owns_conn = conn is None
         self._cache = {}
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     def reports(self, asof, lookback_days=None, require_forecast=True):
         """Return unique reports carrying a finite current-FY1 annual forecast."""

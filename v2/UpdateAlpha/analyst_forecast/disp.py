@@ -1,4 +1,4 @@
-"""Robust analyst forecast-dispersion factor family."""
+﻿"""Robust analyst forecast-dispersion factor family."""
 
 from __future__ import annotations
 
@@ -44,12 +44,12 @@ class DISPConfig:
 class DISPContext(AlphaContext):
     """Point-in-time FY1 forecasts shared only by the DISP factor family."""
 
-    def __init__(self, root=DEFAULT_ROOT, conn=None, config=DISPConfig()):
+    def __init__(self, root=DEFAULT_ROOT, conn=None, config=DISPConfig(), universe="self"):
         self.config = config
         self.conn = conn or get_zyyx_conn()
         self._owns_conn = conn is None
         self._cache = {}
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     def report_history(self, asof):
         """Return all finite FY1 annual forecasts in the configured lookback."""

@@ -1,4 +1,4 @@
-"""Smart-money 2.0 factor from Kaiyuan Securities microstructure series (3)."""
+﻿"""Smart-money 2.0 factor from Kaiyuan Securities microstructure series (3)."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ class SmartMoneyConfig:
 
 
 class SmartMoneyContext(AlphaContext):
-    def __init__(self, root=ROOT, config=SmartMoneyConfig()):
+    def __init__(self, root=ROOT, config=SmartMoneyConfig(), universe="self"):
         self.config = config
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
 
 class SmartMoneyFactor(AlphaBase):

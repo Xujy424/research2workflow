@@ -1,4 +1,4 @@
-"""Active buy/sell factors from Kaiyuan Securities' ACT report.
+﻿"""Active buy/sell factors from Kaiyuan Securities' ACT report.
 
 The report forms two factors from the previous 20 trading days:
 
@@ -112,9 +112,9 @@ def _cut_mean(
 class ACTContext(AlphaContext):
     """Shared, read-only retrieval of returns and order-size money flows."""
 
-    def __init__(self, root=ROOT, config=ACTConfig()):
+    def __init__(self, root=ROOT, config=ACTConfig(), universe="self"):
         self.config = config
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
         self._history_key = None
         self._history_value = None
 

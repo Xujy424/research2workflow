@@ -1,4 +1,4 @@
-"""Intraday/overnight cut momentum from Kaiyuan microstructure series (4)."""
+﻿"""Intraday/overnight cut momentum from Kaiyuan microstructure series (4)."""
 
 from __future__ import annotations
 
@@ -33,9 +33,9 @@ class IntradayOvernightMomentumConfig:
 
 
 class IntradayOvernightMomentumContext(AlphaContext):
-    def __init__(self, root=DEFAULT_ROOT, config=IntradayOvernightMomentumConfig()):
+    def __init__(self, root=DEFAULT_ROOT, config=IntradayOvernightMomentumConfig(), universe="self"):
         self.config = config
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
 
 def _ratio_return(numerator, denominator):

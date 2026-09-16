@@ -1,4 +1,4 @@
-"""Consensus-forecast standardized unexpected earnings and revenue."""
+﻿"""Consensus-forecast standardized unexpected earnings for parent net profit."""
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -31,7 +31,6 @@ class SUEFSURFConfig:
     report_lookback_days: int = 90
     report_half_life_days: float = 45.0
     local_np_field: str = "zyyx/con_forecast/con_np"
-    local_revenue_field: str = "zyyx/con_forecast/con_or"
 
 def _growth(expected_remainder, prior_remainder):
     ratio = expected_remainder / prior_remainder
@@ -44,14 +43,38 @@ def _date(value):
         return value
     return np.datetime64(value, "D").astype(object)
 
+
+def _performance_forecast_value(frame):
+    """Estimate forecast parent net profit from disclosed bounds or growth."""
+    last = pl.col("last_profit")
+    floor_from_growth = last + last.abs() * pl.col("growth_floor") / 100.0
+    ceiling_from_growth = last + last.abs() * pl.col("growth_ceiling") / 100.0
+    reported_floor = pl.col("profit_floor")
+    reported_ceiling = pl.col("profit_ceiling")
+    has_reported = reported_floor.is_finite() | reported_ceiling.is_finite()
+    reported = (
+        pl.when(reported_floor.is_finite() & reported_ceiling.is_finite())
+        .then((reported_floor + reported_ceiling) / 2.0)
+        .otherwise(pl.coalesce(reported_floor, reported_ceiling))
+    )
+    inferred = (
+        pl.when(floor_from_growth.is_finite() & ceiling_from_growth.is_finite())
+        .then((floor_from_growth + ceiling_from_growth) / 2.0)
+        .otherwise(pl.coalesce(floor_from_growth, ceiling_from_growth))
+    )
+    return frame.with_columns(
+        pl.when(has_reported).then(reported).otherwise(inferred)
+        .alias("net_profit_accum")
+    )
+
 class SUEFSURFContext(AlphaContext):
-    def __init__(self, root=DEFAULT_ROOT, jy_conn=None, zyyx_conn=None, config=SUEFSURFConfig()):
+    def __init__(self, root=DEFAULT_ROOT, jy_conn=None, zyyx_conn=None, config=SUEFSURFConfig(), universe="self"):
         self.config=config
         self.jy_conn=jy_conn or get_jy_conn()
         self.zyyx_conn=zyyx_conn
         self._owns_jy=jy_conn is None
         self._owns_zyyx=False; self._cache={}
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
     def close(self):
         self.data.close()
@@ -84,7 +107,7 @@ class SUEFSURFContext(AlphaContext):
                     f.ID id, s.SecuCode tick,
                     f.EndDate end_date, f.InfoPublDate publish_date,
                     f.NPParentCompanyOwners net_profit_accum,
-                    f.OperatingRevenue revenue_accum 
+                    1 event_priority
                     FROM dbo.{table} f 
                     JOIN dbo.SecuMain s
                         ON f.CompanyCode=s.CompanyCode 
@@ -104,8 +127,10 @@ class SUEFSURFContext(AlphaContext):
             pl.col("end_date").cast(pl.Datetime,strict=False).dt.date(),
             pl.col("publish_date").cast(pl.Datetime,strict=False).dt.date(),
             pl.col("net_profit_accum").cast(pl.Float64,strict=False),
-            pl.col("revenue_accum").cast(pl.Float64,strict=False),
         )
+        forecast = self.performance_forecast_events(asof, history_start)
+        if not forecast.is_empty():
+            x = pl.concat([x, forecast], how="vertical_relaxed")
         if x.is_empty(): self._cache[key]=x; return x
         x=(
             x.filter(pl.col("end_date").dt.month().is_in([3,6,9,12]))
@@ -118,18 +143,69 @@ class SUEFSURFContext(AlphaContext):
         self._cache[key]=x
         return x
 
+    def performance_forecast_events(self, asof, history_start):
+        """Point-in-time quantitative guidance for cumulative parent profit."""
+        sql=f"""SELECT
+            f.ID id, s.SecuCode tick,
+            f.EndDate end_date, f.InfoPublDate publish_date,
+            f.EProfitFloor profit_floor,
+            f.EProfitCeiling profit_ceiling,
+            f.EGrowRateFloorC growth_floor,
+            f.EGrowthRateCeilC growth_ceiling,
+            f.LastProfit last_profit
+            FROM dbo.DZ_PerformanceForecast f
+            JOIN dbo.SecuMain s ON f.CompanyCode=s.CompanyCode
+            WHERE f.EndDate>='{history_start}'
+                AND f.InfoPublDate>='{history_start}'
+                AND f.InfoPublDate<='{asof}'
+                AND f.ForecastObject=10
+                AND s.SecuCategory=1
+                AND s.SecuMarket IN (83,90)"""
+        frame=pl.read_database(sql,self.jy_conn,infer_schema_length=None)
+        if frame.is_empty():
+            return pl.DataFrame(schema={
+                "id": pl.Int64, "tick": pl.String,
+                "end_date": pl.Date, "publish_date": pl.Date,
+                "net_profit_accum": pl.Float64,
+                "event_priority": pl.Int32,
+            })
+        numeric = (
+            "profit_floor", "profit_ceiling", "growth_floor",
+            "growth_ceiling", "last_profit",
+        )
+        return (
+            frame.with_columns(
+                pl.col("tick").cast(pl.String).str.zfill(6),
+                pl.col("end_date").cast(pl.Datetime,strict=False).dt.date(),
+                pl.col("publish_date").cast(pl.Datetime,strict=False).dt.date(),
+                *(pl.col(name).cast(pl.Float64,strict=False) for name in numeric),
+            )
+            .pipe(_performance_forecast_value)
+            .with_columns(pl.lit(0, dtype=pl.Int32).alias("event_priority"))
+            .select(
+                "id", "tick", "end_date", "publish_date",
+                "net_profit_accum", "event_priority",
+            )
+            .filter(pl.col("net_profit_accum").is_finite())
+        )
+
     @staticmethod
     def latest_report_fields(frame):
         """Latest finite field and its own disclosure date, within PIT inputs."""
-        expressions = [pl.col("id").last(), pl.col("publish_date").last()]
-        for field in ("net_profit_accum", "revenue_accum"):
+        expressions = [
+            pl.col("id").last(), pl.col("publish_date").last(),
+            pl.col("event_priority").last(),
+        ]
+        for field in ("net_profit_accum",):
             valid = pl.col(field).is_finite().fill_null(False)
             expressions.extend([
                 pl.col(field).filter(valid).last().alias(field),
                 pl.col("publish_date").filter(valid).last().alias(f"{field}_date"),
             ])
         return (
-            frame.sort(["tick", "end_date", "publish_date", "id"])
+            frame.sort([
+                "tick", "end_date", "publish_date", "event_priority", "id"
+            ])
             .group_by(["tick", "end_date"], maintain_order=True)
             .agg(expressions)
         )
@@ -185,8 +261,8 @@ class SUEFSURFContext(AlphaContext):
             .join(r,left_on=["tick","year"],right_on=["tick","report_year"],how="left")
             .with_columns((pl.col("cutoff")-pl.col("create_date")).dt.total_days().alias("age"))
             .filter(
-               pl.col("age").is_between(0,self.config.report_lookback_days)
-               & (pl.col("entrytime")<pl.col("cutoff").cast(pl.Datetime)+pl.duration(days=1))
+               pl.col("age").is_between(1,self.config.report_lookback_days)
+               & (pl.col("entrytime")<pl.col("cutoff").cast(pl.Datetime))
                & pl.col("forecast").is_finite()
             ).with_columns(
                (-np.log(2.0)*pl.col("age")/self.config.report_half_life_days).exp().alias("weight")
@@ -222,7 +298,7 @@ class _ConsensusSurpriseFactor(AlphaBase):
     report_column = ""
     dependencies = (
         "LC_IncomeStatementAll", "LC_STIBIncomeState",
-        "zyyx/con_forecast/con_np", "zyyx/con_forecast/con_or",
+        "DZ_PerformanceForecast", "zyyx/con_forecast/con_np",
     )
 
     @staticmethod
@@ -329,14 +405,6 @@ class SUEFFactor(_ConsensusSurpriseFactor):
     report_column = "forecast_np"
 
 
-class SURFFactor(_ConsensusSurpriseFactor):
-    meta = AlphaMeta("surf", "local-consensus standardized unexpected revenue")
-    column = "surf"
-    actual_column = "revenue_accum"
-    local_field = SUEFSURFConfig.local_revenue_field
-    report_column = "forecast_or"
-
-
 class SUEFReportFactor(SUEFFactor):
     meta = AlphaMeta(
         "suef_reports", "90D report-consensus standardized unexpected earnings"
@@ -344,19 +412,9 @@ class SUEFReportFactor(SUEFFactor):
     source = "reports"
 
 
-class SURFReportFactor(SURFFactor):
-    meta = AlphaMeta(
-        "surf_reports", "90D report-consensus standardized unexpected revenue"
-    )
-    source = "reports"
-
-
-
-
-
 __all__ = [
-    "SUEFSURFConfig", "SUEFSURFContext", "SUEFFactor", "SURFFactor",
-    "SUEFReportFactor", "SURFReportFactor",
+    "SUEFSURFConfig", "SUEFSURFContext", "SUEFFactor",
+    "SUEFReportFactor",
 ]
 
 

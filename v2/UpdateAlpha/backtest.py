@@ -26,7 +26,8 @@ from tqdm import tqdm
 if __package__:
     from . import FACTOR_REGISTRY, discover_factors, get_factor_spec
     from .alphabase import AlphaBase, AlphaContext
-    from ..ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
+    from ..ResearchFlow.FactorTest.metrics import IC, rankIC
+    from ..ResearchFlow.matrix_math import calc_group_ret
     from ..UpdateData.config import ROOT
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -34,7 +35,8 @@ else:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha import FACTOR_REGISTRY, discover_factors, get_factor_spec
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext
-    from v2.ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
+    from v2.ResearchFlow.FactorTest.metrics import IC, rankIC
+    from v2.ResearchFlow.matrix_math import calc_group_ret
     from v2.UpdateData.config import ROOT
 
 
@@ -106,6 +108,7 @@ def _forward_label(
     return label
 
 
+
 def plot_group_ret(
     name,
     context,
@@ -118,7 +121,7 @@ def plot_group_ret(
     num_groups=10,
     return_offset=2,
     output_dir=None,
-    universe="tradable",
+    universe="self",
 ):
     """Plot cumulative demeaned group returns for an existing factor matrix."""
 
@@ -266,7 +269,7 @@ def run_registered(
     num_groups=10,
     return_offset=2,
     output_dir=None,
-    universe="tradable",
+    universe="self",
     context_kwargs=None,
 ):
     """Calculate and/or plot one registered factor."""
@@ -278,7 +281,10 @@ def run_registered(
         category=category,
     )
     kwargs = dict(context_kwargs or {})
+    if "universe" in kwargs:
+        raise ValueError("pass universe directly, not through context_kwargs")
     kwargs.setdefault("root", root)
+    kwargs["universe"] = universe
     
     with spec.context_class(**kwargs) as context:
         factor = spec.factor_class(context)
@@ -337,7 +343,8 @@ def run_from_ide(
     num_groups=10,
     return_offset=2,
     output_dir=None,
-    universe="tradable",
+    universe="self",
+    context_kwargs=None,
 ):
     """Run one or more factors directly from Python without parsing argv."""
 
@@ -355,6 +362,7 @@ def run_from_ide(
             return_offset=return_offset,
             output_dir=output_dir,
             universe=universe,
+            context_kwargs=context_kwargs,
         )
         results[name] = {"output": output, "stats": stats}
         print(stats.to_string(index=False))
@@ -364,13 +372,14 @@ def run_from_ide(
 
 if __name__ == "__main__":
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("satd_sellhighvolume",)  # cov, cov_current, cov_decay_optimized
-    START_DATE = "2024-01-01"
+    FACTORS = ("aog_rank_demax_20d_decay",)  # cov, cov_current, cov_decay_optimized
+    START_DATE = "2017-01-01"
     END_DATE = "2026-06-30"
 
     # True: calculate factor values first and then plot.
     # False: plot an existing factor_pool matrix only.
     CALCULATE = True
+
 
     run_from_ide(
         FACTORS,
@@ -383,7 +392,7 @@ if __name__ == "__main__":
         num_groups=10,
         return_offset=2,
         output_dir=None,
-        universe="tradable",
+        universe=None,
     )
 
 

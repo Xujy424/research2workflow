@@ -1,4 +1,4 @@
-"""W-cut reversal factor from Kaiyuan Securities microstructure series (1)."""
+﻿"""W-cut reversal factor from Kaiyuan Securities microstructure series (1)."""
 
 from __future__ import annotations
 
@@ -35,9 +35,9 @@ class WCutConfig:
 
 
 class WCutContext(AlphaContext):
-    def __init__(self, root=DEFAULT_ROOT, config=WCutConfig()):
+    def __init__(self, root=DEFAULT_ROOT, config=WCutConfig(), universe="self"):
         self.config = config
-        super().__init__(DataPool(root, asset="stock"))
+        super().__init__(DataPool(root, asset="stock"), universe=universe)
 
 
 class WCutReversalFactor(AlphaBase):
