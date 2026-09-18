@@ -291,7 +291,7 @@ if __name__ == "__main__":
     START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
     UNIVERSE = 'zzfull'
-    FACTOR_NAME = "cnir"
+    FACTOR_NAME = "gru"
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
     OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / FACTOR_NAME
@@ -304,6 +304,8 @@ if __name__ == "__main__":
         end_date=END_DATE,
         universe=UNIVERSE,
         execution_lag=SIGNAL_LAG,
+        adjust_direction = False
+        
     )
     print(f"Applied factor direction: {inputs['factor_direction']:+d}")
     inputs["tradable"] = inputs["tradable"] & (inputs["index_weight"] > 0)
