@@ -38,16 +38,6 @@ from .analyst_forecast.sue import (
     update_sue_family,
 )
 
-from .analyst_forecast.discard.score import (
-    ScoreConfig,
-    ScoreContext,
-    ScoreLevelFactor,
-    ScoreAdjustment30Factor,
-    ScoreAdjustment60Factor,
-    ScoreAdjustment90Factor,
-    calculate_score_family,
-    update_score_family,
-)
 from .analyst_forecast.score import (
     ScoreEventConfig,
     ScoreEventContext,
@@ -55,7 +45,6 @@ from .analyst_forecast.score import (
     ScoreUpgradeEventFactor,
     ScoreDowngradeEventFactor,
 )
-from .analyst_forecast.discard.tper import TPERFactor
 
 from .analyst_forecast.cov import (
     COVContext,
@@ -82,6 +71,8 @@ from .pricevolume.w_cut_reversal import WCutContext, WCutReversalFactor
 from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
 from .pricevolume.apm import APMContext, APMFactor
 from .pricevolume.qua import QUAContext, QUAFactor, MTSFactor, MTEFactor
+from .pricevolume.sm_sheepherd import SMSHContext, SMSHFactor
+from .pricevolume.mod_lg_flow import ModLargeFlowContext, CNIRFactor
 from .pricevolume.split_momentum import (
     IntradayOvernightMomentumContext,
     IntradayOvernightMomentumFactor,
@@ -102,6 +93,8 @@ from .pricevolume.satd import (
     SATDCombinationFactor,
     SATD_FACTORS,
 )
+
+
 @dataclass(frozen=True)
 class AlphaSpec:
     """Explicit pairing of a factor with the Context that constructs it."""
@@ -184,6 +177,8 @@ FACTOR_REGISTRY = {
         *_specs(SmartMoneyContext, (SmartMoneyFactor,), "pricevolume"),
         *_specs(APMContext, (APMFactor,), "pricevolume"),
         *_specs(QUAContext, (QUAFactor, MTSFactor, MTEFactor), "pricevolume"),
+        *_specs(SMSHContext, (SMSHFactor,), "pricevolume"),
+        *_specs(ModLargeFlowContext, (CNIRFactor,), "pricevolume"),
         *_specs(
             IntradayOvernightMomentumContext,
             (IntradayOvernightMomentumFactor,),
@@ -341,6 +336,10 @@ __all__ = [
     "QUAFactor",
     "MTSFactor",
     "MTEFactor",
+    "SMSHContext",
+    "SMSHFactor",
+    "ModLargeFlowContext",
+    "CNIRFactor",
     "IntradayOvernightMomentumContext",
     "IntradayOvernightMomentumFactor",
     "ACTContext",
@@ -350,7 +349,6 @@ __all__ = [
     "OERContext",
     "OERFactor",
 ]
-
 
 
 

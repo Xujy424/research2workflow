@@ -37,11 +37,11 @@ DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
 # 可调整参数
 # =========================
 ROOT_PATH = DEFAULT_ROOT
-FACTOR_NAME = "pafr"
-START_DATE = "2025-01-01"
+FACTOR_NAME = "smsh"
+START_DATE = "2023-01-01"
 END_DATE = "2026-06-30"
-BENCHMARK = "zz1000"
-UNIVERSE = "benchmark"  # "benchmark" 或 "tradable"
+BENCHMARK = 'zzfull' #"smsh"
+UNIVERSE = "tradable"  # "benchmark" 或 "tradable"
 GROUPS = 10
 GROUP = 10
 FORWARD_OFFSET = 2

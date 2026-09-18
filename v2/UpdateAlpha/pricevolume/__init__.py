@@ -3,6 +3,8 @@
 from .w_cut_reversal import WCutReversalFactor
 from .smart_money import SmartMoneyFactor as SmartMoneyV2Factor
 from .apm import APMFactor
+from .sm_sheepherd import SMSHFactor
+from .mod_lg_flow import CNIRFactor
 from .split_momentum import IntradayOvernightMomentumFactor
 from .active_trade import ACTPositiveFactor, ACTNegativeFactor
 from .satd import (SATDSellDownRetFactor, SATDSellLowPriceFactor,
@@ -13,6 +15,8 @@ __all__ = [
     "WCutReversalFactor",
     "SmartMoneyV2Factor",
     "APMFactor",
+    "SMSHFactor",
+    "CNIRFactor",
     "IntradayOvernightMomentumFactor",
     "ACTPositiveFactor", "ACTNegativeFactor",
     "SATDSellDownRetFactor", "SATDSellLowPriceFactor",

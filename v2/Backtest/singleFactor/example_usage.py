@@ -15,6 +15,7 @@ if __package__:
     from .config import (ActiveSide, EventPortfolioMode, EventTrigger, Method,
                          RebalanceFrequency, SignalInput, Weighting)
     from ...GetData import DataPool
+    from ...UpdateAlpha import get_factor_spec
     from ...UpdateData.config import ROOT
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +32,7 @@ else:
         RebalanceFrequency, SignalInput, Weighting,
     )
     from v2.GetData import DataPool
+    from v2.UpdateAlpha import get_factor_spec
     from v2.UpdateData.config import ROOT
 
 
@@ -214,11 +216,26 @@ def build_pair_book(pair_signal):
     return explicit_pair_weights(pair_signal, (pair,), holding_days=5)
 
 
-def load_backtest_inputs(root, name, start_date, end_date, universe="self",
-                         execution_lag=1):
-    """Load factor inputs and execution-day capacity inputs on one date axis."""
+def load_backtest_inputs(
+    root,
+    name,
+    start_date,
+    end_date,
+    universe="self",
+    execution_lag=1,
+    adjust_direction=True,
+):
+    """Load factor inputs and execution-day capacity inputs on one date axis.
+
+    Registered factor signals are converted to the backtest convention that
+    larger values are more bullish when ``adjust_direction`` is true.
+    """
     if not isinstance(execution_lag, (int, np.integer)) or execution_lag < 0:
         raise ValueError("execution_lag must be a non-negative integer")
+    direction = (
+        get_factor_spec(name).factor_class.meta.direction
+        if adjust_direction else 1
+    )
     with DataPool(root, asset="stock") as data:
         dates = pd.DatetimeIndex(data.axis.trade_dates)
         selected = np.flatnonzero(
@@ -242,8 +259,9 @@ def load_backtest_inputs(root, name, start_date, end_date, universe="self",
             data.read("d_essentials/amount", execution_end, execution_start),
             dtype=float,
         )
+        factor = data.read(f"factor_pool/{name}", end, start) * direction
         args = {
-            "factor": data.read(f"factor_pool/{name}", end, start),
+            "factor": factor,
             "stock_return": data.read("d_essentials/pct", end, start) / 100.0,
             "tradable": data.read("basic/tradable", end, start),
             "industry": data.read("industry/industry", end, start),
@@ -253,10 +271,12 @@ def load_backtest_inputs(root, name, start_date, end_date, universe="self",
         }
         index = dates[start:end + 1]
         columns = pd.Index(data.axis.ticks, name="tick")
-    return {
+    frames = {
         name: pd.DataFrame(values, index=index, columns=columns)
         for name, values in args.items()
     }
+    frames["factor_direction"] = direction
+    return frames
 
 
 def _read_universe_weight(data, universe, start, end):
@@ -270,8 +290,8 @@ if __name__ == "__main__":
     ROOT_PATH = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
     START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
-    UNIVERSE = 'hs300'
-    FACTOR_NAME = "aog_rank_demax_20d_decay"
+    UNIVERSE = 'zzfull'
+    FACTOR_NAME = "cnir"
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
     OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / FACTOR_NAME
@@ -285,6 +305,7 @@ if __name__ == "__main__":
         universe=UNIVERSE,
         execution_lag=SIGNAL_LAG,
     )
+    print(f"Applied factor direction: {inputs['factor_direction']:+d}")
     inputs["tradable"] = inputs["tradable"] & (inputs["index_weight"] > 0)
 
     data = FactorData(
@@ -307,7 +328,7 @@ if __name__ == "__main__":
     )
     exe_config = ExecutionConfig(
         signal_lag=SIGNAL_LAG,
-        rebalance_frequency=RebalanceFrequency.DAILY,
+        rebalance_frequency=RebalanceFrequency.WEEKLY,
         cost_bps=10
     )
     config = BacktestConfig(
