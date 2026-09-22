@@ -6,6 +6,9 @@ import sys
 
 import numpy as np
 
+
+_ROW_CHUNK = 64
+
 if __package__:
     from ..config import ROOT
     from ..utils import asof
@@ -59,19 +62,14 @@ def _active_tick_mask(
     keep_rows,
 ):
     """active=True保留的是在cutoff之后仍有数据的股票."""
-    active = np.zeros(valid_tick_count, dtype=bool)
     close = np.memmap(
         close_spec.path,
         dtype=close_spec.dtype,
         mode="r",
         shape=(old_date_len, old_tick_len),
     )
-    for start in range(0, len(keep_rows), 64):
-        rows = keep_rows[start:start + 64]
-        active |= np.any(
-            np.isfinite(close[rows, :valid_tick_count]),
-            axis=0,
-        )
+    rows = slice(keep_rows[0], keep_rows[-1] + 1)
+    active = ~np.all(np.isnan(close[rows, :valid_tick_count]), axis=0)
     del close
     return active
 
@@ -99,14 +97,15 @@ def _rewrite_with_temp(
     new = np.memmap(
         scratch_path, dtype=spec.dtype, mode="r+", shape=new_shape
     )
-    new[:] = False if spec.dtype == np.dtype(np.bool_) else np.nan
-    for start in range(0, len(keep_rows), 64):
-        stop = min(start + 64, len(keep_rows))
-        rows = keep_rows[start:stop]
-        if spec.middle == 1:
-            new[start:stop, :len(keep_cols)] = old[rows][:, keep_cols]
-        else:
-            new[start:stop, :, :len(keep_cols)] = old[rows][:, :, keep_cols]
+    fill_value = False if spec.dtype == np.dtype(np.bool_) else np.nan
+    for start in range(0, len(keep_rows), _ROW_CHUNK):
+        stop = min(start + _ROW_CHUNK, len(keep_rows))
+        rows = slice(keep_rows[start], keep_rows[stop - 1] + 1)
+        new[start:stop, ..., :len(keep_cols)] = np.take(
+            old[rows], keep_cols, axis=-1
+        )
+        new[start:stop, ..., len(keep_cols):] = fill_value
+    new[len(keep_rows):] = fill_value
     new.flush()
     del new
     del old
@@ -147,14 +146,19 @@ def _rewrite_matrix(
         shape=(old_elements,),
     )
     old = flat.reshape(old_date_len, spec.middle, old_tick_len)
-    row = np.empty(new_width, dtype=spec.dtype)
-    target = row.reshape(spec.middle, new_tick_len)
-    for target_row, source_row in enumerate(keep_rows):
-        retained = old[source_row][:, keep_cols].copy()
-        row.fill(fill_value)
-        target[:, :len(keep_cols)] = retained
-        start = target_row * new_width
-        flat[start:start + new_width] = row
+    for start in range(0, len(keep_rows), _ROW_CHUNK):
+        stop = min(start + _ROW_CHUNK, len(keep_rows))
+        rows = slice(keep_rows[start], keep_rows[stop - 1] + 1)
+        retained = np.take(old[rows], keep_cols, axis=2)
+        target = flat[start * new_width:stop * new_width].reshape(
+            stop - start,
+            spec.middle,
+            new_tick_len,
+        )
+        target[:, :, :len(keep_cols)] = retained
+        target[:, :, len(keep_cols):] = fill_value
+    del target
+    del retained
     flat.flush()
     del old
     del flat
@@ -213,6 +217,7 @@ def delete_before(
         close_spec.dtype, np.floating
     ):
         raise ValueError(f"invalid daily close matrix: {close_path}")
+    
     active = _active_tick_mask(
         close_spec,
         old_date_len,

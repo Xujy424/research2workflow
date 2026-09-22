@@ -52,7 +52,8 @@ class OrderActivityMoneyflowConfig:
     small_upper: float = 50_000.0
     large_lower: float = 300_000.0
     large_upper: float = 1_000_000.0
-    cache_days: int = 32
+    cache_days: int = 64
+    persist_daily_cache: bool = True
 
     def __post_init__(self):
         if self.lookback_days < 1:
@@ -101,26 +102,31 @@ def _exchange_flows(
         .cast(pl.Float64)
         .alias("TradeAmount"),
     )
-    orders = pl.scan_parquet(order_path).select(
-        "ChannelNo",
-        pl.col("SecurityID").cast(pl.String).str.pad_start(6, "0"),
-        "ApplSeqNum",
-        "Side",
-        (pl.col("Price") * pl.col("OrderQty"))
-        .cast(pl.Float64)
-        .alias("OrderAmount"),
+    orders = (
+        pl.scan_parquet(order_path)
+        .select(
+            "ChannelNo",
+            pl.col("SecurityID").cast(pl.String).str.pad_start(6, "0"),
+            "ApplSeqNum",
+            "Side",
+            (pl.col("Price") * pl.col("OrderQty"))
+            .cast(pl.Float64)
+            .alias("OrderAmount"),
+        )
+        .with_columns(_order_size("OrderAmount", config).alias("Size"))
+        .filter(pl.col("Size").is_not_null())
     )
     buy_orders = orders.filter(pl.col("Side") == 1).select(
         "ChannelNo",
         "SecurityID",
         pl.col("ApplSeqNum").alias("BidApplSeqNum"),
-        pl.col("OrderAmount").alias("BuyOrderAmount"),
+        pl.col("Size").alias("BuySize"),
     )
     sell_orders = orders.filter(pl.col("Side") == -1).select(
         "ChannelNo",
         "SecurityID",
         pl.col("ApplSeqNum").alias("OfferApplSeqNum"),
-        pl.col("OrderAmount").alias("SellOrderAmount"),
+        pl.col("Size").alias("SellSize"),
     )
     matched = trades.join(
         buy_orders,
@@ -131,35 +137,49 @@ def _exchange_flows(
         on=["ChannelNo", "SecurityID", "OfferApplSeqNum"],
         how="left",
     )
-    buy = matched.select(
+    buy = matched.filter(pl.col("BuySize").is_not_null()).select(
         "SecurityID",
         pl.lit("buy").alias("OrderSide"),
         pl.when(pl.col("AggressorSide") == 1)
         .then(pl.lit("active"))
         .otherwise(pl.lit("passive"))
         .alias("Activity"),
-        _order_size("BuyOrderAmount", config).alias("Size"),
+        pl.col("BuySize").alias("Size"),
         pl.col("TradeAmount").alias("Amount"),
     )
-    sell = matched.select(
+    sell = matched.filter(pl.col("SellSize").is_not_null()).select(
         "SecurityID",
         pl.lit("sell").alias("OrderSide"),
         pl.when(pl.col("AggressorSide") == -1)
         .then(pl.lit("active"))
         .otherwise(pl.lit("passive"))
         .alias("Activity"),
-        _order_size("SellOrderAmount", config).alias("Size"),
+        pl.col("SellSize").alias("Size"),
         pl.col("TradeAmount").alias("Amount"),
     )
-    return pl.concat([buy, sell]).filter(pl.col("Size").is_not_null())
+    return pl.concat([buy, sell])
 
 
 def _daily_flows(
     l2_root: Path,
     date,
     config: OrderActivityMoneyflowConfig,
+    cache_root: Path | None = None,
 ) -> pl.DataFrame:
-    folder = l2_root / "proc" / pd.Timestamp(date).strftime("%Y%m%d")
+    date_key = pd.Timestamp(date).strftime("%Y%m%d")
+    folder = l2_root / "proc" / date_key
+    source_paths = [
+        folder / f"{exchange}{kind}.pq"
+        for exchange in ("sh", "sz")
+        for kind in ("cj", "wt")
+    ]
+    source_paths = [path for path in source_paths if path.is_file()]
+    cache_path = cache_root / f"{date_key}.parquet" if cache_root else None
+    if cache_path is not None and cache_path.is_file() and source_paths:
+        source_mtime = max(path.stat().st_mtime_ns for path in source_paths)
+        if cache_path.stat().st_mtime_ns >= source_mtime:
+            return pl.read_parquet(cache_path)
+
     scans = [
         scan
         for exchange in ("sh", "sz")
@@ -175,13 +195,19 @@ def _daily_flows(
                 "Amount": pl.Float64,
             }
         )
-    return (
+    result = (
         pl.concat(scans)
         .group_by("SecurityID", "Size", "Activity", "OrderSide")
         .agg(pl.col("Amount").sum())
         .rename({"SecurityID": "tick"})
         .collect(engine="streaming")
     )
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        scratch = cache_path.with_suffix(".parquet.tmp")
+        result.write_parquet(scratch, compression="zstd")
+        scratch.replace(cache_path)
+    return result
 
 
 class OrderActivityMoneyflowContext(AlphaContext):
@@ -197,25 +223,44 @@ class OrderActivityMoneyflowContext(AlphaContext):
             Path(l2_root) if l2_root is not None
             else Path(root) / "stock" / "l2"
         )
+        cache_key = "v1_{}_{}_{}".format(
+            f"{config.small_upper:g}".replace(".", "p"),
+            f"{config.large_lower:g}".replace(".", "p"),
+            f"{config.large_upper:g}".replace(".", "p"),
+        )
+        self.daily_cache_root = (
+            self.l2_root / "factor_cache" / "order_activity_moneyflow" / cache_key
+            if config.persist_daily_cache
+            else None
+        )
         self._daily_cache = OrderedDict()
         self._history_key = None
         self._history_value = None
         super().__init__(DataPool(root, asset="stock"), universe=universe)
 
+    def _compute_daily_values(self, date):
+        frame = _daily_flows(
+            self.l2_root,
+            date,
+            self.config,
+            self.daily_cache_root,
+        )
+        values = {}
+        for flow_key in FLOW_KEYS:
+            size, activity, side = flow_key.split("_")
+            selected = frame.filter(
+                (pl.col("Size") == size)
+                & (pl.col("Activity") == activity)
+                & (pl.col("OrderSide") == side)
+            ).select("tick", pl.col("Amount").alias("value"))
+            values[flow_key] = self.align(selected)
+        return values
+
     def _daily_values(self, date):
         key = pd.Timestamp(date).strftime("%Y%m%d")
         values = self._daily_cache.get(key)
         if values is None:
-            frame = _daily_flows(self.l2_root, date, self.config)
-            values = {}
-            for flow_key in FLOW_KEYS:
-                size, activity, side = flow_key.split("_")
-                selected = frame.filter(
-                    (pl.col("Size") == size)
-                    & (pl.col("Activity") == activity)
-                    & (pl.col("OrderSide") == side)
-                ).select("tick", pl.col("Amount").alias("value"))
-                values[flow_key] = self.align(selected)
+            values = self._compute_daily_values(date)
             self._daily_cache[key] = values
             while len(self._daily_cache) > self.config.cache_days:
                 self._daily_cache.popitem(last=False)
