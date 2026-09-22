@@ -74,7 +74,7 @@ def _active_tick_mask(
     return active
 
 
-def _rewrite_with_temp(
+def _rewrite_matrix(
     spec,
     old_date_len,
     old_tick_len,
@@ -83,20 +83,21 @@ def _rewrite_with_temp(
     keep_rows,
     keep_cols,
 ):
-    """Fallback when the target cannot safely fit inside the source file."""
+    """Write retained data to a new matrix, then replace the old file."""
     old = np.memmap(
         spec.path,
         dtype=spec.dtype,
         mode="r",
         shape=_matrix_shape(spec, old_date_len, old_tick_len),
     )
-    scratch_path = spec.path.with_suffix(spec.path.suffix + ".tmp")
+    temp_path = spec.path.with_suffix(spec.path.suffix + ".tmp")
     new_shape = _matrix_shape(spec, new_date_len, new_tick_len)
-    with scratch_path.open("wb") as file:
+    with temp_path.open("wb") as file:
         file.truncate(int(np.prod(new_shape)) * spec.dtype.itemsize)
     new = np.memmap(
-        scratch_path, dtype=spec.dtype, mode="r+", shape=new_shape
+        temp_path, dtype=spec.dtype, mode="r+", shape=new_shape
     )
+
     fill_value = False if spec.dtype == np.dtype(np.bool_) else np.nan
     for start in range(0, len(keep_rows), _ROW_CHUNK):
         stop = min(start + _ROW_CHUNK, len(keep_rows))
@@ -109,71 +110,7 @@ def _rewrite_with_temp(
     new.flush()
     del new
     del old
-    scratch_path.replace(spec.path)
-
-
-def _rewrite_matrix(
-    spec,
-    old_date_len,
-    old_tick_len,
-    new_date_len,
-    new_tick_len,
-    keep_rows,
-    keep_cols,
-):
-    """Compact in place using one target date row as extra memory."""
-    old_width = spec.middle * old_tick_len
-    new_width = spec.middle * new_tick_len
-    old_elements = old_date_len * old_width
-    new_elements = new_date_len * new_width
-    if new_width > old_width or new_elements > old_elements:
-        _rewrite_with_temp(
-            spec,
-            old_date_len,
-            old_tick_len,
-            new_date_len,
-            new_tick_len,
-            keep_rows,
-            keep_cols,
-        )
-        return
-
-    fill_value = False if spec.dtype == np.dtype(np.bool_) else np.nan
-    flat = np.memmap(
-        spec.path,
-        dtype=spec.dtype,
-        mode="r+",
-        shape=(old_elements,),
-    )
-    old = flat.reshape(old_date_len, spec.middle, old_tick_len)
-    for start in range(0, len(keep_rows), _ROW_CHUNK):
-        stop = min(start + _ROW_CHUNK, len(keep_rows))
-        rows = slice(keep_rows[start], keep_rows[stop - 1] + 1)
-        retained = np.take(old[rows], keep_cols, axis=2)
-        target = flat[start * new_width:stop * new_width].reshape(
-            stop - start,
-            spec.middle,
-            new_tick_len,
-        )
-        target[:, :, :len(keep_cols)] = retained
-        target[:, :, len(keep_cols):] = fill_value
-    del target
-    del retained
-    flat.flush()
-    del old
-    del flat
-
-    with spec.path.open("r+b") as file:
-        file.truncate(new_elements * spec.dtype.itemsize)
-    new = np.memmap(
-        spec.path,
-        dtype=spec.dtype,
-        mode="r+",
-        shape=_matrix_shape(spec, new_date_len, new_tick_len),
-    )
-    new[len(keep_rows):] = fill_value
-    new.flush()
-    del new
+    temp_path.replace(spec.path)
 
 
 def delete_before(
