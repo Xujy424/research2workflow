@@ -12,11 +12,14 @@ from .update_date import (
     update_date,
 )
 from .update_stockticks import update_stockticks
+from .delete import AxisDeleteResult, delete_before
 
 __all__ = [
+    "AxisDeleteResult",
     "AxisResize",
     "DATE_RESERVE",
     "TICK_RESERVE",
+    "delete_before",
     "ensure_axis_capacity",
     "init_axis",
     "is_last_tradedate_of_year",

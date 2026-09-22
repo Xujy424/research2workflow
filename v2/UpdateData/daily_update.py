@@ -7,8 +7,12 @@ import warnings
 
 import numpy as np
 
+
+ANNUAL_RETENTION_YEARS = 15
+
 if __package__:
     from .axis import (
+        delete_before,
         init_axis,
         is_last_tradedate_of_year,
         is_tradedate,
@@ -44,6 +48,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateData.axis import (
+        delete_before,
         init_axis,
         is_last_tradedate_of_year,
         is_tradedate,
@@ -105,6 +110,43 @@ def _run_step(label, function, *args, **kwargs):
     return result
 
 
+def _annual_prune_cutoff(
+    dates_path,
+    year,
+    retention_years=ANNUAL_RETENTION_YEARS,
+):
+    """Return the cutoff needed to retain the latest complete years."""
+    if retention_years < 1:
+        raise ValueError("retention_years must be positive")
+    dates = np.load(dates_path, allow_pickle=False)
+    valid_dates = dates[~np.isnat(dates)].astype("datetime64[D]")
+    if not len(valid_dates):
+        return None
+    cutoff = np.datetime64(
+        f"{int(year) - int(retention_years) + 1:04d}-01-01",
+        "D",
+    )
+    if valid_dates.min() >= cutoff:
+        return None
+    return str(cutoff)
+
+
+def _run_annual_axis_maintenance(root, dates_path, date):
+    """Resize axes and retain the latest complete natural-year window."""
+    year = date_type.fromisoformat(date).year
+    resized = _run_step("annual axis resize", reset_axis, root)
+    cutoff = _annual_prune_cutoff(dates_path, year)
+    deleted = None
+    if cutoff is not None:
+        deleted = _run_step(
+            f"annual data prune before {cutoff}",
+            delete_before,
+            cutoff,
+            root,
+        )
+    return resized, deleted
+
+
 def update_data(
     root,
     date=None,
@@ -113,6 +155,7 @@ def update_data(
     zyyx_conn=None,
     str_conn=None,
     update_level2=True,
+    annual_prune=True,
 ):
     root = Path(root)
     stock_root = root / "stock"
@@ -235,13 +278,25 @@ def update_data(
             )
 
         resized = None
+        deleted = None
         if is_last_tradedate_of_year(date):
-            resized = _run_step("annual axis resize", reset_axis, root)
+            if annual_prune:
+                resized, deleted = _run_annual_axis_maintenance(
+                    root, dates_path, date
+                )
+            else:
+                resized = _run_step("annual axis resize", reset_axis, root)
 
         return {
             "status": "updated",
             "date": date,
             "axis_resized": bool(resized and resized.changed),
+            "annual_pruned": deleted is not None,
+            "annual_prune_cutoff": (
+                str(deleted.cutoff) if deleted is not None else None
+            ),
+            "dropped_dates": deleted.dropped_dates if deleted else 0,
+            "dropped_ticks": deleted.dropped_ticks if deleted else 0,
         }
     finally:
         if own_jy and jy_conn is not None:
@@ -280,6 +335,7 @@ def update_history(
                     zyyx_conn=zyyx_conn,
                     str_conn=str_conn,
                     update_level2=False,
+                    annual_prune=False,
                 )
             current += timedelta(days=1)
     except Exception:

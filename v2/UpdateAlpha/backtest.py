@@ -372,8 +372,8 @@ def run_from_ide(
 
 if __name__ == "__main__":
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("cnir",)  # cov, cov_current, cov_decay_optimized
-    START_DATE = "2017-01-01"
+    FACTORS = ("large_active_moneyflow_strength",)  # cov, cov_current, cov_decay_optimized
+    START_DATE = "2024-01-01"
     END_DATE = "2026-06-30"
 
     # True: calculate factor values first and then plot.

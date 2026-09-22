@@ -7,6 +7,12 @@ from .sm_sheepherd import SMSHFactor
 from .mod_lg_flow import CNIRFactor
 from .split_momentum import IntradayOvernightMomentumFactor
 from .active_trade import ACTPositiveFactor, ACTNegativeFactor
+from .order_activity_moneyflow import (
+    LargeActiveMoneyflowFactor,
+    LargePassiveMoneyflowFactor,
+    SmallActiveMoneyflowFactor,
+    SmallPassiveMoneyflowFactor,
+)
 from .satd import (SATDSellDownRetFactor, SATDSellLowPriceFactor,
                    SATDSellHighVolumeFactor, SATDBuyFlatFactor,
                    SATDCombinationFactor)
@@ -19,6 +25,8 @@ __all__ = [
     "CNIRFactor",
     "IntradayOvernightMomentumFactor",
     "ACTPositiveFactor", "ACTNegativeFactor",
+    "LargeActiveMoneyflowFactor", "LargePassiveMoneyflowFactor",
+    "SmallActiveMoneyflowFactor", "SmallPassiveMoneyflowFactor",
     "SATDSellDownRetFactor", "SATDSellLowPriceFactor",
     "SATDSellHighVolumeFactor", "SATDBuyFlatFactor",
     "SATDCombinationFactor",
