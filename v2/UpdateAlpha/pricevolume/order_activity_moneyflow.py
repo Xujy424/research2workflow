@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import time
 from pathlib import Path
 import sys
 
@@ -64,6 +65,7 @@ def _exchange_flows(
     config: OrderActivityMoneyflowConfig,
     size: str,
     activity: str,
+    end_time: time | None = None,
 ) -> pl.LazyFrame | None:
     trade_path = folder / f"{exchange}cj.pq"
     order_path = folder / f"{exchange}wt.pq"
@@ -86,9 +88,13 @@ def _exchange_flows(
             .otherwise(pl.col("BidApplSeqNum"))
         )
 
+    trades = pl.scan_parquet(trade_path).filter(
+        aggressor_side.is_in([1, -1])
+    )
+    if end_time is not None:
+        trades = trades.filter(pl.col("TransactTime") <= pl.lit(end_time))
     trades = (
-        pl.scan_parquet(trade_path)
-        .filter(aggressor_side.is_in([1, -1]))
+        trades
         .select(
             "ChannelNo",
             "SecurityID",
@@ -106,9 +112,11 @@ def _exchange_flows(
         )
     else:
         size_filter = order_amount >= config.large_lower
+    orders = pl.scan_parquet(order_path).filter(size_filter)
+    if end_time is not None:
+        orders = orders.filter(pl.col("TransactTime") <= pl.lit(end_time))
     orders = (
-        pl.scan_parquet(order_path)
-        .filter(size_filter)
+        orders
         .select(
             "ChannelNo",
             "SecurityID",
@@ -129,6 +137,7 @@ def _daily_flows(
     config: OrderActivityMoneyflowConfig,
     size: str,
     activity: str,
+    end_time: time | None = None,
 ) -> pl.DataFrame:
     folder = l2_root / "proc" / pd.Timestamp(date).strftime("%Y%m%d")
     scans = [
@@ -136,7 +145,7 @@ def _daily_flows(
         for exchange in ("sh", "sz")
         if (
             scan := _exchange_flows(
-                folder, exchange, config, size, activity
+                folder, exchange, config, size, activity, end_time
             )
         ) is not None
     ]
