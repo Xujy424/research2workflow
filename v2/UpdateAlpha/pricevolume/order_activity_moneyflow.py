@@ -58,17 +58,6 @@ class OrderActivityMoneyflowConfig:
             raise ValueError("cache_days must be at least lookback_days")
 
 
-def _order_size(column: str, config: OrderActivityMoneyflowConfig) -> pl.Expr:
-    amount = pl.col(column)
-    return (
-        pl.when((amount >= 0) & (amount < config.small_upper))
-        .then(pl.lit("small"))
-        .when((amount >= config.large_lower))
-        .then(pl.lit("large"))
-        .otherwise(pl.lit(None, dtype=pl.String))
-    )
-
-
 def _exchange_flows(
     folder: Path,
     exchange: str,
@@ -81,65 +70,57 @@ def _exchange_flows(
     if not trade_path.is_file() or not order_path.is_file():
         return None
 
-    trades = pl.scan_parquet(trade_path).select(
-        "ChannelNo",
-        pl.col("SecurityID").cast(pl.String).str.pad_start(6, "0"),
-        "BidApplSeqNum",
-        "OfferApplSeqNum",
-        pl.col("Side").alias("AggressorSide"),
-        (pl.col("Price") * pl.col("OrderQty"))
-        .cast(pl.Float64)
-        .alias("TradeAmount"),
-    )
-    orders = (
-        pl.scan_parquet(order_path)
+    aggressor_side = pl.col("Side")
+    if activity == "active":
+        order_side = aggressor_side
+        order_sequence = (
+            pl.when(aggressor_side == 1)
+            .then(pl.col("BidApplSeqNum"))
+            .otherwise(pl.col("OfferApplSeqNum"))
+        )
+    else:
+        order_side = -aggressor_side
+        order_sequence = (
+            pl.when(aggressor_side == 1)
+            .then(pl.col("OfferApplSeqNum"))
+            .otherwise(pl.col("BidApplSeqNum"))
+        )
+
+    trades = (
+        pl.scan_parquet(trade_path)
+        .filter(aggressor_side.is_in([1, -1]))
         .select(
             "ChannelNo",
-            pl.col("SecurityID").cast(pl.String).str.pad_start(6, "0"),
-            "ApplSeqNum",
-            "Side",
+            "SecurityID",
+            order_sequence.alias("ApplSeqNum"),
+            order_side.cast(pl.Int8).alias("OrderSide"),
             (pl.col("Price") * pl.col("OrderQty"))
             .cast(pl.Float64)
-            .alias("OrderAmount"),
+            .alias("Amount"),
         )
-        .filter(_order_size("OrderAmount", config) == size)
     )
-    buy_orders = orders.filter(pl.col("Side") == 1).select(
-        "ChannelNo",
-        "SecurityID",
-        pl.col("ApplSeqNum").alias("BidApplSeqNum"),
+    order_amount = (pl.col("Price") * pl.col("OrderQty")).cast(pl.Float64)
+    if size == "small":
+        size_filter = (order_amount >= 0) & (
+            order_amount < config.small_upper
+        )
+    else:
+        size_filter = order_amount >= config.large_lower
+    orders = (
+        pl.scan_parquet(order_path)
+        .filter(size_filter)
+        .select(
+            "ChannelNo",
+            "SecurityID",
+            "ApplSeqNum",
+            pl.col("Side").cast(pl.Int8).alias("OrderSide"),
+        )
     )
-    sell_orders = orders.filter(pl.col("Side") == -1).select(
-        "ChannelNo",
-        "SecurityID",
-        pl.col("ApplSeqNum").alias("OfferApplSeqNum"),
-    )
-    
-    buy_active = pl.col("AggressorSide") == 1
-    sell_active = pl.col("AggressorSide") == -1
-    if activity == "passive":
-        buy_active = (pl.col("AggressorSide") != 1).fill_null(True)
-        sell_active = (pl.col("AggressorSide") != -1).fill_null(True)
-
-    buy = trades.filter(buy_active).join(
-        buy_orders,
-        on=["ChannelNo", "SecurityID", "BidApplSeqNum"],
+    return trades.join(
+        orders,
+        on=["ChannelNo", "SecurityID", "ApplSeqNum", "OrderSide"],
         how="inner",
-    ).select(
-        "SecurityID",
-        pl.lit(1).alias("OrderSide"),
-        pl.col("TradeAmount").alias("Amount"),
     )
-    sell = trades.filter(sell_active).join(
-        sell_orders,
-        on=["ChannelNo", "SecurityID", "OfferApplSeqNum"],
-        how="inner",
-    ).select(
-        "SecurityID",
-        pl.lit(-1).alias("OrderSide"),
-        pl.col("TradeAmount").alias("Amount"),
-    )
-    return pl.concat([buy, sell])
 
 
 def _daily_flows(
@@ -163,7 +144,7 @@ def _daily_flows(
         return pl.DataFrame(
             schema={
                 "tick": pl.String,
-                "OrderSide": pl.Int32,
+                "OrderSide": pl.Int8,
                 "Amount": pl.Float64,
             }
         )
@@ -171,6 +152,9 @@ def _daily_flows(
         pl.concat(scans)
         .group_by("SecurityID", "OrderSide")
         .agg(pl.col("Amount").sum())
+        .with_columns(
+            pl.col("SecurityID").cast(pl.String).str.pad_start(6, "0")
+        )
         .rename({"SecurityID": "tick"})
         .collect(engine="streaming")
     )
