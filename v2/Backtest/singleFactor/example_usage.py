@@ -291,7 +291,7 @@ if __name__ == "__main__":
     START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
     UNIVERSE = 'zzfull'
-    FACTOR_NAME = "large_active_moneyflow_strength"
+    FACTOR_NAME = "small_passive_moneyflow_strength"
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
     OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / FACTOR_NAME
