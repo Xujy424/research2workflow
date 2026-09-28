@@ -118,7 +118,7 @@ def _calc_momentom(root, dates, ticks, dt):
     start = end - 484
     if start < 0:
         return np.full(len(ticks), np.nan)
-    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', start=start, end=end)
+    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', start=start, end=end) / 100.0
     return _mean(np.log1p(ret), _w(484, 124))
 
 
@@ -211,9 +211,10 @@ def update_barra(date, dates, ticks, conn, root):
         and EndDate<='{date}' order by EndDate desc
     """
     df = pd.read_sql(sql, conn)
-    rf = np.nan if df.empty else (1 + float(df.iloc[0, 0])) ** (1 / 242) - 1
+    annual_rf = np.nan if df.empty else float(df.iloc[0, 0]) / 100.0
+    rf = (1 + annual_rf) ** (1 / 242) - 1
     start = max(0, dt - 241)
-    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', start=start, end=dt + 1)
+    ret = _mat(root, dates, ticks, 'd_essentials/pct.bin', start=start, end=dt + 1) / 100.0
     mv = _mat(root, dates, ticks, 'd_essentials/circ_mv.bin', start=start, end=dt + 1)
     mcap = _row(root, dates, ticks, dt, 'd_essentials/total_mv.bin')
 
