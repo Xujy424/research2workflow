@@ -11,6 +11,7 @@ import pandas as pd
 
 if __package__:
     from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ..operators import safe_ratio_return
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT
     from ...ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
@@ -19,6 +20,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from v2.UpdateAlpha.operators import safe_ratio_return
     from v2.ResearchFlow.FactorTest.metrics import IC, rankIC, calc_group_ret
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
@@ -36,16 +38,6 @@ class IntradayOvernightMomentumContext(AlphaContext):
     def __init__(self, root=DEFAULT_ROOT, config=IntradayOvernightMomentumConfig(), universe="self"):
         self.config = config
         super().__init__(DataPool(root, asset="stock"), universe=universe)
-
-
-def _ratio_return(numerator, denominator):
-    numerator = np.asarray(numerator, float)
-    denominator = np.asarray(denominator, float)
-    return np.divide(
-        numerator, denominator, out=np.full_like(numerator, np.nan),
-        where=(np.isfinite(numerator) & np.isfinite(denominator)
-               & (numerator > 0) & (denominator > 0)),
-    ) - 1.0
 
 
 class IntradayOvernightMomentumFactor(AlphaBase):
@@ -74,8 +66,8 @@ class IntradayOvernightMomentumFactor(AlphaBase):
         open_adj = np.asarray(data.read("d_essentials/open_adj", end, previous), float)
         close_adj = np.asarray(data.read("d_essentials/close_adj", end, previous), float)
         tradable = np.asarray(data.read("basic/tradable", end, start), bool)
-        intraday = _ratio_return(close_adj[1:], open_adj[1:])
-        overnight = _ratio_return(open_adj[1:], close_adj[:-1])
+        intraday = safe_ratio_return(close_adj[1:], open_adj[1:])
+        overnight = safe_ratio_return(open_adj[1:], close_adj[:-1])
         valid = tradable & np.isfinite(intraday) & np.isfinite(overnight)
         result = (
             np.sum(np.where(valid, intraday, 0), axis=0)

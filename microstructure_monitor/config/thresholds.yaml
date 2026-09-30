@@ -1,0 +1,6 @@
+z_warn: 2.0
+z_alert: 3.0
+tail_ratio_warn: 5.0
+liquidity_tight_z: 1.5
+impact_high_z: 1.5
+institution_strong_z: 1.5

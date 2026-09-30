@@ -11,6 +11,7 @@ import pandas as pd
 
 if __package__:
     from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ..operators import cross_sectional_residual
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT
 else:
@@ -18,6 +19,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from v2.UpdateAlpha.operators import cross_sectional_residual
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
 
@@ -91,17 +93,6 @@ def _sum_available(*arrays: np.ndarray) -> np.ndarray:
     return total
 
 
-def _cross_section_residual(y: np.ndarray, x: np.ndarray, min_observations: int) -> np.ndarray:
-    valid = np.isfinite(y) & np.isfinite(x)
-    residual = np.full_like(y, np.nan, dtype=np.float64)
-    if valid.sum() < min_observations:
-        return residual
-    design = np.column_stack((np.ones(valid.sum()), x[valid]))
-    coefficient, *_ = np.linalg.lstsq(design, y[valid], rcond=None)
-    residual[valid] = y[valid] - design @ coefficient
-    return residual
-
-
 def _mod_adjusted_flow(
     buy: np.ndarray,
     sell: np.ndarray,
@@ -130,7 +121,7 @@ def _mod_adjusted_flow(
         )
         imbalance = np.full(total.shape[1], np.nan, dtype=np.float64)
         imbalance[valid] = np.log(buy[row, valid] / sell[row, valid])
-        epsilon = _cross_section_residual(
+        epsilon = cross_sectional_residual(
             imbalance,
             daily_return[row],
             min_observations,

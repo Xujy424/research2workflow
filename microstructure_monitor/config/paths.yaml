@@ -1,0 +1,5 @@
+order_pattern: data/orders/{date}.csv
+trade_pattern: data/trades/{date}.csv
+quote_pattern: data/quotes/{date}.csv
+daily_pattern: data/daily/{date}.csv
+output_dir: microstructure_monitor/output

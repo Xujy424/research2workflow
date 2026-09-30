@@ -14,11 +14,11 @@ import polars as pl
 
 if __package__:
     from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ..operators import cross_sectional_residual
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT
     from .moneyflow_strength import (
         _compound_return,
-        _cross_section_residual,
         _moneyflow_strength,
     )
 else:
@@ -26,11 +26,11 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from v2.UpdateAlpha.operators import cross_sectional_residual
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
     from v2.UpdateAlpha.pricevolume.moneyflow_strength import (
         _compound_return,
-        _cross_section_residual,
         _moneyflow_strength,
     )
 
@@ -257,11 +257,11 @@ class OrderActivityMoneyflowFactor(AlphaBase):
         ret20 = _compound_return(
             history["daily_pct"], config.min_valid_days
         )
-        return _cross_section_residual(
+        return cross_sectional_residual(
             strength,
             ret20,
             config.min_cross_section_observations,
-        )
+        ).astype(np.float32)
 
 
 class LargeActiveMoneyflowFactor(OrderActivityMoneyflowFactor):

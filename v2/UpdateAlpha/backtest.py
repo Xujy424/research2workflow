@@ -372,8 +372,15 @@ def run_from_ide(
 
 if __name__ == "__main__":
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("smsh",)  # cov, cov_current, cov_decay_optimized
-    START_DATE = "2024-01-01"
+    from v2.UpdateAlpha.pricevolume.tgd import TGDConfig
+
+    FACTORS = ("vm_diff",)  # cov, cov_current, cov_decay_optimized, extra_large_attention, main_force_control, sentiment_instability, vm_diff
+    # CONTEXT_KWARGS = {
+    #     "config": TGDConfig(extreme_minutes=None),
+    # }
+    CONTEXT_KWARGS = None
+
+    START_DATE = "2023-01-01"
     END_DATE = "2026-06-30"
 
     # True: calculate factor values first and then plot.
@@ -393,6 +400,7 @@ if __name__ == "__main__":
         return_offset=2,
         output_dir=None,
         universe=None,
+        context_kwargs=CONTEXT_KWARGS,
     )
 
 

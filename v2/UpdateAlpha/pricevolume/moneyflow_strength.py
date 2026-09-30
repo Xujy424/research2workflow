@@ -19,6 +19,7 @@ import pandas as pd
 
 if __package__:
     from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ..operators import cross_sectional_residual
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT
 else:
@@ -26,6 +27,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from v2.UpdateAlpha.operators import cross_sectional_residual
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
 
@@ -94,24 +96,6 @@ def _compound_return(
     return result
 
 
-def _cross_section_residual(
-    y: np.ndarray,
-    x: np.ndarray,
-    min_observations: int,
-) -> np.ndarray:
-    """OLS residual of y on an intercept and x for one cross-section."""
-    y = np.asarray(y, dtype=np.float64)
-    x = np.asarray(x, dtype=np.float64)
-    valid = np.isfinite(y) & np.isfinite(x)
-    result = np.full_like(y, np.nan)
-    if valid.sum() < min_observations:
-        return result.astype(np.float32)
-    design = np.column_stack((np.ones(valid.sum()), x[valid]))
-    coefficient, *_ = np.linalg.lstsq(design, y[valid], rcond=None)
-    result[valid] = y[valid] - design @ coefficient
-    return result.astype(np.float32)
-
-
 class MoneyflowStrengthContext(AlphaContext):
     """Load and cache one common 20-day window for all four factors."""
 
@@ -172,9 +156,9 @@ class MoneyflowStrengthFactor(AlphaBase):
         ret20 = _compound_return(
             history["daily_pct"], config.min_valid_days
         )
-        residual = _cross_section_residual(
+        residual = cross_sectional_residual(
             strength, ret20, config.min_cross_section_observations
-        )
+        ).astype(np.float32)
         return strength, residual
 
     def calculate(self, asof):

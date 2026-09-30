@@ -11,6 +11,7 @@ import pandas as pd
 
 if __package__:
     from ..alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from ..operators import cross_sectional_residual, safe_ratio_return
     from ...GetData import DataPool
     from ...UpdateData.config import ROOT
 else:
@@ -18,6 +19,7 @@ else:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
+    from v2.UpdateAlpha.operators import cross_sectional_residual, safe_ratio_return
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
 
@@ -39,16 +41,6 @@ class APMContext(AlphaContext):
     def __init__(self, root=DEFAULT_ROOT, config=APMConfig(), universe="self"):
         self.config = config
         super().__init__(DataPool(root, asset="stock"), universe=universe)
-
-
-def _ratio_return(numerator, denominator):
-    numerator = np.asarray(numerator, float)
-    denominator = np.asarray(denominator, float)
-    return np.divide(
-        numerator, denominator, out=np.full_like(numerator, np.nan),
-        where=(np.isfinite(numerator) & np.isfinite(denominator)
-               & (numerator > 0) & (denominator > 0)),
-    ) - 1.0
 
 
 def _market_adjusted_residuals(stock_returns, market_returns, min_observations):
@@ -88,18 +80,6 @@ def _paired_t_stat(first, second, min_days):
                      where=(count >= min_days) & (standard_error > 0))
 
 
-def _cross_section_residual(y, x, min_observations):
-    y, x = np.asarray(y, float), np.asarray(x, float)
-    valid = np.isfinite(x) & np.isfinite(y)
-    result = np.full_like(y, np.nan)
-    if valid.sum() < min_observations:
-        return result
-    design = np.column_stack((np.ones(valid.sum()), x[valid]))
-    coefficient, *_ = np.linalg.lstsq(design, y[valid], rcond=None)
-    result[valid] = y[valid] - design @ coefficient
-    return result
-
-
 class APMFactor(AlphaBase):
     """APMnew: overnight-versus-afternoon residual-difference t-stat.
 
@@ -126,13 +106,13 @@ class APMFactor(AlphaBase):
 
         open_adj = np.asarray(data.read("d_essentials/open_adj", end, previous), float)
         close_adj = np.asarray(data.read("d_essentials/close_adj", end, previous), float)
-        overnight = _ratio_return(open_adj[1:], close_adj[:-1])
+        overnight = safe_ratio_return(open_adj[1:], close_adj[:-1])
         minute_open = np.asarray(data.read("m_essentials/open", end, start), float)
         minute_close = np.asarray(data.read("m_essentials/close", end, start), float)
         bar = cfg.afternoon_start_bar
         if not 0 <= bar < minute_open.shape[1]:
             raise ValueError(f"afternoon_start_bar={bar} outside {minute_open.shape[1]} bars")
-        afternoon = _ratio_return(minute_close[:, -1], minute_open[:, bar])  # T，N
+        afternoon = safe_ratio_return(minute_close[:, -1], minute_open[:, bar])
 
         tradable = np.asarray(data.read("basic/tradable", end, start), bool)
         overnight = np.where(tradable, overnight, np.nan)
@@ -154,7 +134,7 @@ class APMFactor(AlphaBase):
         valid_daily = np.isfinite(daily_pct) & tradable
         ret20 = np.prod(1 + np.where(valid_daily, daily_pct, 0), axis=0) - 1
         ret20[valid_daily.sum(axis=0) < cfg.min_paired_days] = np.nan
-        return _cross_section_residual(
+        return cross_sectional_residual(
             statistic, ret20, cfg.min_cross_section_observations
         ).astype(np.float32)
 
