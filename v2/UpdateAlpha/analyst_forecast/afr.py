@@ -135,6 +135,20 @@ class AFRContext(AlphaContext):
     def empty(self):
         return np.full(self.data.axis.tick_count, np.nan, dtype=np.float32)
 
+    def filter_universe(self, frame, asof):
+        """Keep event rows whose stocks are in the factor universe."""
+        if frame.is_empty():
+            return frame
+        axis = self.data.axis
+        positions = np.asarray([
+            axis._tick_positions.get(str(tick).strip().zfill(6), -1)
+            for tick in frame["tick"]
+        ])
+        keep = positions >= 0
+        universe = self.factor_universe_mask(asof)
+        keep[keep] &= universe[positions[keep]]
+        return frame.filter(pl.Series(keep))
+
     def field_values(self, field, dates, ticks):
         """Read paired date/tick values at the latest available trade date."""
         axes = self.data.axis
@@ -220,12 +234,13 @@ class AFRFactor(AlphaBase):
             (pl.col("create_date") - pl.col("prior_date")).dt.total_days().alias("gap_days"),
             ((pl.col("forecast_np") - pl.col("prior_np")) / pl.col("prior_np").abs()).clip(-cfg.revision_limit, cfg.revision_limit).alias("afr_event"),
         )
-        return events.filter(
-            pl.col("prior_date").is_not_null()  # 去掉首次预测，变相保证一个分析师对某股票至少两次预测
-            & (pl.col("create_date") >= _date(asof) - pd.Timedelta(days=cfg.lookback_days))  # 回看90天
+        events = events.filter(
+            pl.col("prior_date").is_not_null()  # Exclude first forecasts.
+            & (pl.col("create_date") >= _date(asof) - pd.Timedelta(days=cfg.lookback_days))  # Apply the recent lookback.
             & pl.col("afr_event").is_finite()
-            & (pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions)  # 剔除少于三份预测报告的股票
+            & (pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions)  # Require enough institutions.
         )
+        return self.context.filter_universe(events, asof)
 
     def calculate(self, asof):
         asof = _date(asof)
@@ -303,7 +318,7 @@ class ExpectedInertiaFactor(AlphaBase):
             ).alias("inertia_event"),
         )
         days = cfg.lookback_days if lookback_days is None else lookback_days
-        return events.filter(
+        events = events.filter(
             pl.col("prior_date").is_not_null()
             & pl.col("gap_days").is_between(1, cfg.max_history_days)
             & (
@@ -311,6 +326,7 @@ class ExpectedInertiaFactor(AlphaBase):
             )
             & pl.col("inertia_event").is_finite()
         )
+        return self.context.filter_universe(events, asof)
 
     def calculate(self, asof):
         cfg = self.context.config

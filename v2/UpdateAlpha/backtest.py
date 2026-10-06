@@ -45,26 +45,13 @@ DEFAULT_HORIZONS = (1, 5, 10, 20)
 
 
 def _universe_mask(context: AlphaContext, universe, start_idx, end_idx):
-    """Return a date-by-stock mask used only for plotting/evaluation."""
+    """Return the same point-in-time universe used during calculation."""
 
-    if universe is None:
-        return None
-    if isinstance(universe, str):
-        key = universe.lower()
-        if key in {"tradable", "basic/tradable"}:
-            values = context.data.read(
-                "basic/tradable", start_date=start_idx, end_date=end_idx
-            )
-            return np.asarray(values, dtype=bool)
-        if key in {"all", "none"}:
-            return None
-        field = (
-            f"index/weight/{key}_weight"
-            if not universe.startswith(("index/", "basic/", "d_"))
-            else universe
-        )
-        values = context.data.read(field, start_date=start_idx, end_date=end_idx)
-        return np.isfinite(values) & (values > 0)
+    if universe is None or isinstance(universe, str):
+        dates = context.data.axis.trade_dates[start_idx:end_idx + 1]
+        return np.stack([
+            context.factor_universe_mask(day) for day in dates
+        ])
     values = np.asarray(universe)
     if values.ndim != 2:
         raise ValueError("universe array must be 2-D date-by-stock")

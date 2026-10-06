@@ -50,13 +50,16 @@ class AlphaContext:
         return np.asarray(self.data.read(field, int(day)), dtype=float)
 
     def _universe_weight_field(self):
-        if self.universe in (None, "", "self"):
+        if self.universe is None:
             return None
         if not isinstance(self.universe, str):
             raise TypeError("universe must be None or a string")
-        if "/" in self.universe:
-            return self.universe
-        return f"index/weight/{self.universe}_weight"
+        universe = self.universe.strip()
+        if universe.lower() in {"", "self", "tradable", "basic/tradable"}:
+            return None
+        if "/" in universe:
+            return universe
+        return f"index/weight/{universe.lower()}_weight"
 
     def calculate_benchmark(self, values, weight_day):
         """Weighted benchmark value for the configured universe."""
@@ -77,14 +80,6 @@ class AlphaContext:
             weights = self.read_row(field, max(0, row - 1))[:n]
             mask &= np.isfinite(weights) & (weights > 0)
         return mask
-
-    def mask_factor_universe(self, values, day):
-        """Mask the instrument axis before any cross-sectional operation."""
-        values = np.asarray(values)
-        mask = self.factor_universe_mask(day)
-        if values.shape[-1] != len(mask):
-            raise ValueError("last axis must match the valid instrument axis")
-        return np.where(mask, values, np.nan)
 
     def filter_factor_universe(self, values, day):
         """Keep tradable stocks, and restrict to index members when set."""
