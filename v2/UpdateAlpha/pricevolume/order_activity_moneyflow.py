@@ -261,6 +261,7 @@ class OrderActivityMoneyflowFactor(AlphaBase):
             strength,
             ret20,
             config.min_cross_section_observations,
+            mask=self.context.factor_universe_mask(asof),
         ).astype(np.float32)
 
 

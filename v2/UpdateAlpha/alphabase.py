@@ -67,15 +67,30 @@ class AlphaContext:
             return np.nan
         return np.average(values[valid], weights=weights[valid])
 
+    def factor_universe_mask(self, day):
+        """Return the tradable, point-in-time universe for a cross-section."""
+        row = self.data.axis.date_position(day)
+        n = self.data.axis.tick_count
+        mask = self.read_row(self.tradable_field, row)[:n] == 1
+        field = self._universe_weight_field()
+        if field is not None:
+            weights = self.read_row(field, max(0, row - 1))[:n]
+            mask &= np.isfinite(weights) & (weights > 0)
+        return mask
+
+    def mask_factor_universe(self, values, day):
+        """Mask the instrument axis before any cross-sectional operation."""
+        values = np.asarray(values)
+        mask = self.factor_universe_mask(day)
+        if values.shape[-1] != len(mask):
+            raise ValueError("last axis must match the valid instrument axis")
+        return np.where(mask, values, np.nan)
+
     def filter_factor_universe(self, values, day):
         """Keep tradable stocks, and restrict to index members when set."""
         n = self.data.axis.tick_count
         result = np.full_like(values, np.nan, dtype=float)
-        mask = self.read_row(self.tradable_field, day)[:n] == 1
-        field = self._universe_weight_field()
-        if field is not None:
-            weights = self.read_row(field, max(0, int(day) - 1))[:n]
-            mask &= np.isfinite(weights) & (weights > 0)
+        mask = self.factor_universe_mask(day)
         result[:n] = np.where(mask, values[:n], np.nan)
         return result
 

@@ -218,7 +218,10 @@ class SentimentInstabilityFactor(AlphaBase):
                 int(np.ceil(cfg.return_volume_corr_days * cfg.min_valid_ratio)),
             ),
         )
-        ranks = np.stack([cross_sectional_rank(item) for item in components])
+        mask = self.context.factor_universe_mask(asof)
+        ranks = np.stack([
+            cross_sectional_rank(item, mask=mask) for item in components
+        ])
         valid = np.all(np.isfinite(ranks), axis=0)
         return np.where(valid, ranks.sum(axis=0), np.nan).astype(np.float32)
 

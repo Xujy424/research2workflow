@@ -80,6 +80,10 @@ class ModLargeFlowContext(AlphaContext):
                 "sell_lg": read("sell_lg_amount"),
                 "buy_mid": read("buy_md_amount"),
                 "sell_mid": read("sell_md_amount"),
+                "universe_mask": np.stack([
+                    self.factor_universe_mask(date)
+                    for date in axis.trade_dates[start:end + 1]
+                ]),
             }
             self._cache_key = key
         return self._cache_value
@@ -97,6 +101,7 @@ def _mod_adjusted_flow(
     buy: np.ndarray,
     sell: np.ndarray,
     daily_pct: np.ndarray,
+    universe_mask: np.ndarray,
     min_observations: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return daily MOD NIR and total principal-money amount."""
@@ -125,6 +130,7 @@ def _mod_adjusted_flow(
             imbalance,
             daily_return[row],
             min_observations,
+            mask=universe_mask[row],
         )
         exp_epsilon = np.exp(np.clip(epsilon, -50.0, 50.0))
         daily_mod_nir[row] = np.divide(
@@ -197,6 +203,7 @@ class CNIRFactor(AlphaBase):
             buy,
             sell,
             history["daily_pct"],
+            history["universe_mask"],
             cfg.min_cross_section_observations,
         )
         return _net_inflow_ratio(

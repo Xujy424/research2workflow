@@ -177,7 +177,10 @@ class MainForceControlFactor(AlphaBase):
             time_series_corr(volatility, amplitude, cfg.min_valid_days),
             time_series_corr(volume_distribution, amplitude, cfg.min_valid_days),
         )
-        ranks = np.stack([cross_sectional_rank(item) for item in correlations])
+        mask = self.context.factor_universe_mask(asof)
+        ranks = np.stack([
+            cross_sectional_rank(item, mask=mask) for item in correlations
+        ])
         valid = np.all(np.isfinite(ranks), axis=0)
         return np.where(valid, -ranks.sum(axis=0), np.nan).astype(np.float32)
 

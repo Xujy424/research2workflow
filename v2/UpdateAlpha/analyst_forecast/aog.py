@@ -17,11 +17,11 @@ import sys
 import numpy as np
 import pandas as pd
 import polars as pl
-from scipy.stats import rankdata
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
+from v2.UpdateAlpha.operators import cross_sectional_rank
 from v2.GetData import DataPool
 from v2.UpdateData.config import ROOT, get_jy_conn
 
@@ -55,14 +55,6 @@ class AOGConfig:
             raise ValueError("event_cache_size must be positive")
         if self.max_event_age is not None and self.max_event_age < 0:
             raise ValueError("max_event_age must be non-negative")
-
-
-def _rank(values):
-    result = np.full(values.shape, np.nan, dtype=float)
-    valid = np.isfinite(values)
-    if valid.any():
-        result[valid] = rankdata(values[valid], method="average") / valid.sum()
-    return result
 
 
 class AOGContext(AlphaContext):
@@ -259,9 +251,15 @@ class AOGRankFactor(_AOGFactor):
     def _daily_value(self, day, daily=None):
         key = (self.feature, day)
         if daily is None:
-            return _rank(self._raw(day))
+            return cross_sectional_rank(
+                self._raw(day),
+                mask=self.context.factor_universe_mask(day),
+            )
         if key not in daily:
-            daily[key] = _rank(self._raw(day))
+            daily[key] = cross_sectional_rank(
+                self._raw(day),
+                mask=self.context.factor_universe_mask(day),
+            )
         return daily[key]
 
 

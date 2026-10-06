@@ -89,12 +89,10 @@ class TGDContext(AlphaContext):
                 ),
                 dtype=np.float64,
             ),
-            "tradable": np.asarray(
-                self.data.read(
-                    "basic/tradable", end_date=end, start_date=start
-                ),
-                dtype=bool,
-            ),
+            "universe_mask": np.stack([
+                self.factor_universe_mask(date)
+                for date in axis.trade_dates[start:end + 1]
+            ]),
         }
 
 
@@ -195,7 +193,7 @@ class TGDFactor(AlphaBase):
 
         daily = np.full((cfg.lookback_days, tick_count), np.nan, dtype=float)
         for i in range(cfg.lookback_days):
-            mask = raw["tradable"][i]
+            mask = raw["universe_mask"][i]
             common = [segment_returns[0][i], segment_returns[1][i], overnight[i]]
             first_stage = []
             for dependent, mean_return in (
@@ -205,13 +203,13 @@ class TGDFactor(AlphaBase):
                 y = np.where(mask, dependent, np.nan)
                 x = np.column_stack([mean_return, *common])
                 first_stage.append(cross_sectional_residual(
-                    y, x, cfg.min_cross_section_observations
+                    y, x, cfg.min_cross_section_observations, mask=mask
                 ))
 
             y = first_stage[1]
             x = first_stage[0]
             daily[i] = cross_sectional_residual(
-                y, x, cfg.min_cross_section_observations
+                y, x, cfg.min_cross_section_observations, mask=mask
             )
 
         valid = np.isfinite(daily)
@@ -222,7 +220,7 @@ class TGDFactor(AlphaBase):
             out=np.full(tick_count, np.nan),
             where=count >= cfg.min_valid_days,
         )
-        result = np.where(raw["tradable"][-1], result, np.nan)
+        result = np.where(raw["universe_mask"][-1], result, np.nan)
         return result.astype(np.float32)
 
 

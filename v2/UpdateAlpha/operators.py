@@ -22,7 +22,7 @@ def safe_ratio_return(numerator, denominator):
     ) - 1.0
 
 
-def cross_sectional_residual(y, regressors, min_observations):
+def cross_sectional_residual(y, regressors, min_observations, *, mask=None):
     """OLS residuals of one cross-section on one or more regressors."""
     target = np.asarray(y, dtype=np.float64)
     features = np.asarray(regressors, dtype=np.float64)
@@ -34,6 +34,11 @@ def cross_sectional_residual(y, regressors, min_observations):
         raise ValueError("regressors must be shaped observations x features")
 
     valid = np.isfinite(target) & np.all(np.isfinite(features), axis=1)
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != target.shape:
+            raise ValueError("mask must match the target cross-section")
+        valid &= mask
     result = np.full_like(target, np.nan)
     if valid.sum() < min_observations:
         return result
@@ -43,11 +48,16 @@ def cross_sectional_residual(y, regressors, min_observations):
     return result
 
 
-def cross_sectional_rank(values):
+def cross_sectional_rank(values, *, mask=None):
     values = np.asarray(values, dtype=np.float64)
     if values.ndim != 1:
         raise ValueError("values must be one-dimensional")
     valid = np.isfinite(values)
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != values.shape:
+            raise ValueError("mask must match the ranked cross-section")
+        valid &= mask
     result = np.full_like(values, np.nan)
     if valid.any():
         result[valid] = rankdata(values[valid], method="average") / valid.sum()

@@ -135,7 +135,10 @@ class APMFactor(AlphaBase):
         ret20 = np.prod(1 + np.where(valid_daily, daily_pct, 0), axis=0) - 1
         ret20[valid_daily.sum(axis=0) < cfg.min_paired_days] = np.nan
         return cross_sectional_residual(
-            statistic, ret20, cfg.min_cross_section_observations
+            statistic,
+            ret20,
+            cfg.min_cross_section_observations,
+            mask=self.context.factor_universe_mask(asof),
         ).astype(np.float32)
 
 

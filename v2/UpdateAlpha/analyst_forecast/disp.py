@@ -331,6 +331,9 @@ class DISPEqualFactor(_DISPFactor):
         frame = freshness.join(institution, on="tick", how="inner")
         if frame.is_empty():
             return pl.DataFrame(schema={"tick": pl.String, self.column: pl.Float64})
+        mask = self.context.factor_universe_mask(asof)
+        allowed = self.context.data.axis.ticks[mask].tolist()
+        frame = frame.filter(pl.col("tick").is_in(allowed))
         return frame.with_columns(
             pl.col("disp_freshness").rank(method="average").alias("fresh_rank"),
             pl.col("disp_institution").rank(method="average").alias("institution_rank"),
