@@ -193,7 +193,9 @@ FACTOR_REGISTRY = {
 }
 
 
-_DISCOVERY_CATEGORIES = ("analyst_forecast", "pricevolume")
+_DISCOVERY_CATEGORIES = (
+    "analyst_forecast", "pricevolume", "gh_factor_calendar",
+)
 _DISCOVERED_MODULES = set()
 
 
@@ -231,7 +233,7 @@ def discover_factors(target=None):
                     FACTOR_REGISTRY.setdefault(spec.name, spec)
             if key is not None and key in FACTOR_REGISTRY:
                 return FACTOR_REGISTRY[key]
-    return FACTOR_REGISTRY.get(key) if key is not None else None
+    return FACTOR_REGISTRY.get(key) if key is not None else FACTOR_REGISTRY
 
 def get_factor_spec(
     name: str,
@@ -349,8 +351,6 @@ __all__ = [
     "OERContext",
     "OERFactor",
 ]
-
-
 
 
 
