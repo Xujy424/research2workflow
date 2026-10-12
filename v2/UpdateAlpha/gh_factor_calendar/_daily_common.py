@@ -45,27 +45,3 @@ class CalendarDailyContext(AlphaContext):
         }
 
 
-def _mean(values, min_count):
-    valid = np.isfinite(values)
-    count = valid.sum(axis=0)
-    return np.divide(
-        np.where(valid, values, 0.0).sum(axis=0),
-        count,
-        out=np.full(values.shape[1], np.nan),
-        where=count >= min_count,
-    )
-
-
-def _sum(values, min_count):
-    valid = np.isfinite(values)
-    result = np.where(valid, values, 0.0).sum(axis=0)
-    result[valid.sum(axis=0) < min_count] = np.nan
-    return result
-
-
-class _CalendarDailyFactor(AlphaBase):
-    def empty(self):
-        return np.full(self.context.data.axis.tick_count, np.nan, dtype=np.float32)
-
-    def finish(self, values):
-        return np.asarray(values, dtype=np.float32)
