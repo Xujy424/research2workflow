@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import pandas as pd
+import numpy as np
 
 
 REQUIRED_ORDER_COLUMNS = ("time", "symbol", "order_id", "price", "volume", "side")
@@ -35,7 +36,7 @@ def require_columns(frame: pd.DataFrame, required: tuple[str, ...], name: str) -
 
 
 def safe_divide(numerator, denominator):
-    return numerator / denominator.replace(0, pd.NA)
+    return numerator / denominator.replace(0, np.nan)
 
 
 def flatten_feature_frames(frames: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
