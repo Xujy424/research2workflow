@@ -31,6 +31,7 @@ if __package__:
     from .level2.get_l2data import autoload_l2data
     from .level2.preprocess_l2data import update_l2_basic
     from .stock.update_barra import update_barra
+    from .stock.update_barra_group import update_barra_group
     from .stock.update_basic import update_basic, update_tradable
     from .stock.update_dividend import update_dividend
     from .stock.update_essentials import (
@@ -67,6 +68,7 @@ else:
     from v2.UpdateData.level2.get_l2data import autoload_l2data
     from v2.UpdateData.level2.preprocess_l2data import update_l2_basic
     from v2.UpdateData.stock.update_barra import update_barra
+    from v2.UpdateData.stock.update_barra_group import update_barra_group
     from v2.UpdateData.stock.update_basic import update_basic, update_tradable
     from v2.UpdateData.stock.update_dividend import update_dividend
     from v2.UpdateData.stock.update_essentials import (
@@ -177,76 +179,81 @@ def update_data(
         if str_conn is None:
             str_conn = get_str_engine()
 
-        date = _run_step("date axis", update_date, date, root)
-        _run_step("stock axis", update_stockticks, date, root, jy_conn)
+        #date = _run_step("date axis", update_date, date, root)
+        #_run_step("stock axis", update_stockticks, date, root, jy_conn)
         dates = np.load(dates_path, allow_pickle=False)
         stock_ticks = np.load(ticks_path, allow_pickle=False)
 
-        _run_step(
-            "daily essentials",
-            update_d_essentials,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
-        _run_step(
-            "high-frequency summaries",
-            update_highfreq,
-            date, dates, stock_ticks, str_conn, stock_root,
-        )
-        _run_step(
-            "minute essentials",
-            update_m_essentials,
-            date, dates, stock_ticks, str_conn, stock_root,
-        )
-        _run_step(
-            "basic and tradable",
-            lambda: (
-                update_basic(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-                update_tradable(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-            ),
-        )
-        _run_step(
-            "industry and sector",
-            lambda: (
-                update_industry(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-                update_sector(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-            ),
-        )
-        _run_step(
-            "index constituents",
-            update_index,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
-        _run_step(
-            "ZYYX consensus",
-            update_zyyx,
-            date,
-            dates,
-            stock_ticks,
-            zyyx_conn,
-            stock_root / "zyyx",
-        )
-        _run_step(
-            "fundamental and dividend",
-            lambda: (
-                update_fundamental(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-                update_dividend(
-                    date, dates, stock_ticks, jy_conn, stock_root
-                ),
-            ),
-        )
+        # _run_step(
+        #     "daily essentials",
+        #     update_d_essentials,
+        #     date, dates, stock_ticks, jy_conn, stock_root,
+        # )
+        # _run_step(
+        #     "high-frequency summaries",
+        #     update_highfreq,
+        #     date, dates, stock_ticks, str_conn, stock_root,
+        # )
+        # _run_step(
+        #     "minute essentials",
+        #     update_m_essentials,
+        #     date, dates, stock_ticks, str_conn, stock_root,
+        # )
+        # _run_step(
+        #     "basic and tradable",
+        #     lambda: (
+        #         update_basic(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #         update_tradable(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #     ),
+        # )
+        # _run_step(
+        #     "industry and sector",
+        #     lambda: (
+        #         update_industry(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #         update_sector(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #     ),
+        # )
+        # _run_step(
+        #     "index constituents",
+        #     update_index,
+        #     date, dates, stock_ticks, jy_conn, stock_root,
+        # )
+        # _run_step(
+        #     "ZYYX consensus",
+        #     update_zyyx,
+        #     date,
+        #     dates,
+        #     stock_ticks,
+        #     zyyx_conn,
+        #     stock_root / "zyyx",
+        # )
+        # _run_step(
+        #     "fundamental and dividend",
+        #     lambda: (
+        #         update_fundamental(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #         update_dividend(
+        #             date, dates, stock_ticks, jy_conn, stock_root
+        #         ),
+        #     ),
+        # )
         _run_step(
             "Barra factors",
             update_barra,
+            date, dates, stock_ticks, jy_conn, stock_root,
+        )
+        _run_step(
+            "Barra group constituents",
+            update_barra_group,
             date, dates, stock_ticks, jy_conn, stock_root,
         )
 
@@ -427,7 +434,7 @@ def update_history_l2(
 if __name__ == "__main__":
     update_history(
         root=ROOT,
-        start_date="2026-07-24",
+        start_date="2010-01-04",
         end_date="2026-09-30",
     )
     # update_history_l2(
