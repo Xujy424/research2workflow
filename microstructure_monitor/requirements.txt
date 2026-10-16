@@ -1,0 +1,7 @@
+pandas>=2
+numpy
+scipy
+matplotlib
+plotly
+polars
+pyarrow

@@ -27,6 +27,10 @@ class MarketData:
     trades: pd.DataFrame
     quotes: pd.DataFrame
     daily: pd.DataFrame | None = None
+    order_context: pd.DataFrame | None = None
+    trade_context: pd.DataFrame | None = None
+    auctions: Mapping[str, pd.DataFrame] | None = None
+    quality: pd.DataFrame | None = None
 
 
 def require_columns(frame: pd.DataFrame, required: tuple[str, ...], name: str) -> None:

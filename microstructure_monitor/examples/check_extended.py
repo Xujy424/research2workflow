@@ -37,8 +37,9 @@ def main():
         save_observation(directory, "2026-09-28", pd.Series({"metric": 2.}))
         assert len(load_history(directory)) == 1
         assert load_history(directory).metric.iloc[0] == 2
-        first = run_daily_monitor("2026-09-28", make_demo_data("2026-09-28"), output_dir=directory)
-        second = run_daily_monitor("2026-09-29", make_demo_data(), output_dir=directory)
+        report_directory = directory + "/reports"
+        first = run_daily_monitor("2026-09-28", make_demo_data("2026-09-28"), output_dir=report_directory)
+        second = run_daily_monitor("2026-09-29", make_demo_data(), output_dir=report_directory)
         assert second.dashboard_path.exists()
         assert not second.structural_change.empty
         assert second.baseline.loc["trade.count", "sample_count"] == 1

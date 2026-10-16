@@ -34,16 +34,31 @@ def detect_migration(history, thresholds=None):
     families_required = int(settings.get("resonance_families", 2))
     if not 1 <= minimum <= window or families_required < 1:
         raise ValueError("Invalid migration persistence settings")
-    baselines = historical_baselines(history)
     rows = []
-    families = {"liquidity": ["liquidity.spread"], "size": ["trade.large_ratio", "trade.tail_ratio"], "flow": ["flow.imbalance"], "intraday": ["intraday.amount_close_share"], "impact": ["liquidity.impact"]}
+    families = {"liquidity": ["liquidity.spread"], "size": ["trade.large_ratio", "trade.tail_ratio"], "flow": ["flow.imbalance"], "intraday": ["intraday.amount_close_share", "intraday.amount_argmax_minute"], "impact": ["liquidity.impact"],
+                "distribution": [c for c in history if c.startswith("structural.ks.")],
+                "curve": [c for c in history if c.startswith("structural.curve.")],
+                "universe_gap": [c for c in history if c.startswith("gap.") and c.endswith(("liquidity.spread", "liquidity.depth", "liquidity.impact", "trade.large_ratio", "trade.xl_ratio", "flow.imbalance", "order.imbalance", "lifecycle.cancel_rate", "lifecycle.fill_rate"))]}
+    required = list(dict.fromkeys(metric for metrics in families.values() for metric in metrics))
+    baselines = historical_baselines(history.reindex(columns=required))
     for date, baseline in baselines.items():
         row = {"date": date}
         for family, metrics in families.items():
             z = baseline.z20.reindex(metrics).dropna()
-            row[family] = z.loc[z.abs().idxmax()] if len(z) else float("nan")
+            ma_gap = ((baseline.ma5-baseline.ma20)/baseline.std20.replace(0, float("nan"))).reindex(metrics).dropna()
+            if not ma_gap.empty:
+                z = pd.concat([z, ma_gap])
+            row[family] = z.iloc[z.abs().argmax()] if len(z) else float("nan")
         rows.append(row)
     result = pd.DataFrame(rows).set_index("date")
+    # Absolute distances have an interpretable threshold even during Z warmup.
+    for family, prefix, default in (("distribution", "structural.ks.", .25), ("curve", "structural.curve.", .3)):
+        columns = [c for c in history if c.startswith(prefix)]
+        if columns:
+            distance = history[columns].max(axis=1)
+            distance.index = distance.index.strftime("%Y-%m-%d")
+            threshold = float(settings.get(family + "_distance_warn", default))
+            result.loc[distance.ge(threshold), family] = cutoff
     signals = result.abs().ge(cutoff)
     sustained = (result.ge(cutoff).rolling(window, min_periods=window).sum().ge(minimum)
                  | result.le(-cutoff).rolling(window, min_periods=window).sum().ge(minimum))

@@ -35,7 +35,7 @@ def make_demo_data(date="2026-09-29"):
 
 
 def main():
-    result = run_daily_monitor("2026-09-29", make_demo_data())
+    result = run_daily_monitor("2026-09-29", make_demo_data(), output_dir="microstructure_monitor/output/demo_v5", data_source="synthetic")
     print(result.regime)
     print(f"Report: {result.report_path}")
     return result

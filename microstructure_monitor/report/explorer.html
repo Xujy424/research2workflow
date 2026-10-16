@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>微观结构 · 完整指标监控</title>
+<style>
+body{margin:0;font:14px "Microsoft YaHei",Arial,sans-serif;color:#252525;background:#fafafa}header,main{max-width:1250px;margin:auto;padding:20px}header{border-bottom:1px solid #ddd}h1{font-size:25px}h2{font-size:20px}h3{font-size:16px}.controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-block:1px solid #ddd;padding:12px 0}select{max-width:100%;padding:8px;border:1px solid #aaa;background:white}label{display:flex;flex-direction:column;gap:4px}#plot,#detail{width:100%;height:410px}.table{overflow:auto}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #ddd;white-space:nowrap}.notice{background:#fff5df;padding:12px;border-left:3px solid #ad7434}summary{cursor:pointer}li{margin-bottom:10px}#status{color:#666;padding:8px 0}@media(max-width:600px){main,header{padding:12px}#plot,#detail{height:330px}label{width:100%}}
+</style>
+<header><h1>微观结构监控</h1><div id="scope"></div></header>
+<main><!--CONCLUSIONS-->
+<h2>指标探索</h2><div class="controls">
+<label>范围<select id="entity"></select></label>
+<label>视图<select id="view"><option value="trend">历史趋势与基准</option><option value="intraday">日内曲线与历史对照</option><option value="distribution">股票指标分布</option><option value="discovery">事件后收益期限</option><option value="tradeDistribution">逐笔成交金额分布</option><option value="orderDistribution">委托金额分布</option></select></label>
+<label>模块<select id="module"></select></label><label>指标筛选<input id="search" type="search" placeholder="输入指标名称"></label><label>指标<select id="metric"></select></label>
+</div><div id="status"></div><div id="plot"></div><div id="detail"></div>
+<h2>当前历史基准</h2><div class="table"><table id="baseline"></table></div>
+<h2>逐股原始指标</h2><div class="table"><table id="values"></table></div>
+</main><script>/*PLOTLY*/</script><script>
+const D=/*PAYLOAD*/;
+function unpack(table){return table.data.map(values=>Object.fromEntries(table.columns.map((column,i)=>[column,values[i]]).filter(([,value])=>value!==null)));}
+for(const name of ['market','stocks','features','baseline','stockBaseline','bars'])D[name]=unpack(D[name]);
+for(const name of Object.keys(D.scopeBars))D.scopeBars[name]=unpack(D.scopeBars[name]);
+const $=id=>document.getElementById(id),finite=x=>typeof x==='number'&&Number.isFinite(x);
+const stocks=[...new Set(D.stocks.map(x=>x.symbol))].sort();
+$('scope').textContent=`${D.date} · ${stocks.length}只股票 · ${D.market.length}个历史观测日 · ${{synthetic:'模拟数据，仅用于软件验证',offline_cache:'历史缓存快照，未刷新源数据',v2_proc:'v2处理后的L2数据',caller_supplied:'外部传入数据'}[D.source]||'外部传入数据'}`;
+function options(element,values){element.replaceChildren(...values.map(([value,label])=>{const o=document.createElement('option');o.value=value;o.textContent=label;return o}));}
+const groups=Object.keys(D.scopes);
+options($('entity'),[['market','市场汇总'],...stocks.map(s=>['stock:'+s,s]),...groups.map(g=>[g,g])]);
+function dataset(){const entity=$('entity').value;return entity.startsWith('stock:')?D.stocks.filter(r=>r.symbol===entity.slice(6)):D.market;}
+function key(){return $('metric').value;}
+function available(){const e=$('entity').value,v=$('view').value;if(v==='intraday')return D.barMetrics;if(v==='tradeDistribution'||v==='orderDistribution')return ['amount'];if(v==='distribution')return D.metrics;if(v==='discovery')return ['large','buy','sell','continuation','reversal'];return e.startsWith('stock:')?D.metrics:e==='market'?D.marketMetrics.filter(c=>!c.startsWith('universe.')&&!c.startsWith('gap.')):D.marketMetrics.filter(c=>c.startsWith(e+'.'));}
+function category(c){const e=$('entity').value;if(e!=='market'&&!e.startsWith('stock:')&&c.startsWith(e+'.'))c=c.slice(e.length+1);return c.includes('.')?c.split('.')[0]:'activity';} function refreshModules(){const groups=[...new Set(available().map(category))].sort(),previous=$('module').value;options($('module'),groups.map(g=>[g,g]));$('module').value=groups.includes(previous)?previous:groups.includes('trade')?'trade':groups[0]||'';refreshMetrics();} function refreshMetrics(){const prev=key(),query=$('search').value.toLowerCase(),all=available().filter(c=>category(c)===$('module').value&&c.toLowerCase().includes(query));options($('metric'),all.map(c=>[c,c]));if(all.includes(prev))$('metric').value=prev;render();}
+function statistics(rows,k){return rows.map((row,i)=>{const raw=row[k],out={date:row.date,raw};for(const n of [5,20,60,252]){const window=rows.slice(Math.max(0,i-n),i).map(r=>r[k]).filter(finite);if(window.length===n){const mean=window.reduce((a,b)=>a+b,0)/n,std=Math.sqrt(window.reduce((a,b)=>a+(b-mean)**2,0)/(n-1));out['ma'+n]=mean;out['std'+n]=std;out['z'+n]=finite(raw)&&std>Number.EPSILON*Math.max(1,Math.abs(mean))*10?(raw-mean)/std:null;if(n===252)out.pct=finite(raw)?window.filter(v=>v<=raw).length/n:null;}}return out;});}
+function graph(id,traces,title,yTitle=''){return Plotly.react($(id),traces,{title:{text:title,font:{size:16}},margin:{l:65,r:35,t:55,b:55},xaxis:{automargin:true},yaxis:{title:{text:yTitle},automargin:true},legend:{orientation:'h'},paper_bgcolor:'#fafafa',plot_bgcolor:'#fff'},{responsive:true,displaylogo:false});}
+function line(x,y,name){return {x,y,name,type:'scatter',mode:'lines+markers',connectgaps:false,marker:{size:4}};}
+function textTable(id,headers,rows){const table=$(id);table.replaceChildren();const tr=document.createElement('tr');headers.forEach(h=>{const th=document.createElement('th');th.textContent=h;tr.append(th)});table.append(tr);rows.forEach(row=>{const t=document.createElement('tr');row.forEach(v=>{const td=document.createElement('td');td.textContent=v==null?'不可用':finite(v)?Number(v.toPrecision(6)):String(v);t.append(td)});table.append(t)});}
+function render(){const k=key(),entity=$('entity').value,view=$('view').value;let status='';if(view==='trend'){const rows=dataset().slice().sort((a,b)=>a.date.localeCompare(b.date)),s=statistics(rows,k),x=s.map(r=>r.date);const traces=[line(x,s.map(r=>r.raw),k)];for(const n of [5,20,60])traces.push(line(x,s.map(r=>r['ma'+n]),'此前 MA'+n));graph('plot',traces,'原值与历史均线');graph('detail',[line(x,s.map(r=>r.z20),'Z20'),line(x,s.map(r=>r.z60),'Z60'),{...line(x,s.map(r=>r.pct),'一年分位数'),yaxis:'y2'}],'Z值与一年分位数').then(()=>Plotly.relayout($('detail'),{'yaxis2':{overlaying:'y',side:'right',range:[0,1],title:{text:'一年分位数'}}}));status=`${rows.filter(r=>finite(r[k])).length}个有效观测；均线和Z值不使用当日数据。`;
+}else if(view==='intraday'){
+const scope=D.scopes[entity];const rows=entity.startsWith('stock:')?D.bars.filter(r=>r.symbol===entity.slice(6)):D.scopeBars[entity==='market'?'universe.all':entity]||[];
+const byDay={};for(const row of rows){byDay[row.date]??={};byDay[row.date][row.clock]=row;}
+const clocks=[...Array.from({length:120},(_,i)=>570+i),720,...Array.from({length:117},(_,i)=>780+i)].map(n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0'));
+const traces=Object.keys(byDay).sort().map(date=>line(clocks.map(t=>'2000-01-01T'+t+':00'),clocks.map(t=>{const value=byDay[date][t]?.[k];return finite(value)?value:null}),date));
+graph('plot',traces,'逐日分钟曲线 · '+k).then(()=>Plotly.relayout($('plot'),{'xaxis.tickformat':'%H:%M'}));graph('detail',traces.filter(t=>t.name===D.date),'当日日内形态').then(()=>Plotly.relayout($('detail'),{'xaxis.tickformat':'%H:%M'}));status='股票池按各日成员与统一的日频聚合口径重算；缺少历史成员记录的日期不展示，午休和缺失时段不连线。';
+}else if(view==='distribution'){
+const scope=D.scopes[entity],groupNames=scope?.kind==='gap'?[scope.firstGroup,scope.secondGroup]:[scope?.name||null],series=[];
+for(const group of groupNames){const accept=r=>{if(entity.startsWith('stock:'))return r.symbol===entity.slice(6);if(!group)return true;const date=r.date?r.date.slice(0,10):D.date;return (D.memberships[date]?.[group]||[]).includes(r.symbol);};series.push([group?group+' 当日':'当日',D.features.filter(accept).map(r=>r[k]).filter(finite)],[group?group+' 历史':'历史',D.stocks.filter(r=>r.date.slice(0,10)<D.date&&accept(r)).map(r=>r[k]).filter(finite)]);}
+graph('plot',series.map(([name,x])=>({x,type:'histogram',name,histnorm:'probability',opacity:.6})),'股票横截面分布 · '+k);
+function cdf(a,name){a.sort((x,y)=>x-y);return line(a,a.map((_,i)=>(i+1)/a.length),name)}
+graph('detail',series.map(([name,a])=>cdf(a,name)),'经验累计分布','累计概率');status=series.map(([name,a])=>name+' '+a.length+'个样本').join('；')+'。历史按逐日成员筛选；两组分布不是逐股差值分布。';
+}else if(view==='tradeDistribution'||view==='orderDistribution'){
+const kind=view==='tradeDistribution'?'trades':'orders',scope=D.scopes[entity],members=entity.startsWith('stock:')?[entity.slice(6)]:scope?.members;
+function hist(list,source=D.eventDistributions){const entries=(list||['all']).map(s=>source[kind+':'+s]).filter(Boolean);if(!entries.length)return null;return {x:entries[0].x,counts:entries[0].counts.map((_,i)=>entries.reduce((sum,h)=>sum+h.counts[i],0)),samples:entries.reduce((sum,h)=>sum+h.samples,0)};}
+let historical=null;for(const [day,source] of Object.entries(D.datedDistributions)){if(day>=D.date)continue;let dayMembers=members;if(scope){const group=scope.kind==='gap'?scope.firstGroup:scope.name;dayMembers=D.memberships[day]?.[group];if(!dayMembers)continue;}const h=hist(dayMembers,source);if(!h)continue;if(!historical)historical={x:h.x,counts:h.counts.map(()=>0),samples:0};historical.counts=historical.counts.map((v,i)=>v+h.counts[i]);historical.samples+=h.samples;}const selected=scope?.kind==='gap'?[['第一股票池',hist(scope.first)],['基准股票池',hist(scope.second)]]:[['当日',hist(members)],['此前历史（逐日成员）',historical]];
+graph('plot',selected.filter(x=>x[1]).map(([name,h])=>({x:h.x,y:h.counts.map(v=>h.samples?v/h.samples:null),type:'bar',name})),view==='tradeDistribution'?'逐笔成交金额分布':'委托金额分布');Plotly.relayout($('plot'),{'xaxis.type':'log'});
+graph('detail',selected.filter(x=>x[1]).map(([name,h])=>{let count=0;return line(h.x,h.counts.map(n=>(count+=n)/h.samples),name)}),'累计分布');Plotly.relayout($('detail'),{'xaxis.type':'log'});status='金额单位为元；对数分箱，显示事件频率与累计概率，历史为此前观测日合并样本。未知金额不进入分布。';
+}else{
+const scope=D.scopes[entity],members=entity.startsWith('stock:')?[entity.slice(6)]:scope?.members;
+const subsets=scope?.kind==='gap'?[['第一股票池',D.features.filter(r=>scope.first.includes(r.symbol))],['基准股票池',D.features.filter(r=>scope.second.includes(r.symbol))]]:members?[[entity,D.features.filter(r=>members.includes(r.symbol))]]:D.features.map(r=>[r.symbol,[r]]);
+function horizon(rows,n,samples=false){const countKey='discovery.'+k+'_samples_'+n+'m',valueKey='discovery.'+((k==='continuation'||k==='reversal')?k+'_'+n+'m':k+'_ret_'+n+'m');const valid=rows.filter(r=>finite(r[valueKey])&&finite(r[countKey])&&r[countKey]>0),count=valid.reduce((sum,r)=>sum+r[countKey],0);return samples?count:count?valid.reduce((sum,r)=>sum+r[valueKey]*r[countKey],0)/count:null;}
+graph('plot',subsets.map(([name,rows])=>line([1,5,10,30],[1,5,10,30].map(n=>horizon(rows,n)),name)),'事件后收益 / 延续反转期限');
+graph('detail',subsets.map(([name,rows])=>line([1,5,10,30],[1,5,10,30].map(n=>horizon(rows,n,true)),name)),'有效事件样本数');
+status='股票池按有效事件样本数加权；收益为观测价格变化，不代表因果冲击。方向与缺失期限需一起解读。';}
+
+$('status').textContent=status;const baseline=entity.startsWith('stock:')?D.stockBaseline.filter(r=>r.symbol===entity.slice(6)&&r.metric===k):D.baseline.filter(r=>r.metric===k);const fields=['raw','ma5','ma20','ma60','std20','std60','z20','z60','pct_1y','sample_count'];textTable('baseline',['指标',...fields],baseline.map(r=>[r.metric,...fields.map(c=>r[c])]));textTable('values',['股票',k],D.features.map(r=>[r.symbol,r[k]]));}
+$('search').addEventListener('input',refreshMetrics);$('entity').addEventListener('change',refreshModules);$('view').addEventListener('change',refreshModules);$('module').addEventListener('change',refreshMetrics);$('metric').addEventListener('change',render);refreshModules();
+</script></html>

@@ -1,0 +1,5 @@
+﻿,symbol,side,time,end_time,baseline_depth,lowest_depth,recovered,duration_seconds,censored_reason
+0,000001.SZ,bid,2026-09-25 10:00:00,2026-09-25 10:02:00,10000,3000,True,120.0,
+1,000001.SZ,bid,2026-09-25 14:56:00,2026-09-25 14:56:00,10000,3000,False,0.0,end_of_data
+2,600000.SH,bid,2026-09-25 10:00:00,2026-09-25 10:02:00,10000,3000,True,120.0,
+3,600000.SH,bid,2026-09-25 14:56:00,2026-09-25 14:56:00,10000,3000,False,0.0,end_of_data

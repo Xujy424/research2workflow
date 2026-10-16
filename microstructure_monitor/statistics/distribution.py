@@ -11,10 +11,13 @@ def summarize_distribution(features):
     return result
 
 
-def universe_differences(cross_section):
+def universe_differences(cross_section, reference=None):
     rows = {}
     names = list(cross_section.index)
-    for i, first in enumerate(names):
-        for second in names[i+1:]:
-            rows[f"{second}-{first}"] = cross_section.loc[second] - cross_section.loc[first]
+    reference = reference or ("hs300" if "hs300" in names else "all")
+    if reference not in names:
+        return pd.DataFrame()
+    for name in names:
+        if name != reference:
+            rows[f"{name}-{reference}"] = cross_section.loc[name] - cross_section.loc[reference]
     return pd.DataFrame.from_dict(rows, orient="index")
