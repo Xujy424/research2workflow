@@ -1,4 +1,5 @@
 from pathlib import Path
+import codecs
 import zipfile
 import tempfile
 import shutil
@@ -22,25 +23,51 @@ OUTPUT_DIR = L2DATA_PATH / "pq"
 
 
 def sink_csv(tmp_csv: Path, tmp_pq: Path, tmp_dir: Path):
-    """优先流式读取 UTF-8；仅在编码错误时严格转码 GB18030。"""
+    """识别 Unicode BOM；无 BOM 时优先 UTF-8，再严格尝试 GB18030。"""
     def sink(path):
         pl.scan_csv(path, truncate_ragged_lines=True).sink_parquet(
             tmp_pq, compression="gzip",
         )
 
+    with tmp_csv.open("rb") as source:
+        header = source.read(64)
+    encoding = None
+    # UTF-32 LE 的 BOM 以 UTF-16 LE BOM 开头，必须先检查 UTF-32。
+    for bom, candidate in (
+        (codecs.BOM_UTF32_LE, "utf-32"),
+        (codecs.BOM_UTF32_BE, "utf-32"),
+        (codecs.BOM_UTF16_LE, "utf-16"),
+        (codecs.BOM_UTF16_BE, "utf-16"),
+    ):
+        if header.startswith(bom):
+            encoding = candidate
+            break
+    if encoding is None:
+        try:
+            sink(tmp_csv)
+            return
+        except pl.exceptions.ComputeError as exc:
+            if "invalid utf-8" not in str(exc).lower():
+                raise
+            tmp_pq.unlink(missing_ok=True)
+        encoding = "gb18030"
+
     try:
-        sink(tmp_csv)
-    except pl.exceptions.ComputeError as exc:
-        if "invalid utf-8" not in str(exc).lower():
-            raise
-        tmp_pq.unlink(missing_ok=True)
         utf8_csv = tmp_dir / "utf8.csv"
         # 分块转码以限制内存；严格解码，不静默丢弃或替换非法字节。
-        with tmp_csv.open("r", encoding="gb18030", newline="") as source:
+        with tmp_csv.open("r", encoding=encoding, newline="") as source:
             with utf8_csv.open("w", encoding="utf-8", newline="") as target:
                 shutil.copyfileobj(source, target, length=1024 * 1024)
-        print(f"ENCODING: {tmp_csv.name}: UTF-8 failed; retrying GB18030")
-        sink(utf8_csv)
+    except UnicodeDecodeError as exc:
+        bad_bytes = exc.object[max(0, exc.start - 16):exc.end + 16]
+        raise ValueError(
+            f"Cannot decode CSV as {encoding}: {exc}; "
+            f"header_hex={header.hex(' ')}; "
+            f"error_context_hex={bad_bytes.hex(' ')}. "
+            "Inspect ZIP member format/encoding; no bytes were replaced."
+        ) from exc
+    print(f"ENCODING: {tmp_csv.name}: {encoding} -> UTF-8")
+    sink(utf8_csv)
 
 
 def convert_file(src: Path, dst: Path):

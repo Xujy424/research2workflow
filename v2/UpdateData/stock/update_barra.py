@@ -11,8 +11,7 @@ Momentum uses adjacent ratio-adjusted closes (not IPO issue-price returns).
 EPS growth divides the annual slope by mean absolute EPS. Residual volatility
 is standardized after Beta removal, then residualized against Beta and Size.
 The latter sequence preserves the validated clipping/orthogonalization order.
-Annual sales per share prefer reported indicators, with implied shares only
-as a missing-field fallback. Beta and residual
+Annual sales per share use profit/EPS-implied period shares. Beta and residual
 volatility use the previous trading day's capitalization for market weights.
 """
 from pathlib import Path
@@ -357,74 +356,26 @@ def _annual_financials(date, conn, *, start_date=None):
     return pd.concat(frames, ignore_index=True)
 
 
-def _annual_per_share(date, conn, *, start_date=None):
-    """Read annual per-share indicators available at the calculation date.
-
-    MainIncomePS is the operating-revenue per-share series; do not substitute
-    total operating revenue or TTM revenue for the annual sales descriptor.
-    """
+def _annual_growth_inputs(date, dates, ticks, conn, root):
+    """Align the last five fiscal years, retaining missing calendar-year gaps."""
     target = pd.Timestamp(date).normalize()
-    cache = _HISTORY_INPUTS.get()
-    if cache is not None:
-        frame = cache['annual_per_share']
-        return frame[(frame.publish_date <= target) & (frame.end_date <= target)
-                     & (frame.end_date >= pd.Timestamp(f'{target.year-8}-01-01'))].copy()
-    frames = []
-    for table, filters in [('LC_MainIndexNew', ''),
-                           ('LC_STIBMainIndex', 'AND f.IfMerged=1 AND f.IfAdjusted=2')]:
-        sql = f"""
-            SELECT s.SecuCode AS tick, f.EndDate AS end_date,
-                   f.InfoPublDate AS publish_date, f.ID AS record_id,
-                   f.BasicEPS, f.MainIncomePS AS sales_per_share
-            FROM {table} f JOIN SecuMain s ON f.CompanyCode=s.CompanyCode
-            WHERE f.EndDate>=%(start)s AND f.EndDate<=%(date)s
-              AND MONTH(f.EndDate)=12 AND DAY(f.EndDate)=31
-              AND f.InfoPublDate<=%(date)s {filters}
-              AND s.SecuCategory=1 AND s.SecuMarket IN (83,90)
-        """
-        frames.append(pd.read_sql(sql, conn, params={
-            'start': start_date or f'{target.year-8}-01-01', 'date': target.date()}))
-    return pd.concat(frames, ignore_index=True)
-
-
-def _latest_annual(frame, target):
-    """Resolve report revisions independently within each input source."""
-    frame = frame.copy()
+    frame = _annual_financials(target, conn)
+    empty = np.full((5, len(ticks)), np.nan)
+    if frame.empty:
+        return empty.copy(), empty.copy()
     frame['tick'] = frame.tick.astype(str).str.zfill(6)
     frame['end_date'] = pd.to_datetime(frame.end_date)
     frame['publish_date'] = pd.to_datetime(frame.publish_date)
     frame = frame[(frame.publish_date <= target) & (frame.end_date <= target)].copy()
     frame['year'] = frame.end_date.dt.year
-    return frame.sort_values(['tick', 'year', 'publish_date', 'record_id']).drop_duplicates(
-        ['tick', 'year'], keep='last').set_index(['tick', 'year'])
-
-
-def _annual_growth_inputs(date, dates, ticks, conn, root):
-    """Align the last five fiscal years, retaining missing calendar-year gaps."""
-    target = pd.Timestamp(date).normalize()
-    reports = _latest_annual(_annual_financials(target, conn), target)
-    direct = _latest_annual(_annual_per_share(target, conn), target)
-    # Direct annual sales do not require a nonzero EPS. Keep BasicEPS rather
-    # than silently mixing it with the vendor's differently defined EPS field.
-    shares = _divide(pd.to_numeric(reports.NPParentCompanyOwners, errors='coerce').to_numpy(),
-                     pd.to_numeric(reports.BasicEPS, errors='coerce').to_numpy())
-    fallback = pd.DataFrame({
-        'BasicEPS': pd.to_numeric(reports.BasicEPS, errors='coerce'),
-        'sales_per_share': _divide(reports.OperatingRevenue.to_numpy(),
-                                  np.where(shares > 0, shares, np.nan)),
-    }, index=reports.index)
-    frame = direct[['BasicEPS', 'sales_per_share']].apply(
-        pd.to_numeric, errors='coerce').combine_first(fallback)
-    # Preserve the financial statement's reported BasicEPS where available.
-    # Indicator BasicEPS only fills gaps; EPS (period-end shares) is not a
-    # substitute for BasicEPS (weighted-average shares).
-    frame['BasicEPS'] = fallback.BasicEPS.combine_first(frame.BasicEPS)
-    frame = frame.reset_index()
-    empty = np.full((5, len(ticks)), np.nan)
-    if frame.empty:
-        return empty.copy(), empty.copy()
+    frame = frame.sort_values(['tick', 'year', 'publish_date', 'record_id']).drop_duplicates(['tick', 'year'], keep='last')
     frame['offset'] = frame.year - frame.groupby('tick').year.transform('max')
     frame = frame[frame.offset >= -4].copy()
+    # Basic EPS uses period-weighted shares, unlike a year-end share snapshot.
+    # Invalid/zero EPS and nonpositive implied shares remain missing.
+    frame['shares'] = _divide(pd.to_numeric(frame.NPParentCompanyOwners, errors='coerce').to_numpy(),
+                              pd.to_numeric(frame.BasicEPS, errors='coerce').to_numpy())
+    frame['sales_per_share'] = _divide(frame.OperatingRevenue.to_numpy(), np.where(frame.shares > 0, frame.shares, np.nan))
     values = []
     for field in ('BasicEPS', 'sales_per_share'):
         frame[field] = pd.to_numeric(frame[field], errors='coerce')
@@ -536,13 +487,12 @@ def barra_history_cache(dates, conn):
     first, last = pd.Timestamp(dates[0]), pd.Timestamp(dates[-1])
     started = perf_counter()
     annual = _annual_financials(last, conn, start_date=f'{first.year-8}-01-01')
-    annual_per_share = _annual_per_share(last, conn, start_date=f'{first.year-8}-01-01')
     cashflow = _cashflow_depreciation_reports(
         last, conn, start_date=(first - pd.DateOffset(years=3)).date())
-    for frame in (annual, annual_per_share, cashflow):
+    for frame in (annual, cashflow):
         for field in ('publish_date', 'end_date'):
             frame[field] = pd.to_datetime(frame[field])
-    cache = dict(annual=annual, annual_per_share=annual_per_share, cashflow=cashflow, matrices={},
+    cache = dict(annual=annual, cashflow=cashflow, matrices={},
                  risk_free=pd.Series(_risk_free(conn, dates), index=pd.DatetimeIndex(dates)))
     cache['preload_seconds'] = perf_counter() - started
     token = _HISTORY_INPUTS.set(cache)
@@ -605,13 +555,12 @@ def _historical_month(conn, first, last):
     days = np.arange(first, last + np.timedelta64(1, 'D'), dtype='datetime64[D]')
     target = pd.Timestamp(last)
     annual = _annual_financials(target, conn)
-    annual_per_share = _annual_per_share(target, conn)
     cashflow = _cashflow_depreciation_reports(
         target, conn, start_date=(target.replace(day=1) - pd.DateOffset(years=3)).date())
-    for frame in (annual, annual_per_share, cashflow):
+    for frame in (annual, cashflow):
         for field in ('publish_date', 'end_date'):
             frame[field] = pd.to_datetime(frame[field])
-    return dict(annual=annual, annual_per_share=annual_per_share, cashflow=cashflow, production=True, matrices={},
+    return dict(annual=annual, cashflow=cashflow, production=True, matrices={},
                 risk_free=pd.Series(_risk_free(conn, days), index=pd.DatetimeIndex(days)))
 
 
