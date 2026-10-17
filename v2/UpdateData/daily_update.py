@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date as date_type, timedelta
 from pathlib import Path
+
 import sys
 import warnings
 
@@ -434,7 +435,7 @@ def update_history_l2(
 if __name__ == "__main__":
     update_history(
         root=ROOT,
-        start_date="2010-01-04",
+        start_date="2010-12-31",
         end_date="2026-09-30",
     )
     # update_history_l2(

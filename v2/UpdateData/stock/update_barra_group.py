@@ -45,8 +45,8 @@ def _write_bytes(file, data):
         raise OSError(f'{file.name}: incomplete mask write')
 
 
-def _write_rows(path, shape, start, masks):
-    """Write just the affected rows; publish new files only after initialization.
+def _write_row(path, shape, dt, mask):
+    """Overwrite only day dt; allocate the axis-backed file if it is missing.
 
     Like the other UpdateData writers, this assumes one updater per output.
     Existing malformed files are rejected, never resized or overwritten.
@@ -69,8 +69,8 @@ def _write_rows(path, shape, start, masks):
                     chunk = block[:min(remaining, len(block))]
                     _write_bytes(file, chunk)
                     remaining -= len(chunk)
-                file.seek(start * shape[1] * 4)
-                _write_bytes(file, masks.tobytes())
+                file.seek(dt * shape[1] * 4)
+                _write_bytes(file, mask.tobytes())
                 file.flush()
                 os.fsync(file.fileno())
                 _check_size(file, expected)
@@ -82,14 +82,21 @@ def _write_rows(path, shape, start, masks):
         return
     with file:
         _check_size(file, expected)
-        file.seek(start * shape[1] * 4)
-        _write_bytes(file, masks.tobytes())
+        file.seek(dt * shape[1] * 4)
+        _write_bytes(file, mask.tobytes())
         file.flush()
         os.fsync(file.fileno())
 
 
-def _update_rows(start, stop, dates, ticks, root):
-    """Bounded contiguous I/O shared by daily and historical updates."""
+def update_barra_group(date, dates, ticks, conn, root):
+    """Read today's ten exposures and overwrite today's ten mask rows.
+
+    root is stock/; conn is retained for the standard UpdateData interface.
+    Inputs use float64 and outputs use float32, with the full shared axes.
+    Only missing output files require one-time NaN initialization.
+    """
+    dt = date_index(date, dates)
+    root = Path(root)
     shape = (len(dates), len(ticks))
     folder = root / 'index' / 'mask'
     folder.mkdir(parents=True, exist_ok=True)
@@ -98,21 +105,14 @@ def _update_rows(start, stop, dates, ticks, root):
         source = root / "barra" / f"{name}.bin"
         with source.open('rb') as file:
             _check_size(file, shape[0] * shape[1] * 8)
-            file.seek(start * shape[1] * 8)
-            values = np.fromfile(file, dtype=np.float64, count=(stop-start)*shape[1])
-        if values.size != (stop-start)*shape[1]:
+            file.seek(dt * shape[1] * 8)
+            values = np.fromfile(file, dtype=np.float64, count=shape[1])
+        if values.size != shape[1]:
             raise ValueError(f'{source}: incomplete input read')
-        masks = np.array([_group_mask(row, ticks) for row in values.reshape(-1, shape[1])])
-        _write_rows(folder / f'{name}_mask.bin', shape, start, masks)
-        result[name] = masks
+        mask = _group_mask(values, ticks)
+        _write_row(folder / f'{name}_mask.bin', shape, dt, mask)
+        result[name] = mask
     return result
-
-
-def update_barra_group(date, dates, ticks, conn, root):
-    """Write float32 masks from float64 factors, using the UpdateData interface."""
-    dt = date_index(date, dates)
-    return {name: rows[0] for name, rows in
-            _update_rows(dt, dt+1, dates, ticks, Path(root)).items()}
 
 
 def update_history(root, start_date=None, end_date=None):
@@ -135,13 +135,9 @@ def update_history(root, start_date=None, end_date=None):
         selected &= dates >= start
     if end is not None:
         selected &= dates <= end
-    indices = np.flatnonzero(selected)
-    # Never bridge missing/reserved rows; bound each batch to 64 dates.
-    for run in np.split(indices, np.flatnonzero(np.diff(indices) != 1)+1):
-        for offset in range(0, len(run), 64):
-            batch = run[offset:offset+64]
-            _update_rows(int(batch[0]), int(batch[-1])+1, dates, ticks, root / 'stock')
-            print(f'[OK] Barra groups: {dates[batch[0]]} .. {dates[batch[-1]]}', flush=True)
+    for date in dates[selected]:
+        update_barra_group(date, dates, ticks, None, root / 'stock')
+        print(f'[OK] Barra groups: {date}', flush=True)
 
 
 if __name__ == "__main__":

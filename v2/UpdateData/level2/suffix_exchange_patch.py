@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import zipfile
 import tempfile
@@ -18,8 +17,30 @@ L2DATA_PATH = Path(
     "/data/shanghai/xujiayi/workflow/data/stock/l2"
 )
 
-INPUT_DIR = L2DATA_PATH / "raw"
+INPUT_DIR = L2DATA_PATH / "raw0"
 OUTPUT_DIR = L2DATA_PATH / "pq"
+
+
+def sink_csv(tmp_csv: Path, tmp_pq: Path, tmp_dir: Path):
+    """优先流式读取 UTF-8；仅在编码错误时严格转码 GB18030。"""
+    def sink(path):
+        pl.scan_csv(path, truncate_ragged_lines=True).sink_parquet(
+            tmp_pq, compression="gzip",
+        )
+
+    try:
+        sink(tmp_csv)
+    except pl.exceptions.ComputeError as exc:
+        if "invalid utf-8" not in str(exc).lower():
+            raise
+        tmp_pq.unlink(missing_ok=True)
+        utf8_csv = tmp_dir / "utf8.csv"
+        # 分块转码以限制内存；严格解码，不静默丢弃或替换非法字节。
+        with tmp_csv.open("r", encoding="gb18030", newline="") as source:
+            with utf8_csv.open("w", encoding="utf-8", newline="") as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+        print(f"ENCODING: {tmp_csv.name}: UTF-8 failed; retrying GB18030")
+        sink(utf8_csv)
 
 
 def convert_file(src: Path, dst: Path):
@@ -58,13 +79,7 @@ def convert_file(src: Path, dst: Path):
                 tmp_csv = src
 
             # Lazy CSV -> GZIP Parquet
-            pl.scan_csv(
-                tmp_csv,
-                truncate_ragged_lines=True,
-            ).sink_parquet(
-                tmp_pq,
-                compression="gzip",
-            )
+            sink_csv(tmp_csv, tmp_pq, tmp_dir)
 
         # 写入成功后再替换正式文件
         tmp_pq.replace(dst)

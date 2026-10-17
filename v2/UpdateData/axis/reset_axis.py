@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import sys
 
@@ -17,6 +18,7 @@ else:
 
 DATE_RESERVE = 500
 TICK_RESERVE = 1000
+AXIS_EXCLUDED_DIRS = frozenset({"l2", "model_input"})
 FORECAST_FOLDERS = {
     "con_forecast", "con_forecast_eq", "con_forecast_wgt",
 }
@@ -93,19 +95,14 @@ def _matrix_middle(path):
 
 
 def discover_matrix_specs(root, date_len, tick_len):
-    """Identify all axis-backed matrices, explicitly excluding Level-2."""
+    """Identify axis-backed matrices without scanning excluded subtrees."""
     specs = []
     base = int(date_len) * int(tick_len)
     if base <= 0:
         return specs
 
     root = Path(root)
-    for path in root.rglob("*.bin"):
-        relative_parts = {
-            part.lower() for part in path.relative_to(root).parts
-        }
-        if "l2" in relative_parts:
-            continue
+    for path in _iter_matrix_paths(root):
         middle = _matrix_middle(path)
         elements = base * middle
         size = path.stat().st_size
@@ -127,6 +124,18 @@ def discover_matrix_specs(root, date_len, tick_len):
             )
         specs.append(MatrixSpec(path, dtype_by_size[itemsize], middle))
     return specs
+
+
+def _iter_matrix_paths(root):
+    """Prune non-axis directories before descending, at any depth."""
+    for directory, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            name for name in dirnames
+            if name.lower() not in AXIS_EXCLUDED_DIRS
+        ]
+        for name in filenames:
+            if Path(name).suffix.lower() == ".bin":
+                yield Path(directory) / name
 
 
 def _resize_matrix(spec, old_dates, old_ticks, new_dates, new_ticks):
@@ -189,7 +198,7 @@ def ensure_axis_capacity(
     min_date_free=0,
     min_tick_free=0,
 ):
-    """Grow axes and every matrix together; Level-2 files are excluded."""
+    """Grow axes and their matrices, skipping AXIS_EXCLUDED_DIRS trees."""
     dates_path, ticks_path, dates, ticks = load_axes(root)
     date_valid = int(np.count_nonzero(~np.isnat(dates)))
     tick_valid = int(np.count_nonzero(ticks != ""))
