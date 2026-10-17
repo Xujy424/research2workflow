@@ -907,7 +907,7 @@ if __name__ == '__main__':
     # sz_closebook_correct = get_closebook('sz', L2DATA_PATH, '20260624')
     # print(sz_closebook_correct.filter(pl.col('SecurityID')==600000))
 
-    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    dates = np.load("'/data/shanghai/xujiayi/workflow/data/axis/dates.npy", allow_pickle=True)
     dates = [d for d in dates if not np.isnat(d)]
     start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2024-11-21')), bisect.bisect_right(dates, pd.to_datetime('2024-12-31'))
     for date in tqdm(dates[start_dt:end_dt]):

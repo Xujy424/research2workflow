@@ -251,11 +251,11 @@ def update_data(
             update_barra,
             date, dates, stock_ticks, jy_conn, stock_root,
         )
-        _run_step(
-            "Barra group constituents",
-            update_barra_group,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
+        # _run_step(
+        #     "Barra group constituents",
+        #     update_barra_group,
+        #     date, dates, stock_ticks, jy_conn, stock_root,
+        # )
 
         if update_level2:
             compact_date = date.replace("-", "")
