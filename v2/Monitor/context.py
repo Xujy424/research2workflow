@@ -52,8 +52,26 @@ class MarketContext:
                  client_factory=None):
         self._owns_data = data is None
         self.data = data if data is not None else DataPool(root, asset='stock')
-        self.dates = pd.DatetimeIndex(self.data.axis.trade_dates)
-        self.ticks = np.asarray(self.data.axis.ticks)
+        # Use the populated daily close field to remove reserved date/tick
+        # slots from the monitor-facing axes while keeping DataPool's full
+        # reserved axes internally.
+        raw_dates = pd.DatetimeIndex(self.data.axis.trade_dates)
+        raw_ticks = np.asarray(self.data.axis.ticks)
+        self._tick_positions = np.arange(len(raw_ticks))
+        self._date_positions = np.arange(len(raw_dates))
+        try:
+            close = np.asarray(self.data.read("d_essentials/close", raw_dates[-1]), dtype=float)
+            valid_ticks = np.isfinite(close)
+            self._tick_positions = self._tick_positions[valid_ticks]
+            raw_ticks = raw_ticks[valid_ticks]
+            close_rows = np.asarray(self.data.load("d_essentials/close"), dtype=float)[:len(raw_dates)]
+            valid_dates = np.isfinite(close_rows[:, self._tick_positions]).any(axis=1)
+            self._date_positions = self._date_positions[valid_dates]
+            raw_dates = raw_dates[valid_dates]
+        except (FileNotFoundError, PermissionError, ValueError, IndexError):
+            pass
+        self.dates = raw_dates
+        self.ticks = raw_ticks
         self.wsd_reader = wsd_reader
         self.client_factory = client_factory
         self._client = None
@@ -76,6 +94,7 @@ class MarketContext:
     @lru_cache(maxsize=8192)
     def row(self, field, index):
         value = np.asarray(self.data.read(field, self.dates[index]), dtype=float)
+        value = np.take(value, self._tick_positions, axis=-1)
         # Intraday fields are stored as [minute, stock].  Monitor metrics are
         # daily, so aggregate the minute axis when a 3-D field is read.
         if value.ndim == 2:
