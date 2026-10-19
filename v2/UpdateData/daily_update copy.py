@@ -440,7 +440,7 @@ if __name__ == "__main__":
     # )
     update_history_l2(
         root=ROOT,
-        start_date="2026-01-01",
+        start_date="2026-07-15",
         end_date="2026-09-30",
     )
 
