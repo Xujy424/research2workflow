@@ -1,4 +1,4 @@
-"""资金交易监控指标。"""
+﻿"""资金交易监控指标。"""
 from __future__ import annotations
 
 import numpy as np
@@ -25,18 +25,6 @@ class MoneyFlowContext(MarketContext):
     def __init__(self, *args, l2_root=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.l2_root = Path(l2_root or Path(self.data.asset_root) / "l2")
-
-    def l2_active_history(self, start, end):
-        """将四类订单的买卖金额相加，得到主动买卖成交额。"""
-        fields = {
-            "large": ("d_moneyflow/buy_lg_amount", "d_moneyflow/sell_lg_amount"),
-            "medium": ("d_moneyflow/buy_md_amount", "d_moneyflow/sell_md_amount"),
-            "small": ("d_moneyflow/buy_sm_amount", "d_moneyflow/sell_sm_amount"),
-            "extra": ("d_moneyflow/buy_elg_amount", "d_moneyflow/sell_elg_amount"),
-        }
-        buy = sum(self.matrix(pair[0], start, end) for pair in fields.values())
-        sell = sum(self.matrix(pair[1], start, end) for pair in fields.values())
-        return buy, sell
 
 
 def _percentile(values, history=252, period=1):
@@ -152,11 +140,14 @@ class MoneyFlowMonitor:
         amount = sum(self._matrix(f"{size}_buy", start, end) + self._matrix(f"{size}_sell", start, end)
                      for size in ("large", "medium", "small", "extra"))
         float_mv = self._matrix("float_mv", start, end)
-        if hasattr(c, "l2_active_history"):
-            buy, sell = c.l2_active_history(start, end)
-        else:
-            buy = sum(self._matrix(f"{size}_buy", start, end) for size in ("large", "medium", "small", "extra"))
-            sell = sum(self._matrix(f"{size}_sell", start, end) for size in ("large", "medium", "small", "extra"))
+        buy = sum(
+            self._matrix(f"{size}_buy", start, end)
+            for size in ("large", "medium", "small", "extra")
+        )
+        sell = sum(
+            self._matrix(f"{size}_sell", start, end)
+            for size in ("large", "medium", "small", "extra")
+        )
         rows = []
         for domain in domains:
             weights = c.stock_weight_matrix(start, end, None if domain == "全市场" else domain)
