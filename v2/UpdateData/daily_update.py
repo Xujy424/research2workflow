@@ -435,7 +435,7 @@ def update_history_l2(
 if __name__ == "__main__":
     update_history(
         root=ROOT,
-        start_date="2010-12-31",
+        start_date="2010-01-04",
         end_date="2026-09-30",
     )
     # update_history_l2(

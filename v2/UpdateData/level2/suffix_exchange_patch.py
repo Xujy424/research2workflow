@@ -15,11 +15,11 @@ CIFTABLE_PATTERNS = {
 }
 
 L2DATA_PATH = Path(
-    "/data/shanghai/xujiayi/workflow/data/stock/l2"
+    "Z:/stock/l2"
 )
 
-INPUT_DIR = L2DATA_PATH / "raw0"
-OUTPUT_DIR = L2DATA_PATH / "pq"
+INPUT_DIR = L2DATA_PATH / "raw1"
+OUTPUT_DIR = L2DATA_PATH / "raw"
 
 
 def sink_csv(tmp_csv: Path, tmp_pq: Path, tmp_dir: Path):
