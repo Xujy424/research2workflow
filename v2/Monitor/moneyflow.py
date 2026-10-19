@@ -143,7 +143,8 @@ class MoneyFlowMonitor:
         c = self.context
         end = c.position(asof)
         start = max(0, end - history - max(periods) - 30)
-        amount = self._matrix("amount", start, end)
+        amount = sum(self._matrix(f"{size}_buy", start, end) + self._matrix(f"{size}_sell", start, end)
+                     for size in ("large", "medium", "small", "extra"))
         float_mv = self._matrix("float_mv", start, end)
         if hasattr(c, "l2_active_history"):
             buy, sell = c.l2_active_history(start, end)
