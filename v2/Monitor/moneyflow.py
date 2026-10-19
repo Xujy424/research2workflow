@@ -27,38 +27,11 @@ class MoneyFlowContext(MarketContext):
         self.l2_root = Path(l2_root or Path(self.data.asset_root) / "l2")
 
     def l2_active_history(self, start, end):
-        """读取更新阶段生成的主动买卖成交额矩阵。"""
-        try:
-            return (
-                self.matrix("d_moneyflow/active_buy_amount", start, end),
-                self.matrix("d_moneyflow/active_sell_amount", start, end),
-            )
-        except (FileNotFoundError, PermissionError):
-            pass
-        # 兼容尚未生成主动字段的历史环境，临时从预处理 L2 文件聚合。
-        buy = np.full((end - start + 1, len(self.ticks)), np.nan, dtype=float)
-        sell = buy.copy()
-        positions = {str(t): i for i, t in enumerate(self.ticks)}
-        for out_i, date in enumerate(self.dates[start:end + 1]):
-            day = pd.Timestamp(date).strftime("%Y%m%d")
-            frames = []
-            for exchange in ("sh", "sz"):
-                path = self.l2_root / "proc" / day / f"{exchange}cj.pq"
-                if path.exists():
-                    frames.append(
-                        pl.scan_parquet(path)
-                        .select(["SecurityID", "Price", "OrderQty", "Side"])
-                        .with_columns((pl.col("Price") * pl.col("OrderQty")).alias("amount"))
-                    )
-            if not frames:
-                continue
-            data = pl.concat(frames).group_by(["SecurityID", "Side"]).agg(pl.col("amount").sum()).collect()
-            for side, target in ((1, buy), (-1, sell)):
-                rows = data.filter(pl.col("Side") == side)
-                for tick, value in rows.select(["SecurityID", "amount"]).iter_rows():
-                    j = positions.get(str(tick).zfill(6))
-                    if j is not None:
-                        target[out_i, j] = float(value)
+        """将四类订单的买卖金额相加，得到主动买卖成交额。"""
+        buy = sum(self._matrix(f"{size}_buy", start, end)
+                  for size in ("large", "medium", "small", "extra"))
+        sell = sum(self._matrix(f"{size}_sell", start, end)
+                   for size in ("large", "medium", "small", "extra"))
         return buy, sell
 
 

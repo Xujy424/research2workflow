@@ -53,29 +53,6 @@ def update_d_moneyflow(root, dates, date, ticks, l2_root=None):
 
     dt = _date_index(date, dates)
 
-    # 全部订单大小合并后的主动买卖成交额/成交量。
-    # Side=1/-1 已由 L2 预处理阶段根据买卖委托序号判定。
-    active = df.group_by('Side').agg(
-        pl.col('amount').sum().alias('amount'),
-        pl.col('vol').sum().alias('vol'),
-    )
-
-    for side_name, side_value in [('buy', 1), ('sell', -1)]:
-        side = active.filter(pl.col('Side') == side_value)
-        for feature in ('amount', 'vol'):
-            path = root / 'd_moneyflow' / f'active_{side_name}_{feature}.bin'
-            arr = _ensure_memmap(path, (len(dates), len(ticks)))
-            values = (
-                side.select(['SecurityID', feature])
-                .to_pandas()
-                .set_index('SecurityID')
-                .reindex(index=ticks)
-                .values.astype(DTYPE)
-                .flatten()
-            )
-            arr[dt] = values
-            arr.flush()
-
     for size, i in dict(zip(['sm','mid','lg','elg'],[1,2,3,4])).items():
         for side, j in dict(zip(['buy','sell'],[1,-1])).items():
             for feat in ['amount','vol']:
