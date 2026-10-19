@@ -75,7 +75,12 @@ class MarketContext:
 
     @lru_cache(maxsize=8192)
     def row(self, field, index):
-        return np.asarray(self.data.read(field, self.dates[index]), dtype=float)
+        value = np.asarray(self.data.read(field, self.dates[index]), dtype=float)
+        # Intraday fields are stored as [minute, stock].  Monitor metrics are
+        # daily, so aggregate the minute axis when a 3-D field is read.
+        if value.ndim == 2:
+            value = np.nansum(value, axis=0)
+        return value
 
     def matrix(self, field, start, end):
         """含起止索引；输出形状[日期, 股票]。"""

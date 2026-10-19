@@ -28,10 +28,14 @@ class MoneyFlowContext(MarketContext):
 
     def l2_active_history(self, start, end):
         """将四类订单的买卖金额相加，得到主动买卖成交额。"""
-        buy = sum(self._matrix(f"{size}_buy", start, end)
-                  for size in ("large", "medium", "small", "extra"))
-        sell = sum(self._matrix(f"{size}_sell", start, end)
-                   for size in ("large", "medium", "small", "extra"))
+        fields = {
+            "large": ("d_moneyflow/buy_lg_amount", "d_moneyflow/sell_lg_amount"),
+            "medium": ("d_moneyflow/buy_md_amount", "d_moneyflow/sell_md_amount"),
+            "small": ("d_moneyflow/buy_sm_amount", "d_moneyflow/sell_sm_amount"),
+            "extra": ("d_moneyflow/buy_elg_amount", "d_moneyflow/sell_elg_amount"),
+        }
+        buy = sum(self.matrix(pair[0], start, end) for pair in fields.values())
+        sell = sum(self.matrix(pair[1], start, end) for pair in fields.values())
         return buy, sell
 
 
@@ -122,7 +126,9 @@ class MoneyFlowMonitor:
     """资金交易指标编排器，返回指标×域长表。"""
 
     DEFAULT_FIELDS = {
-        "amount": "d_essentials/amount", "float_mv": "d_essentials/circ_mv",
+        # Turnover amount is stored intraday in m_essentials; MarketContext
+        # aggregates its minute axis to one daily row when reading it.
+        "amount": "m_essentials/amount", "float_mv": "d_essentials/circ_mv",
         "large_buy": "d_moneyflow/buy_lg_amount", "large_sell": "d_moneyflow/sell_lg_amount",
         "medium_buy": "d_moneyflow/buy_md_amount", "medium_sell": "d_moneyflow/sell_md_amount",
         "small_buy": "d_moneyflow/buy_sm_amount", "small_sell": "d_moneyflow/sell_sm_amount",
