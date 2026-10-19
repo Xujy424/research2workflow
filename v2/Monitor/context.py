@@ -81,7 +81,7 @@ class MarketContext:
         """含起止索引；输出形状[日期, 股票]。"""
         try:
             return np.stack([self.row(field, j) for j in range(start, end + 1)])
-        except (FileNotFoundError, KeyError):
+        except (FileNotFoundError, PermissionError, KeyError):
             return np.full((end - start + 1, len(self.ticks)), np.nan)
 
     @staticmethod

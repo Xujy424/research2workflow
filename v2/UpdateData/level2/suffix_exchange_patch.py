@@ -1,5 +1,4 @@
 from pathlib import Path
-import codecs
 import zipfile
 import tempfile
 import shutil
@@ -22,52 +21,10 @@ INPUT_DIR = L2DATA_PATH / "raw1"
 OUTPUT_DIR = L2DATA_PATH / "raw"
 
 
-def sink_csv(tmp_csv: Path, tmp_pq: Path, tmp_dir: Path):
-    """识别 Unicode BOM；无 BOM 时优先 UTF-8，再严格尝试 GB18030。"""
-    def sink(path):
-        pl.scan_csv(path, truncate_ragged_lines=True).sink_parquet(
-            tmp_pq, compression="gzip",
-        )
-
-    with tmp_csv.open("rb") as source:
-        header = source.read(64)
-    encoding = None
-    # UTF-32 LE 的 BOM 以 UTF-16 LE BOM 开头，必须先检查 UTF-32。
-    for bom, candidate in (
-        (codecs.BOM_UTF32_LE, "utf-32"),
-        (codecs.BOM_UTF32_BE, "utf-32"),
-        (codecs.BOM_UTF16_LE, "utf-16"),
-        (codecs.BOM_UTF16_BE, "utf-16"),
-    ):
-        if header.startswith(bom):
-            encoding = candidate
-            break
-    if encoding is None:
-        try:
-            sink(tmp_csv)
-            return
-        except pl.exceptions.ComputeError as exc:
-            if "invalid utf-8" not in str(exc).lower():
-                raise
-            tmp_pq.unlink(missing_ok=True)
-        encoding = "gb18030"
-
-    try:
-        utf8_csv = tmp_dir / "utf8.csv"
-        # 分块转码以限制内存；严格解码，不静默丢弃或替换非法字节。
-        with tmp_csv.open("r", encoding=encoding, newline="") as source:
-            with utf8_csv.open("w", encoding="utf-8", newline="") as target:
-                shutil.copyfileobj(source, target, length=1024 * 1024)
-    except UnicodeDecodeError as exc:
-        bad_bytes = exc.object[max(0, exc.start - 16):exc.end + 16]
-        raise ValueError(
-            f"Cannot decode CSV as {encoding}: {exc}; "
-            f"header_hex={header.hex(' ')}; "
-            f"error_context_hex={bad_bytes.hex(' ')}. "
-            "Inspect ZIP member format/encoding; no bytes were replaced."
-        ) from exc
-    print(f"ENCODING: {tmp_csv.name}: {encoding} -> UTF-8")
-    sink(utf8_csv)
+def sink_csv(tmp_csv: Path, tmp_pq: Path):
+    pl.scan_csv(tmp_csv, truncate_ragged_lines=True).sink_parquet(
+        tmp_pq, compression="gzip",
+    )
 
 
 def convert_file(src: Path, dst: Path):
@@ -106,7 +63,7 @@ def convert_file(src: Path, dst: Path):
                 tmp_csv = src
 
             # Lazy CSV -> GZIP Parquet
-            sink_csv(tmp_csv, tmp_pq, tmp_dir)
+            sink_csv(tmp_csv, tmp_pq)
 
         # 写入成功后再替换正式文件
         tmp_pq.replace(dst)

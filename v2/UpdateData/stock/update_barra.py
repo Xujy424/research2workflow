@@ -16,9 +16,6 @@ volatility use the previous trading day's capitalization for market weights.
 """
 from pathlib import Path
 import sys
-from contextlib import contextmanager
-from contextvars import ContextVar
-from time import perf_counter
 from functools import lru_cache
 
 import numpy as np
@@ -40,7 +37,6 @@ MIN_ANNUAL_OBS = 3
 MOMENTUM_DAYS = 504
 MOMENTUM_LAG = 21
 MONTH_DAYS = 21
-_HISTORY_INPUTS = ContextVar('barra_history_inputs', default=None)
 
 
 # Input readers: validate each writer's dtype before touching financial values.
@@ -73,10 +69,6 @@ def _find(root, *names):
 
 def _mat(root, dates, ticks, *names, start=0, end=None):
     """Read a daily matrix using its writer's explicit dtype contract."""
-    cache = _HISTORY_INPUTS.get()
-    key = (str(Path(root).absolute()), names, len(dates), len(ticks))
-    if cache is not None and key in cache['matrices']:
-        return np.array(cache['matrices'][key][start:end], dtype=np.float64)
     path = _find(root, *names)
     relative = path.relative_to(Path(root))
     dtype = np.dtype(np.float64 if relative.parts[0] == 'zyyx' else np.float32)
@@ -85,10 +77,6 @@ def _mat(root, dates, ticks, *names, start=0, end=None):
     stat = path.stat()
     if stat.st_size != expected:
         raise ValueError(f'{path}: expected {expected} bytes for {dtype}, {shape}')
-    if cache is not None and not cache.get('production', False):
-        matrix = np.memmap(path, dtype=dtype, mode='r', shape=shape)
-        cache['matrices'][key] = matrix
-        return np.array(matrix[start:end], dtype=np.float64)
     end = shape[0] if end is None else end
     version = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
     # Single-day financial inputs need one row, not an entire block.
@@ -194,9 +182,6 @@ def _beta(ret, market):
 
 def _risk_free(conn, dates):
     """Use latest known ten-year yield on each date, without backfill."""
-    cache = _HISTORY_INPUTS.get()
-    if cache is not None:
-        return cache['risk_free'].loc[pd.DatetimeIndex(dates)].to_numpy(copy=True)
     sql = """
         SELECT EndDate, Yield FROM Bond_CBYieldCurve
         WHERE CurveCode=10 AND YieldTypeCode=1 AND YearsToMaturity=10
@@ -333,11 +318,6 @@ def _growth(y, *, absolute_mean=False):
 def _annual_financials(date, conn, *, start_date=None):
     """Fetch annual reports known at the target date, across both source tables."""
     target = pd.Timestamp(date).normalize()
-    cache = _HISTORY_INPUTS.get()
-    if cache is not None:
-        frame = cache['annual']
-        return frame[(frame.publish_date <= target) & (frame.end_date <= target)
-                     & (frame.end_date >= pd.Timestamp(f'{target.year-8}-01-01'))].copy()
     frames = []
     for table in ('LC_IncomeStatementAll', 'LC_STIBIncomeState'):
         sql = f"""
@@ -402,11 +382,6 @@ def _cashflow_depreciation_reports(date, conn, *, start_date=None):
     from v2.UpdateData.stock.update_fundamental import _columns
 
     target = pd.Timestamp(date).normalize()
-    cache = _HISTORY_INPUTS.get()
-    if cache is not None:
-        frame = cache['cashflow']
-        return frame[(frame.publish_date <= target) & (frame.end_date <= target)
-                     & (frame.publish_date >= target - pd.DateOffset(years=3))].copy()
     frames = []
     for table, amortization in [('LC_CashFlowStatementAll', 'IntangibleAssetAmortization'),
                                 ('LC_STIBCashFlowState', 'IntAAmort')]:
@@ -470,39 +445,6 @@ def _calc_earnings_yield(root, dates, ticks, dt, cap, conn):
     return _combine([_divide(forecast, cap), _divide(profit, cap), _divide(cash, cap)], [.68, .11, .21], cap)
 
 
-@contextmanager
-def barra_history_cache(dates, conn):
-    """Bounded, read-only cache for a fixed historical run.
-
-    Fetch reports once, but filter publication/report dates again for every
-    target day. Never persist across runs: daily data updates must stay visible.
-    Input memmaps are opened lazily and released when the context exits.
-    ``dates`` must include the return lookback as well as all target dates.
-    """
-    if _HISTORY_INPUTS.get() is not None:
-        raise RuntimeError('Barra history caches must not be nested')
-    dates = np.asarray(dates)
-    if not len(dates) or np.isnat(dates).any() or np.any(dates[1:] <= dates[:-1]):
-        raise ValueError('cache dates must be populated, strictly increasing dates')
-    first, last = pd.Timestamp(dates[0]), pd.Timestamp(dates[-1])
-    started = perf_counter()
-    annual = _annual_financials(last, conn, start_date=f'{first.year-8}-01-01')
-    cashflow = _cashflow_depreciation_reports(
-        last, conn, start_date=(first - pd.DateOffset(years=3)).date())
-    for frame in (annual, cashflow):
-        for field in ('publish_date', 'end_date'):
-            frame[field] = pd.to_datetime(frame[field])
-    cache = dict(annual=annual, cashflow=cashflow, matrices={},
-                 risk_free=pd.Series(_risk_free(conn, dates), index=pd.DatetimeIndex(dates)))
-    cache['preload_seconds'] = perf_counter() - started
-    token = _HISTORY_INPUTS.set(cache)
-    try:
-        yield cache
-    finally:
-        _HISTORY_INPUTS.reset(token)
-        cache['matrices'].clear()
-
-
 def calculate_barra(date, dates, ticks, conn, root):
     """Calculate production exposures without writing output files."""
     dates, ticks = np.asarray(dates), np.asarray(ticks)
@@ -549,25 +491,9 @@ def _save(root, dates, ticks, dt, values):
         matrix.flush()
 
 
-@lru_cache(maxsize=1)
-def _historical_month(conn, first, last):
-    """One closed-month database snapshot; daily as-of filters are unchanged."""
-    days = np.arange(first, last + np.timedelta64(1, 'D'), dtype='datetime64[D]')
-    target = pd.Timestamp(last)
-    annual = _annual_financials(target, conn)
-    cashflow = _cashflow_depreciation_reports(
-        target, conn, start_date=(target.replace(day=1) - pd.DateOffset(years=3)).date())
-    for frame in (annual, cashflow):
-        for field in ('publish_date', 'end_date'):
-            frame[field] = pd.to_datetime(frame[field])
-    return dict(annual=annual, cashflow=cashflow, production=True, matrices={},
-                risk_free=pd.Series(_risk_free(conn, days), index=pd.DatetimeIndex(days)))
-
-
 def clear_barra_cache():
-    """Release cached raw data/reports, e.g. after a historical source repair."""
+    """Release cached matrix blocks after an upstream source repair."""
     _read_block.cache_clear()
-    _historical_month.cache_clear()
 
 
 def update_barra(date, dates, ticks, conn, root, *, output_root=None):
@@ -577,27 +503,10 @@ def update_barra(date, dates, ticks, conn, root, *, output_root=None):
     five-argument interface and save to root/barra as before.
     """
     dt = date_index(date, dates)
-    target = pd.Timestamp(np.asarray(dates)[dt])
-    # Live dates always query fresh reports. Closed historical months can be
-    # shared by consecutive calls from daily_update without changing callers.
-    if _HISTORY_INPUTS.get() is None and target < pd.Timestamp.today().normalize().replace(day=1):
-        axis = np.asarray(dates)
-        month = np.datetime64(target.strftime('%Y-%m-01'), 'D')
-        valid = axis[~np.isnat(axis)]
-        position = int(np.searchsorted(valid, month))
-        first = valid[max(0, position-MOMENTUM_DAYS-MOMENTUM_LAG)]
-        last = np.datetime64((target + pd.offsets.MonthEnd(0)).date(), 'D')
-        inputs = _historical_month(conn, first, last)
-        token = _HISTORY_INPUTS.set(inputs)
-        try:
-            values = calculate_barra(date, dates, ticks, conn, root)
-        finally:
-            _HISTORY_INPUTS.reset(token)
-    else:
-        values = calculate_barra(date, dates, ticks, conn, root)
+    values = calculate_barra(date, dates, ticks, conn, root)
     _save(root if output_root is None else output_root, dates, ticks,
           dt, values)
     return values
 
 
-__all__ = ['BARRA_NAMES', 'calculate_barra', 'update_barra', 'barra_history_cache', 'clear_barra_cache']
+__all__ = ['BARRA_NAMES', 'calculate_barra', 'update_barra', 'clear_barra_cache']
