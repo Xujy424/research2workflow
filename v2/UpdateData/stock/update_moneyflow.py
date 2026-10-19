@@ -71,34 +71,34 @@ def update_d_moneyflow(root, dates, date, ticks, l2_root=None):
 
 if __name__ == '__main__':
 
-    # date = '2024-06-14'
-    # dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    # ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
-    # root = Path('D:/data')
+    date = '2026-09-30'
+    dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=False)
+    root = Path('Z:/stock')
 
-    # update_d_moneyflow(root, dates, date, ticks)
+    update_d_moneyflow(root, dates, date, ticks)
 
 
-    from tqdm import tqdm
-    import numpy as np
-    import pandas as pd
-    from pathlib import Path
-    import tushare as ts
+    # from tqdm import tqdm
+    # import numpy as np
+    # import pandas as pd
+    # from pathlib import Path
+    # import tushare as ts
 
-    token = '006af74e990e3531f7ab1dfb5912cdb34005e2f5526ed17915bf8483e47d'
-    pro = ts.pro_api(token)
-    pro._DataApi__token = token
-    pro._DataApi__http_url = 'https://tuaremax.top'  # 保证有这个代码，不然不可以获取
+    # token = '006af74e990e3531f7ab1dfb5912cdb34005e2f5526ed17915bf8483e47d'
+    # pro = ts.pro_api(token)
+    # pro._DataApi__token = token
+    # pro._DataApi__http_url = 'https://tuaremax.top'  # 保证有这个代码，不然不可以获取
 
     # df = pro.daily(ts_code='000001.SZ', start_date='20240101', end_date='20240131')
     # print(df)
 
 
 
-    dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
-    valid_dates = [date for date in dates if not np.isnat(date)]
-    ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=True)
-    valid_ticks = [tick for tick in ticks if tick!='']
+    # dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
+    # valid_dates = [date for date in dates if not np.isnat(date)]
+    # ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=True)
+    # valid_ticks = [tick for tick in ticks if tick!='']
 
     # for date in tqdm(valid_dates[1129+387+958+994+497:]):
     #     df = pro.moneyflow(
@@ -120,6 +120,6 @@ if __name__ == '__main__':
     #         arr.flush()
     # 2025-10-14
 
-    d = np.memmap('Z:/stock/d_moneyflow/buy_sm_vol.bin', dtype=np.float32, mode='r', shape=(len(dates), len(ticks)))
-    print(d[590+679+793+154+357+214+87+67+226+222+81+15+72+79+86+107])
+    # d = np.memmap('Z:/stock/d_moneyflow/buy_sm_vol.bin', dtype=np.float32, mode='r', shape=(len(dates), len(ticks)))
+    # print(d[590+679+793+154+357+214+87+67+226+222+81+15+72+79+86+107])
             
