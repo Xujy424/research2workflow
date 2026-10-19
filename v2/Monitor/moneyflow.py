@@ -25,14 +25,6 @@ class MoneyFlowContext(MarketContext):
     def __init__(self, *args, l2_root=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.l2_root = Path(l2_root or Path(self.data.asset_root) / "l2")
-        # Money-flow data can lag the shared market axis.  Restrict this
-        # module's dates to rows that actually contain money-flow values.
-        try:
-            raw = np.asarray(self.data.load("d_moneyflow/buy_lg_amount"))
-            valid = np.isfinite(raw[:len(self.data.axis.trade_dates)]).any(axis=1)
-            self.dates = self.dates[valid[:len(self.dates)]]
-        except (FileNotFoundError, PermissionError, ValueError, IndexError):
-            pass
 
 
 def _percentile(values, history=252, period=1):
