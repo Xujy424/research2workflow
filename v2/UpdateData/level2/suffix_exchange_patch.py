@@ -14,7 +14,7 @@ CIFTABLE_PATTERNS = {
 }
 
 L2DATA_PATH = Path(
-    "Z:/stock/l2"
+    "/data/shanghai/xujiayi/workflow/data/stock/l2"  #"Z:/stock/l2"
 )
 
 INPUT_DIR = L2DATA_PATH / "raw1"
