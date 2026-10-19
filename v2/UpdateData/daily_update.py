@@ -397,23 +397,23 @@ def update_history_l2(
 
                 compact_date = date_text.replace("-", "")
                 print(f"L2 date: {date_text}", flush=True)
-                _run_step(
-                    "Level-2 download", autoload_l2data, compact_date
-                )
-                _run_step(
-                    "Level-2 preprocessing",
-                    update_l2_basic,
-                    L2DATA_PATH,
-                    compact_date,
-                )
-                _run_step(
-                    "Level-2 snapshots",
-                    update_snapshot,
-                    L2DATA_PATH,
-                    compact_date,
-                    "1m",
-                    10,
-                )
+                # _run_step(
+                #     "Level-2 download", autoload_l2data, compact_date
+                # )
+                # _run_step(
+                #     "Level-2 preprocessing",
+                #     update_l2_basic,
+                #     L2DATA_PATH,
+                #     compact_date,
+                # )
+                # _run_step(
+                #     "Level-2 snapshots",
+                #     update_snapshot,
+                #     L2DATA_PATH,
+                #     compact_date,
+                #     "1m",
+                #     10,
+                # )
                 _run_step(
                     "moneyflow",
                     update_d_moneyflow,
@@ -433,16 +433,16 @@ def update_history_l2(
         raise
 
 if __name__ == "__main__":
-    update_history(
-        root=ROOT,
-        start_date="2010-01-04",
-        end_date="2026-09-30",
-    )
-    # update_history_l2(
+    # update_history(
     #     root=ROOT,
-    #     start_date="2026-07-24",
+    #     start_date="2010-01-04",
     #     end_date="2026-09-30",
     # )
+    update_history_l2(
+        root=ROOT,
+        start_date="2026-01-01",
+        end_date="2026-09-30",
+    )
 
     # update_data(
     #     root=ROOT,
