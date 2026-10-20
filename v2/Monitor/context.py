@@ -70,7 +70,7 @@ class MarketContext:
                 'beta', 'btop', 'size', 'nonlinear_size', 'momentom',
                 'residual_vol', 'liquidity', 'leverage', 'growth1',
                 'earnings_yield')},
-            'growth_value': 'barra/growth_value_mask',
+            'growth_value': 'barra/growth1_mask',
             'pe': 'valuation/pe_mask',
             'pb': 'valuation/pb_mask',
         }
