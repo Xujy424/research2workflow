@@ -59,7 +59,10 @@ class MarketContext:
         self.client_factory = client_factory
         self._client = None
         self.edb_reader = edb_reader
-        self.edb_codes = edb_codes or {'bond_10y': 'S0059749'}
+        self.edb_codes = edb_codes or {
+            'bond_10y': 'S0059749',
+            'margin_balance': 'M0075990',
+        }
         self.industry_map = industry_map or INDUSTRY_MAP.copy()
         # 字段路径可由实际DataPool命名习惯覆盖；mask取值：高10%=1，低10%=-1。
         self.style_masks = style_masks or {
@@ -119,6 +122,18 @@ class MarketContext:
             codes = self.matrix('industry/industry', start, end)
             weight[codes != industry_id] = np.nan
         return np.where(weight > 0, weight, np.nan)
+
+    def domain_weights(self, start, end, domain):
+        """Return daily stock weights for index, style, or industry domains."""
+        if domain in (None, '全市场', 'all', 'self'):
+            return self.stock_weight_matrix(start, end)
+        if domain in self.industry_map:
+            return self.stock_weight_matrix(start, end, industry=domain)
+        if domain in self.style_masks:
+            mask = self.matrix(self.style_masks[domain], start, end)
+            weight = self.stock_weight_matrix(start, end)
+            return np.where(mask > 0, weight, np.nan)
+        return self.stock_weight_matrix(start, end, universe=domain)
 
     def _request_client(self):
         """第一次远端请求时初始化客户端。可注入 client_factory 适配项目实际包路径。"""

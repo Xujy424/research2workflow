@@ -151,6 +151,10 @@ class MoneyFlowMonitor:
              for size in ("large", "medium", "small", "extra")],
         )
         float_mv = self._matrix("float_mv", start, end)
+        margin = c.edb(
+            c.edb_codes.get("margin_balance", "M0075990"),
+            c.dates[start], c.dates[end],
+        ).reindex(c.dates[start:end + 1]).ffill().to_numpy(dtype=float)
         buy = _sum_matrices(
             [self._matrix(f"{size}_buy", start, end)
              for size in ("large", "medium", "small", "extra")],
@@ -161,7 +165,7 @@ class MoneyFlowMonitor:
         )
         rows = []
         for domain in domains:
-            weights = c.stock_weight_matrix(start, end, None if domain == "全市场" else domain)
+            weights = c.domain_weights(start, end, domain)
             member = np.isfinite(weights)
             for metric in metrics:
                 for period in periods:
@@ -178,7 +182,7 @@ class MoneyFlowMonitor:
                         key = {"大单成交占比": "large", "中单成交占比": "medium", "小单成交占比": "small"}[metric]
                         value = category_share(a, np.isfinite(self._matrix(f"{key}_buy", start, end)), history, period)
                     elif metric == "融资余额变化率":
-                        value = balance_change(np.where(member, self._matrix("margin_balance", start, end), np.nan), history, period)
+                        value = balance_change(margin, history, period)
                     else:
                         raise ValueError(f"未注册资金流指标: {metric}")
                     threshold = DEFAULT_THRESHOLDS.get(metric, (0.1, 0.9))
