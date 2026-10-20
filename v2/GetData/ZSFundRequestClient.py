@@ -5,8 +5,12 @@ Created on Thu Oct 15 14:54:23 2020
 """
 
 import json, base64, requests
-from requests_negotiate_sspi import HttpNegotiateAuth
 from datetime import datetime
+
+try:
+    from requests_negotiate_sspi import HttpNegotiateAuth
+except ImportError:  # Linux has no Windows SSPI package
+    HttpNegotiateAuth = None
 
 
 class RequestZSFundDateServer(object):
@@ -84,7 +88,7 @@ class RequestZSFundDateServer(object):
                                                  "Authorization": "Bearer " + Token})
 
             # 若token没取到，尝试以Windows身份认证进行访问服务器
-            else:
+            elif HttpNegotiateAuth is not None:
                 try:
                     response = requests.get(url, params=params, headers={'Content-Type': 'application/json'},
                                             auth=HttpNegotiateAuth())
@@ -98,7 +102,7 @@ class RequestZSFundDateServer(object):
                                          headers={'Content-Type': 'application/json',
                                                   "Authorization": "Bearer " + Token})
 
-            else:
+            elif HttpNegotiateAuth is not None:
                 try:
                     response = requests.post(url, data=json.dumps(params), headers={'Content-Type': 'application/json'},
                                              auth=HttpNegotiateAuth())
@@ -106,7 +110,10 @@ class RequestZSFundDateServer(object):
                 except Exception as e:
                     print(str(e))
 
-        return json.loads(response.text)
+        if 'response' not in locals():
+            raise RuntimeError("No authentication method is available for the request")
+        response.raise_for_status()
+        return response.json()
 
 
 # -----------------------------------------------------------------------------------------------
