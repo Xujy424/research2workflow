@@ -85,6 +85,12 @@ def index_eps_bond_spread(eps, market_value, bond_yield, period=1):
     return float(np.nanmean((earnings_yield - as_float(bond_yield))[-period:]))
 
 
+def index_pe_bond_spread(pe, bond_yield, period=1):
+    """Index PE-TTM reciprocal minus the 10-year bond yield."""
+    earnings_yield = safe_divide(1.0, as_float(pe))
+    return float(np.nanmean((earnings_yield - as_float(bond_yield))[-period:]))
+
+
 def amount_percentile(amount_history, membership_history, history=252, period=1):
     """股票池当日成交金额先求和，再比较同period平滑口径历史分位。"""
     a = np.where(membership_history, as_float(amount_history), np.nan)
@@ -214,6 +220,9 @@ class StyleMonitor:
             w = weights[u]
             members = np.isfinite(w) & (w > 0)
             close = c.index_close(u, dates[0], dates[-1]).reindex(dates).ffill().to_numpy(dtype=float)
+            index_code = {'hs300': '000300.SH', 'zzfull': '000985.SH'}.get(u)
+            index_pe = c.wsd(index_code, 'pe_ttm', dates[0], dates[-1])
+            index_pe = index_pe.reindex(dates).ffill().to_numpy(dtype=float)
             for h in periods:
                 market.loc['点位252历史分位',(u,h)] = level_percentile(close, 252, h)
                 market.loc['相对收益',(u,h)] = relative_return(r, w[-h-1], benchmark_daily, h)
@@ -222,7 +231,7 @@ class StyleMonitor:
                 )
                 market.loc['PE_TTM历史分位',(u,h)] = pe_percentile(pe, w, history, h)
                 market.loc['PB_LF历史分位',(u,h)] = pb_percentile(pb, w, history, h)
-                market.loc['盈利-10年国债收益率',(u,h)] = earnings_bond_spread(pe, w, bond, h)
+                market.loc['盈利-10年国债收益率',(u,h)] = index_pe_bond_spread(index_pe, bond, h)
                 market.loc['成交额历史分位',(u,h)] = amount_percentile(amount, members, history, h)
                 market.loc['成交额占比历史分位',(u,h)] = amount_share_percentile(amount, members, history, h)
 
