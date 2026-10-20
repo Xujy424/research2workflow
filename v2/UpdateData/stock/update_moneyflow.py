@@ -72,9 +72,9 @@ def update_d_moneyflow(root, dates, date, ticks, l2_root=None):
 if __name__ == '__main__':
 
     date = '2026-09-30'
-    dates = np.load('Z:/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('Z:/axis/stock_ticks.npy', allow_pickle=False)
-    root = Path('Z:/stock')
+    dates = np.load('/data/shanghai/xujiayi/workflow/data/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('/data/shanghai/xujiayi/workflow/data/axis/stock_ticks.npy', allow_pickle=False)
+    root = Path('/data/shanghai/xujiayi/workflow/data/stock')
 
     update_d_moneyflow(root, dates, date, ticks)
 

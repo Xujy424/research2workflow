@@ -98,7 +98,7 @@ def update_barra_group(date, dates, ticks, conn, root):
     dt = date_index(date, dates)
     root = Path(root)
     shape = (len(dates), len(ticks))
-    folder = root / 'index' / 'mask'
+    folder = root / 'barra'
     folder.mkdir(parents=True, exist_ok=True)
     result = {}
     for name in BARRA_NAMES:

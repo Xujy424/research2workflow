@@ -247,16 +247,16 @@ def update_data(
         #         ),
         #     ),
         # )
-        _run_step(
-            "Barra factors",
-            update_barra,
-            date, dates, stock_ticks, jy_conn, stock_root,
-        )
         # _run_step(
-        #     "Barra group constituents",
-        #     update_barra_group,
+        #     "Barra factors",
+        #     update_barra,
         #     date, dates, stock_ticks, jy_conn, stock_root,
         # )
+        _run_step(
+            "Barra group constituents",
+            update_barra_group,
+            date, dates, stock_ticks, jy_conn, stock_root,
+        )
 
         if update_level2:
             compact_date = date.replace("-", "")
@@ -433,16 +433,16 @@ def update_history_l2(
         raise
 
 if __name__ == "__main__":
-    # update_history(
-    #     root=ROOT,
-    #     start_date="2010-01-04",
-    #     end_date="2026-09-30",
-    # )
-    update_history_l2(
+    update_history(
         root=ROOT,
-        start_date="2026-01-01",
+        start_date="2010-01-04",
         end_date="2026-09-30",
     )
+    # update_history_l2(
+    #     root=ROOT,
+    #     start_date="2026-01-01",
+    #     end_date="2026-09-30",
+    # )
 
     # update_data(
     #     root=ROOT,
