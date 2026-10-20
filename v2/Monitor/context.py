@@ -126,6 +126,12 @@ class MarketContext:
 
     def domain_weights(self, start, end, domain):
         """Return daily stock weights for index, style, or industry domains."""
+        if isinstance(domain, str) and domain.startswith("barra"):
+            try:
+                factor = list(self.style_masks)[int(domain[5:]) - 1]
+                domain = factor
+            except (ValueError, IndexError):
+                pass
         if domain in (None, '全市场', 'all', 'self'):
             return self.stock_weight_matrix(start, end)
         if domain in self.industry_map:

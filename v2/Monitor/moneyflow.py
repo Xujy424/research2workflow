@@ -17,6 +17,8 @@ except ImportError:  # 直接以脚本路径运行
     from v2.Monitor.context import MarketContext
 
 PERIODS = (1, 5, 10, 20)
+INDEX_DOMAINS = ("沪深300", "中证500", "中证1000", "中证2000")
+STYLE_DOMAINS = tuple(f"barra{i}" for i in range(1, 11))
 
 
 def _sum_matrices(matrices):
@@ -25,6 +27,20 @@ def _sum_matrices(matrices):
     result = np.nansum(values, axis=0)
     result[np.all(~np.isfinite(values), axis=0)] = np.nan
     return result
+
+
+def _metric_value(metric, member, period, amount, float_mv, buy, sell,
+                  margin, monitor, start, end, history):
+    a = np.where(member, amount, np.nan)
+    if metric == "成交额变化": return amount_change(a, history, period)
+    if metric == "top10%成交额占比": return top_share(a, history, period)
+    if metric == "自由流通换手率": return turnover(a, np.where(member, float_mv, np.nan), history, period)
+    if metric == "主动买入占比": return active_buy_ratio(np.where(member, buy, np.nan), np.where(member, sell, np.nan), history, period)
+    if metric in {"大单成交占比", "中单成交占比", "小单成交占比"}:
+        key = {"大单成交占比": "large", "中单成交占比": "medium", "小单成交占比": "small"}[metric]
+        return category_share(a, np.isfinite(monitor._matrix(f"{key}_buy", start, end)), history, period)
+    if metric == "融资余额变化率": return balance_change(margin, history, period)
+    raise ValueError(f"未注册资金流指标: {metric}")
 
 
 class MoneyFlowContext(MarketContext):
@@ -165,49 +181,39 @@ class MoneyFlowMonitor:
             [self._matrix(f"{size}_sell", start, end)
              for size in ("large", "medium", "small", "extra")],
         )
+        selected = {
+            "主动买入占比": ("全市场",) + INDEX_DOMAINS + STYLE_DOMAINS + tuple(c.industry_map.keys()),
+            "大单成交占比": ("全市场",) + INDEX_DOMAINS,
+            "中单成交占比": ("全市场",) + INDEX_DOMAINS,
+            "小单成交占比": ("全市场",) + INDEX_DOMAINS,
+            "成交额变化": ("全市场",) + INDEX_DOMAINS + tuple(c.industry_map.keys()),
+            "top10%成交额占比": ("全市场",),
+            "自由流通换手率": ("全市场",) + INDEX_DOMAINS + STYLE_DOMAINS + tuple(c.industry_map.keys()),
+            "融资余额变化率": ("全市场",),
+        }
+        requested = set(domains) if domains != ("全市场",) else None
         rows = []
-        for domain in domains:
-            weights = c.domain_weights(start, end, domain)
-            member = np.isfinite(weights)
-            for metric in metrics:
+        for metric in metrics:
+            metric_domains = selected.get(metric, ("全市场",))
+            if requested is not None:
+                metric_domains = tuple(d for d in metric_domains if d in requested)
+            for domain in metric_domains:
                 for period in periods:
-                    a = np.where(member, amount, np.nan)
-                    if metric == "成交额变化":
-                        value = amount_change(a, history, period)
-                    elif metric == "top10%成交额占比":
-                        value = top_share(a, history, period)
-                    elif metric == "自由流通换手率":
-                        value = turnover(a, np.where(member, float_mv, np.nan), history, period)
-                    elif metric == "主动买入占比":
-                        value = active_buy_ratio(np.where(member, buy, np.nan), np.where(member, sell, np.nan), history, period)
-                    elif metric in {"大单成交占比", "中单成交占比", "小单成交占比"}:
-                        key = {"大单成交占比": "large", "中单成交占比": "medium", "小单成交占比": "small"}[metric]
-                        value = category_share(a, np.isfinite(self._matrix(f"{key}_buy", start, end)), history, period)
-                    elif metric == "融资余额变化率":
-                        value = balance_change(margin, history, period)
+                    if domain.startswith("barra"):
+                        factor = list(c.style_masks)[int(domain[5:]) - 1]
+                        mask = self._matrix(c.style_masks[factor], start, end)
+                        top = _metric_value(metric, mask > 0, period, amount, float_mv, buy, sell, margin, self, start, end, history)
+                        bottom = _metric_value(metric, mask < 0, period, amount, float_mv, buy, sell, margin, self, start, end, history)
+                        value = top - bottom if np.isfinite(top) and np.isfinite(bottom) else np.nan
                     else:
-                        raise ValueError(f"未注册资金流指标: {metric}")
-                    threshold = DEFAULT_THRESHOLDS.get(metric, (0.1, 0.9))
+                        value = _metric_value(metric, np.isfinite(c.domain_weights(start, end, domain)), period, amount, float_mv, buy, sell, margin, self, start, end, history)
                     rows.append({"指标": metric, "域": domain, "周期": period,
-                                 "历史分位": value, "阈值": threshold})
+                                 "历史分位": value})
         raw = pd.DataFrame(rows)
         if raw.empty:
             return raw
         table = raw.pivot(index=["指标", "域"], columns="周期", values="历史分位")
         table.columns = [f"{int(x)}日历史分位" for x in table.columns]
-        table["阈值"] = raw.drop_duplicates(["指标", "域"]).set_index(["指标", "域"])["阈值"]
-        percentile_columns = [f"{p}日历史分位" for p in periods]
-        table["时间趋势结论"] = table[percentile_columns].apply(trend_conclusion, axis=1)
-        table["截面结构结论"] = ""
-        for metric, group in table.groupby(level="指标", sort=False):
-            latest = group["1日历史分位"]
-            valid = latest.dropna()
-            if len(valid) < 2:
-                conclusion = "域数据不足"
-            else:
-                high, low = valid.idxmax()[1], valid.idxmin()[1]
-                conclusion = f"高位域：{high}；低位域：{low}"
-            table.loc[(metric,), "截面结构结论"] = conclusion
         return table
 
 
