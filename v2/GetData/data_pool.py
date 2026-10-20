@@ -1,4 +1,4 @@
-"""Read-only access to the axis-backed local research database."""
+﻿"""Read-only access to the axis-backed local research database."""
 
 from __future__ import annotations
 
