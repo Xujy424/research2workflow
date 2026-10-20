@@ -19,6 +19,14 @@ except ImportError:  # 直接以脚本路径运行
 PERIODS = (1, 5, 10, 20)
 
 
+def _sum_matrices(matrices):
+    """Sum matrices elementwise while retaining all-NaN cells as NaN."""
+    values = np.asarray(matrices, dtype=float)
+    result = np.nansum(values, axis=0)
+    result[np.all(~np.isfinite(values), axis=0)] = np.nan
+    return result
+
+
 class MoneyFlowContext(MarketContext):
     """资金模块取数上下文；主买主卖从预处理 L2 成交表实时聚合。"""
 
@@ -137,19 +145,19 @@ class MoneyFlowMonitor:
         c = self.context
         end = c.position(asof)
         start = max(0, end - history - max(periods) - 30)
-        amount = np.nansum(
+        amount = _sum_matrices(
             [self._matrix(f"{size}_buy", start, end)
              + self._matrix(f"{size}_sell", start, end)
              for size in ("large", "medium", "small", "extra")],
             axis=0,
         )
         float_mv = self._matrix("float_mv", start, end)
-        buy = np.nansum(
+        buy = _sum_matrices(
             [self._matrix(f"{size}_buy", start, end)
              for size in ("large", "medium", "small", "extra")],
             axis=0,
         )
-        sell = np.nansum(
+        sell = _sum_matrices(
             [self._matrix(f"{size}_sell", start, end)
              for size in ("large", "medium", "small", "extra")],
             axis=0,
