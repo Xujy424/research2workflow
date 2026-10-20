@@ -214,15 +214,6 @@ class StyleMonitor:
             w = weights[u]
             members = np.isfinite(w) & (w > 0)
             close = c.index_close(u, dates[0], dates[-1]).reindex(dates).ffill().to_numpy(dtype=float)
-            index_code = {
-                'hs300': '000300.SH', 'zz500': '000905.SH',
-                'zz1000': '000852.SH', 'zz2000': '932000.CSI',
-                'zzfull': '000985.SH',
-            }.get(u)
-            eps = c.wsd(index_code, 'west_eps_median', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
-            eps = eps.reindex(dates).ffill().to_numpy(dtype=float)
-            market_value = c.wsd(index_code, 'mkt_cap_ard', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
-            market_value = market_value.reindex(dates).ffill().to_numpy(dtype=float)
             for h in periods:
                 market.loc['点位252历史分位',(u,h)] = level_percentile(close, 252, h)
                 market.loc['相对收益',(u,h)] = relative_return(r, w[-h-1], benchmark_daily, h)
@@ -231,7 +222,7 @@ class StyleMonitor:
                 )
                 market.loc['PE_TTM历史分位',(u,h)] = pe_percentile(pe, w, history, h)
                 market.loc['PB_LF历史分位',(u,h)] = pb_percentile(pb, w, history, h)
-                market.loc['盈利-10年国债收益率',(u,h)] = index_eps_bond_spread(eps, market_value, bond, h)
+                market.loc['盈利-10年国债收益率',(u,h)] = earnings_bond_spread(pe, w, bond, h)
                 market.loc['成交额历史分位',(u,h)] = amount_percentile(amount, members, history, h)
                 market.loc['成交额占比历史分位',(u,h)] = amount_share_percentile(amount, members, history, h)
 
