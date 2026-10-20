@@ -201,7 +201,7 @@ class MoneyFlowMonitor:
                 for period in periods:
                     if domain.startswith("barra"):
                         factor = list(c.style_masks)[int(domain[5:]) - 1]
-                        mask = self._matrix(c.style_masks[factor], start, end)
+                        mask = c.matrix(c.style_masks[factor], start, end)
                         top = _metric_value(metric, mask > 0, period, amount, float_mv, buy, sell, margin, self, start, end, history)
                         bottom = _metric_value(metric, mask < 0, period, amount, float_mv, buy, sell, margin, self, start, end, history)
                         value = top - bottom if np.isfinite(top) and np.isfinite(bottom) else np.nan
