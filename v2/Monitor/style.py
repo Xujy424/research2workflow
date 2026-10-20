@@ -219,9 +219,9 @@ class StyleMonitor:
                 'zz1000': '000852.SH', 'zz2000': '932000.CSI',
                 'zzfull': '000985.SH',
             }.get(u)
-            eps = c.wsd(index_code, 's_west_medianeps', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
+            eps = c.wsd(index_code, 'west_eps_median', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
             eps = eps.reindex(dates).ffill().to_numpy(dtype=float)
-            market_value = c.wsd(index_code, 's_val_mv_ard', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
+            market_value = c.wsd(index_code, 'mkt_cap_ard', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
             market_value = market_value.reindex(dates).ffill().to_numpy(dtype=float)
             for h in periods:
                 market.loc['点位252历史分位',(u,h)] = level_percentile(close, 252, h)
