@@ -182,8 +182,8 @@ class StyleMonitor:
         dates = c.dates[start:end+1]
         r = c.matrix('d_essentials/pct', start, end) / 100
         amount = c.matrix('d_essentials/amount', start, end)
-        pe = c.matrix('valuation/pe_ttm', start, end)
-        pb = c.matrix('valuation/pb_lf', start, end)
+        pe = c.matrix('fundamental/valuation/pe_ttm', start, end)
+        pb = c.matrix('fundamental/valuation/pb_lf', start, end)
         industry_codes = c.matrix('industry/industry', start, end)
         weights = {u: c.stock_weight_matrix(start, end, u) for u in (*universes, benchmark, None)}
         benchmark_daily = np.array([weighted_mean(r[t], weights[benchmark][t-1]) if t else np.nan for t in range(len(dates))])
