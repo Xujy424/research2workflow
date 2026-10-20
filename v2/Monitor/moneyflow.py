@@ -118,7 +118,7 @@ class MoneyFlowMonitor:
         # aggregates its minute axis to one daily row when reading it.
         "amount": "m_essentials/amount", "float_mv": "d_essentials/circ_mv",
         "large_buy": "d_moneyflow/buy_lg_amount", "large_sell": "d_moneyflow/sell_lg_amount",
-        "medium_buy": "d_moneyflow/buy_md_amount", "medium_sell": "d_moneyflow/sell_md_amount",
+        "medium_buy": "d_moneyflow/buy_mid_amount", "medium_sell": "d_moneyflow/sell_mid_amount",
         "small_buy": "d_moneyflow/buy_sm_amount", "small_sell": "d_moneyflow/sell_sm_amount",
         "extra_buy": "d_moneyflow/buy_elg_amount", "extra_sell": "d_moneyflow/sell_elg_amount",
         "margin_balance": "d_moneyflow/margin_balance",
@@ -137,16 +137,22 @@ class MoneyFlowMonitor:
         c = self.context
         end = c.position(asof)
         start = max(0, end - history - max(periods) - 30)
-        amount = sum(self._matrix(f"{size}_buy", start, end) + self._matrix(f"{size}_sell", start, end)
-                     for size in ("large", "medium", "small", "extra"))
-        float_mv = self._matrix("float_mv", start, end)
-        buy = sum(
-            self._matrix(f"{size}_buy", start, end)
-            for size in ("large", "medium", "small", "extra")
+        amount = np.nansum(
+            [self._matrix(f"{size}_buy", start, end)
+             + self._matrix(f"{size}_sell", start, end)
+             for size in ("large", "medium", "small", "extra")],
+            axis=0,
         )
-        sell = sum(
-            self._matrix(f"{size}_sell", start, end)
-            for size in ("large", "medium", "small", "extra")
+        float_mv = self._matrix("float_mv", start, end)
+        buy = np.nansum(
+            [self._matrix(f"{size}_buy", start, end)
+             for size in ("large", "medium", "small", "extra")],
+            axis=0,
+        )
+        sell = np.nansum(
+            [self._matrix(f"{size}_sell", start, end)
+             for size in ("large", "medium", "small", "extra")],
+            axis=0,
         )
         rows = []
         for domain in domains:
