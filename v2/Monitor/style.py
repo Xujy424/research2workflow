@@ -79,6 +79,13 @@ def earnings_bond_spread(pe_history, weight_history, bond_yield, period=1):
     return float(np.nanmean((earnings - as_float(bond_yield))[-period:]))
 
 
+def index_eps_bond_spread(eps, bond_yield, period=1):
+    """Index forecast EPS yield minus the 10-year government bond yield."""
+    eps = as_float(eps)
+    earnings_yield = safe_divide(eps, np.ones_like(eps))
+    return float(np.nanmean((earnings_yield - as_float(bond_yield))[-period:]))
+
+
 def amount_percentile(amount_history, membership_history, history=252, period=1):
     """股票池当日成交金额先求和，再比较同period平滑口径历史分位。"""
     a = np.where(membership_history, as_float(amount_history), np.nan)
@@ -175,8 +182,8 @@ class StyleMonitor:
         dates = c.dates[start:end+1]
         r = c.matrix('d_essentials/pct', start, end) / 100
         amount = c.matrix('d_essentials/amount', start, end)
-        pe = c.matrix('fundamental/valuation/pe_ttm', start, end)
-        pb = c.matrix('fundamental/valuation/pb_lf', start, end)
+        pe = c.matrix('valuation/pe_ttm', start, end)
+        pb = c.matrix('valuation/pb_lf', start, end)
         industry_codes = c.matrix('industry/industry', start, end)
         weights = {u: c.stock_weight_matrix(start, end, u) for u in (*universes, benchmark, None)}
         benchmark_daily = np.array([weighted_mean(r[t], weights[benchmark][t-1]) if t else np.nan for t in range(len(dates))])
@@ -197,7 +204,14 @@ class StyleMonitor:
                 )
                 market.loc['PE_TTM历史分位',(u,h)] = pe_percentile(pe, w, history, h)
                 market.loc['PB_LF历史分位',(u,h)] = pb_percentile(pb, w, history, h)
-                market.loc['盈利-10年国债收益率',(u,h)] = earnings_bond_spread(pe, w, bond, h)
+                index_code = {
+                    'hs300': '000300.SH', 'zz500': '000905.SH',
+                    'zz1000': '000852.SH', 'zz2000': '932000.CSI',
+                    'zzfull': '000985.SH',
+                }.get(u)
+                eps = c.wsd(index_code, 'west_eps_median', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
+                eps = eps.reindex(dates).ffill().to_numpy(dtype=float)
+                market.loc['盈利-10年国债收益率',(u,h)] = index_eps_bond_spread(eps, bond, h)
                 market.loc['成交额历史分位',(u,h)] = amount_percentile(amount, members, history, h)
                 market.loc['成交额占比历史分位',(u,h)] = amount_share_percentile(amount, members, history, h)
 
