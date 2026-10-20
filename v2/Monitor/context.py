@@ -66,11 +66,12 @@ class MarketContext:
         self.industry_map = industry_map or INDUSTRY_MAP.copy()
         # 字段路径可由实际DataPool命名习惯覆盖；mask取值：高10%=1，低10%=-1。
         self.style_masks = style_masks or {
-            'size': 'index/size_mask',
-            'growth_value': 'index/growth_value_mask',
-            'pe': 'index/pe_mask',
-            'pb': 'index/pb_mask',
-            'beta': 'index/beta_mask',
+            name: f'barra/{name}_mask'
+            for name in (
+                'beta', 'btop', 'size', 'nonlinear_size', 'momentom',
+                'residual_vol', 'liquidity', 'leverage', 'growth1',
+                'earnings_yield',
+            )
         }
 
     def position(self, date):
