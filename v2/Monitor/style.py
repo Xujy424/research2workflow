@@ -79,10 +79,9 @@ def earnings_bond_spread(pe_history, weight_history, bond_yield, period=1):
     return float(np.nanmean((earnings - as_float(bond_yield))[-period:]))
 
 
-def index_eps_bond_spread(eps, bond_yield, period=1):
-    """Index forecast EPS yield minus the 10-year government bond yield."""
-    eps = as_float(eps)
-    earnings_yield = safe_divide(eps, np.ones_like(eps))
+def index_eps_bond_spread(eps, market_value, bond_yield, period=1):
+    """Forecast earnings divided by market value, minus bond yield."""
+    earnings_yield = safe_divide(as_float(eps), as_float(market_value))
     return float(np.nanmean((earnings_yield - as_float(bond_yield))[-period:]))
 
 
@@ -135,6 +134,25 @@ def pe_spread_percentile(mask, returns, weights, period=5, history=252):
 def pb_spread_percentile(mask, returns, weights, period=5, history=252):
     """PB风格mask正组(1)减负组(-1)的区间收益差历史分位。"""
     return mask_spread_percentile(mask, returns, weights, period, history)
+
+
+def valuation_spread_percentile(values, returns, weights, period=5, history=252):
+    """市值加权计算估值最低 10% 与最高 10% 的收益差历史分位。"""
+    spreads = []
+    for t in range(period, len(values)):
+        v = as_float(values[t - period])
+        w = as_float(weights[t - period])
+        r = compound_return(returns[t - period + 1:t + 1], axis=0)
+        valid = np.isfinite(v) & np.isfinite(w) & (w > 0) & np.isfinite(r)
+        if valid.sum() < 10:
+            spreads.append(np.nan)
+            continue
+        cut = max(1, int(valid.sum() * 0.1))
+        order = np.argsort(v[valid])
+        idx = np.flatnonzero(valid)
+        low, high = idx[order[:cut]], idx[order[-cut:]]
+        spreads.append(weighted_mean(r[low], w[low]) - weighted_mean(r[high], w[high]))
+    return _series_percentile(spreads, history, 1)
 
 
 def beta_spread_percentile(mask, returns, weights, period=5, history=252):
@@ -201,8 +219,10 @@ class StyleMonitor:
                 'zz1000': '000852.SH', 'zz2000': '932000.CSI',
                 'zzfull': '000985.SH',
             }.get(u)
-            eps = c.wsd(index_code, 'west_eps_median', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
+            eps = c.wsd(index_code, 's_west_medianeps', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
             eps = eps.reindex(dates).ffill().to_numpy(dtype=float)
+            market_value = c.wsd(index_code, 's_val_mv_ard', dates[0], dates[-1]) if index_code else pd.Series(dtype=float)
+            market_value = market_value.reindex(dates).ffill().to_numpy(dtype=float)
             for h in periods:
                 market.loc['点位252历史分位',(u,h)] = level_percentile(close, 252, h)
                 market.loc['相对收益',(u,h)] = relative_return(r, w[-h-1], benchmark_daily, h)
@@ -211,7 +231,7 @@ class StyleMonitor:
                 )
                 market.loc['PE_TTM历史分位',(u,h)] = pe_percentile(pe, w, history, h)
                 market.loc['PB_LF历史分位',(u,h)] = pb_percentile(pb, w, history, h)
-                market.loc['盈利-10年国债收益率',(u,h)] = index_eps_bond_spread(eps, bond, h)
+                market.loc['盈利-10年国债收益率',(u,h)] = index_eps_bond_spread(eps, market_value, bond, h)
                 market.loc['成交额历史分位',(u,h)] = amount_percentile(amount, members, history, h)
                 market.loc['成交额占比历史分位',(u,h)] = amount_share_percentile(amount, members, history, h)
 
@@ -240,8 +260,8 @@ class StyleMonitor:
         for h in periods:
             style.loc['大小盘收益差分位',h] = size_spread_percentile(masks['size'], r, all_w, h, history)
             style.loc['成长价值收益差分位',h] = growth_value_spread_percentile(masks['growth_value'], r, all_w, h, history)
-            style.loc['PE收益差分位',h] = pe_spread_percentile(masks['pe'], r, all_w, h, history)
-            style.loc['PB收益差分位',h] = pb_spread_percentile(masks['pb'], r, all_w, h, history)
+            style.loc['PE收益差分位',h] = valuation_spread_percentile(pe, r, all_w, h, history)
+            style.loc['PB收益差分位',h] = valuation_spread_percentile(pb, r, all_w, h, history)
             style.loc['高低Beta收益差分位',h] = beta_spread_percentile(masks['beta'], r, all_w, h, history)
             style.loc['行业轮动速度分位',h] = rotation_speed_percentile(sector_daily, rotation_window, history, h)
         return {'market':market, 'industry':industry, 'style':style}
