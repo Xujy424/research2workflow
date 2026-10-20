@@ -78,7 +78,9 @@ def active_buy_ratio(buy, sell, history=252, period=1):
 
 
 def balance_change(balance, history=252, period=1):
-    balance = np.nansum(np.asarray(balance, float), axis=1)
+    balance = np.asarray(balance, float)
+    if balance.ndim > 1:
+        balance = np.nansum(balance, axis=1)
     return _percentile(np.r_[np.nan, safe_divide(balance[period:], balance[:-period]) - 1], history, 1)
 
 
