@@ -149,18 +149,15 @@ class MoneyFlowMonitor:
             [self._matrix(f"{size}_buy", start, end)
              + self._matrix(f"{size}_sell", start, end)
              for size in ("large", "medium", "small", "extra")],
-            axis=0,
         )
         float_mv = self._matrix("float_mv", start, end)
         buy = _sum_matrices(
             [self._matrix(f"{size}_buy", start, end)
              for size in ("large", "medium", "small", "extra")],
-            axis=0,
         )
         sell = _sum_matrices(
             [self._matrix(f"{size}_sell", start, end)
              for size in ("large", "medium", "small", "extra")],
-            axis=0,
         )
         rows = []
         for domain in domains:
