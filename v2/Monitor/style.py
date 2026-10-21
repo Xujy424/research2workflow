@@ -212,6 +212,10 @@ class StyleMonitor:
         weights = {u: c.stock_weight_matrix(start, end, u) for u in (*universes, benchmark, None)}
         benchmark_daily = np.array([weighted_mean(r[t], weights[benchmark][t-1]) if t else np.nan for t in range(len(dates))])
         bond = c.bond_10y(dates[0], dates[-1]).reindex(dates).ffill().to_numpy(dtype=float)
+        # EDB commonly returns yields in percentage points (e.g. 1.6),
+        # while PE earnings yield is a decimal (e.g. 0.06).
+        if np.isfinite(bond).any() and np.nanmedian(np.abs(bond)) > 1:
+            bond = bond / 100.0
         columns = pd.MultiIndex.from_product([universes, periods], names=['universe','period'])
         market = pd.DataFrame(index=['点位252历史分位','相对收益','新高新低差占比历史分位','PE_TTM历史分位',
                                      'PB_LF历史分位','盈利-10年国债收益率','成交额历史分位','成交额占比历史分位'],
