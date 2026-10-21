@@ -631,43 +631,73 @@ class MicroMonitor:
     def __init__(self, context):
         self.context = context
 
-    def _daily_individual_factors(self, start, end):
+    def _daily_individual_factors(self, start, end, metrics=None):
         c = self.context
-        names = tuple(self.METRIC_FUNCTIONS) + (
+        all_names = tuple(self.METRIC_FUNCTIONS) + (
             "主动成交不平衡", "订单流自相关-lag1", "订单流自相关-lag5",
             "Amihud非流动性", "跳跃-成交量偏离", "标准化跳跃强度",
             "订单冲击成本", "可成交量", "撤单率",
+        )
+        requested = None if metrics is None else set(metrics)
+        names = all_names if requested is None else tuple(name for name in all_names if name in requested)
+        selected = set(names)
+        needs_acd = bool(selected.intersection(("ACD预期跳跃强度", "标准化跳跃强度", "跳跃-成交量偏离")))
+        needs_amount = bool(selected.intersection(("Amihud非流动性", "跳跃-成交量偏离", "订单冲击成本", "可成交量")))
+        needs_quotes = bool(selected.intersection(self.METRIC_FUNCTIONS)) or bool(
+            selected.intersection(("订单冲击成本", "可成交量"))
         )
         factors = {name: np.full((end - start + 1, len(c.ticks)), np.nan) for name in names}
         acd_history = []
         amount_history = []
         for row, idx in enumerate(range(start, end + 1)):
             date = c.dates[idx]
-            quotes = c.aligned_snapshot(date)
-            amount = np.asarray(c.row("m_essentials/amount", idx), float)
-            if amount.ndim > 1:
-                amount = np.nansum(amount, axis=0)
-            acd_history.append(acd_jump_intensity(quotes))
-            amount_history.append(amount)
-            daily_values = {name: fn(quotes) for name, fn in self.METRIC_FUNCTIONS.items()}
-            daily_values["主动成交不平衡"] = active_trade_imbalance(c, date)
-            daily_values["撤单率"] = daily_cancellation_rate(c, date)
-            daily_values["Amihud非流动性"] = amihud_illiquidity(_daily_return(c, idx), amount)
-            daily_values["订单流自相关-lag1"] = order_flow_autocorrelation_lag1(quotes)
-            daily_values["订单流自相关-lag5"] = order_flow_autocorrelation_lag5(quotes)
-            daily_values["可成交量"] = executable_capacity(quotes, amount)
-            daily_values["订单冲击成本"] = order_impact_cost(quotes, 0.10 * amount, daily_values["KyleLambda"])
+            quotes = c.aligned_snapshot(date) if needs_quotes else None
+            amount = None
+            if needs_amount:
+                amount = np.asarray(c.row("m_essentials/amount", idx), float)
+                if amount.ndim > 1:
+                    amount = np.nansum(amount, axis=0)
+            daily_values = {
+                name: fn(quotes) for name, fn in self.METRIC_FUNCTIONS.items()
+                if name in selected and name != "ACD预期跳跃强度"
+            }
+            if "ACD预期跳跃强度" in selected or needs_acd:
+                acd = acd_jump_intensity(quotes)
+                acd_history.append(acd)
+                if "ACD预期跳跃强度" in selected:
+                    daily_values["ACD预期跳跃强度"] = acd
+            if "主动成交不平衡" in selected:
+                daily_values["主动成交不平衡"] = active_trade_imbalance(c, date)
+            if "撤单率" in selected:
+                daily_values["撤单率"] = daily_cancellation_rate(c, date)
+            if "Amihud非流动性" in selected:
+                daily_values["Amihud非流动性"] = amihud_illiquidity(_daily_return(c, idx), amount)
+            if "订单流自相关-lag1" in selected:
+                daily_values["订单流自相关-lag1"] = order_flow_autocorrelation_lag1(quotes)
+            if "订单流自相关-lag5" in selected:
+                daily_values["订单流自相关-lag5"] = order_flow_autocorrelation_lag5(quotes)
+            if "可成交量" in selected:
+                daily_values["可成交量"] = executable_capacity(quotes, amount)
+            if "订单冲击成本" in selected:
+                kyle = daily_values.get("KyleLambda")
+                if kyle is None:
+                    kyle = estimate_kyle_lambda(quotes)
+                daily_values["订单冲击成本"] = order_impact_cost(quotes, 0.10 * amount, kyle)
             for name, values in daily_values.items():
-                if values is not None:
+                if name in factors and values is not None:
                     factors[name][row] = values
-            acd_matrix = np.asarray(acd_history, float)
-            if len(acd_history) > 20:
+            if needs_acd and len(acd_history) > 20:
+                acd_matrix = np.asarray(acd_history, float)
                 current_acd_z = standardized_acd_intensity(acd_matrix[-1], acd_matrix[:-1])
-                factors["标准化跳跃强度"][row] = current_acd_z
-                factors["跳跃-成交量偏离"][row] = jump_volume_divergence(
-                    current_acd_z,
-                    np.asarray(amount_history[-5:], float),
-                )
+                if "标准化跳跃强度" in selected:
+                    factors["标准化跳跃强度"][row] = current_acd_z
+                if "跳跃-成交量偏离" in selected:
+                    amount_history.append(amount)
+                    factors["跳跃-成交量偏离"][row] = jump_volume_divergence(
+                        current_acd_z, np.asarray(amount_history[-5:], float),
+                    )
+            elif "跳跃-成交量偏离" in selected:
+                amount_history.append(amount)
         return factors
 
     def _domain_series(self, values, start, end, domain):
@@ -688,8 +718,8 @@ class MicroMonitor:
             return pd.DataFrame()
         warmup = max(history + max(periods) + 30, 252 + max(periods) + 30)
         start = max(0, end - warmup)
-        daily = self._daily_individual_factors(start, end)
-        selected_metrics = tuple(daily) if metrics is None else tuple(metrics)
+        daily = self._daily_individual_factors(start, end, metrics)
+        selected_metrics = tuple(daily)
         all_domains = ("全市场",) + INDEX_DOMAINS + STYLE_DOMAINS + tuple(c.industry_map.keys())
         requested = None if tuple(domains) == ("全市场",) else set(domains)
         rows = []
