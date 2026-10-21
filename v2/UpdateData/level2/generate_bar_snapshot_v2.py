@@ -855,7 +855,7 @@ if __name__ == "__main__":
     
     dates = np.load("/data/shanghai/xujiayi/workflow/data/axis/dates.npy", allow_pickle=True)
     dates = [d for d in dates if not np.isnat(d)]
-    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-01-08')), bisect.bisect_right(dates, pd.to_datetime('2026-09-30'))
+    start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-01-30')), bisect.bisect_right(dates, pd.to_datetime('2026-09-30'))
 
     for date in tqdm(dates[start_dt:end_dt]):
         date_str = pd.Timestamp(date).strftime("%Y%m%d")
