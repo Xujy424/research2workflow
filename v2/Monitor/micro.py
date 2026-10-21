@@ -7,7 +7,6 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from tqdm.auto import tqdm
 
 try:
     from .context import MarketContext
@@ -651,14 +650,8 @@ class MicroMonitor:
         acd_history = []
         amount_history = []
         date_indices = range(start, end + 1)
-        iterator = tqdm(
-            date_indices,
-            total=end - start + 1,
-            desc="计算微观结构日指标",
-            unit="日",
-            disable=not show_progress,
-        )
-        for row, idx in enumerate(iterator):
+        total_days = end - start + 1
+        for row, idx in enumerate(date_indices):
             date = c.dates[idx]
             quotes = c.aligned_snapshot(date) if needs_quotes else None
             amount = None
@@ -707,6 +700,9 @@ class MicroMonitor:
                     )
             elif "跳跃-成交量偏离" in selected:
                 amount_history.append(amount)
+            if show_progress:
+                date_text = pd.Timestamp(date).strftime("%Y-%m-%d")
+                print(f"[{row + 1}/{total_days}] {date_text} completed", flush=True)
         return factors
 
     def _domain_series(self, values, start, end, domain):
