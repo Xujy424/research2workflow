@@ -7,6 +7,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 try:
     from .context import MarketContext
@@ -631,7 +632,7 @@ class MicroMonitor:
     def __init__(self, context):
         self.context = context
 
-    def _daily_individual_factors(self, start, end, metrics=None):
+    def _daily_individual_factors(self, start, end, metrics=None, show_progress=True):
         c = self.context
         all_names = tuple(self.METRIC_FUNCTIONS) + (
             "主动成交不平衡", "订单流自相关-lag1", "订单流自相关-lag5",
@@ -649,7 +650,15 @@ class MicroMonitor:
         factors = {name: np.full((end - start + 1, len(c.ticks)), np.nan) for name in names}
         acd_history = []
         amount_history = []
-        for row, idx in enumerate(range(start, end + 1)):
+        date_indices = range(start, end + 1)
+        iterator = tqdm(
+            date_indices,
+            total=end - start + 1,
+            desc="计算微观结构日指标",
+            unit="日",
+            disable=not show_progress,
+        )
+        for row, idx in enumerate(iterator):
             date = c.dates[idx]
             quotes = c.aligned_snapshot(date) if needs_quotes else None
             amount = None
