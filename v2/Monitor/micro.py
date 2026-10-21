@@ -1,6 +1,7 @@
 """微观结构监控：Context 取数 -> 独立指标函数 -> Monitor 汇总展示。"""
 from __future__ import annotations
 
+from functools import reduce
 from pathlib import Path
 import warnings
 
@@ -9,12 +10,12 @@ import pandas as pd
 
 try:
     from .context import MarketContext
-    from .utils import historical_percentile, safe_divide, weighted_mean
+    from .utils import historical_percentile, safe_divide
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from v2.Monitor.context import MarketContext
-    from v2.Monitor.utils import historical_percentile, safe_divide, weighted_mean
+    from v2.Monitor.utils import historical_percentile, safe_divide
 
 PERIODS = (1, 5, 10, 20)
 INDEX_DOMAINS = ("沪深300", "中证500", "中证1000", "中证2000")
@@ -58,28 +59,47 @@ def _nanmean_rows(values):
 
 
 def _weighted_rows(values, weights):
-    return np.array([weighted_mean(value, weight) for value, weight in zip(values, weights)])
+    values, weights = np.asarray(values, float), np.asarray(weights, float)
+    valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    numerator = np.sum(np.where(valid, values * weights, 0.0), axis=1)
+    denominator = np.sum(np.where(valid, weights, 0.0), axis=1)
+    return safe_divide(numerator, denominator)
 
 
 def _rolling_mean(series, period):
     x = np.asarray(series, float)
     result = np.full(len(x), np.nan)
-    for i in range(period - 1, len(x)):
-        sample = x[i - period + 1:i + 1]
-        if np.isfinite(sample).all():
-            result[i] = np.mean(sample)
+    if period <= 0:
+        raise ValueError("period must be positive")
+    if len(x) < period:
+        return result
+    windows = np.lib.stride_tricks.sliding_window_view(x, period)
+    valid = np.isfinite(windows).all(axis=1)
+    means = windows.mean(axis=1)
+    result[period - 1:] = np.where(valid, means, np.nan)
     return result
 
 
-def _lag_correlation(series, lag):
-    x = np.asarray(series, float)
-    if len(x) <= lag:
-        return np.nan
+def _lag_correlation_columns(values, lag):
+    """逐列计算固定滞后的相关系数，列方向向量化。"""
+    x = np.asarray(values, float)
+    if x.shape[0] <= lag:
+        return np.full(x.shape[1], np.nan)
     lhs, rhs = x[lag:], x[:-lag]
     valid = np.isfinite(lhs) & np.isfinite(rhs)
-    if valid.sum() < 5 or np.std(lhs[valid]) == 0 or np.std(rhs[valid]) == 0:
-        return np.nan
-    return float(np.corrcoef(lhs[valid], rhs[valid])[0, 1])
+    count = valid.sum(axis=0)
+    left = np.where(valid, lhs, 0.0)
+    right = np.where(valid, rhs, 0.0)
+    left_mean = safe_divide(left.sum(axis=0), count)
+    right_mean = safe_divide(right.sum(axis=0), count)
+    left_centered = np.where(valid, lhs - left_mean, 0.0)
+    right_centered = np.where(valid, rhs - right_mean, 0.0)
+    covariance = safe_divide((left_centered * right_centered).sum(axis=0), count)
+    left_std = np.sqrt(safe_divide((left_centered ** 2).sum(axis=0), count))
+    right_std = np.sqrt(safe_divide((right_centered ** 2).sum(axis=0), count))
+    corr = safe_divide(covariance, left_std * right_std)
+    corr[(count < 5) | (left_std == 0) | (right_std == 0)] = np.nan
+    return corr
 
 
 def _history_percentile(series, history, period):
@@ -209,9 +229,9 @@ def order_flow_imbalance(quotes):
 def active_trade_imbalance(context, date):
     """(主动买入成交额-主动卖出成交额)/两侧主动成交额。"""
     n = len(context.ticks)
-    buy, sell, observed = np.zeros(n), np.zeros(n), np.zeros(n, dtype=bool)
-    positions = {str(t).zfill(6)[:6]: i for i, t in enumerate(context.ticks)}
+    positions = pd.Index([str(t).zfill(6)[:6] for t in context.ticks])
     import polars as pl
+    exchange_frames = []
     for exchange in ("sh", "sz"):
         path = context.l2_path(date, exchange, "cj")
         if not path.exists():
@@ -222,13 +242,20 @@ def active_trade_imbalance(context, date):
             pl.col("SecurityID").cast(pl.String).str.zfill(6).str.slice(0, 6).alias("_tick"),
             pl.when(pl.col("Side") > 0).then(pl.col("Price") * pl.col("OrderQty")).otherwise(0).alias("_buy"),
             pl.when(pl.col("Side") < 0).then(pl.col("Price") * pl.col("OrderQty")).otherwise(0).alias("_sell"),
-        ).group_by("_tick").agg(pl.sum("_buy"), pl.sum("_sell")).collect(engine="streaming")
-        for code, b, s in zip(frame["_tick"].to_list(), frame["_buy"].to_list(), frame["_sell"].to_list()):
-            j = positions.get(code)
-            if j is not None:
-                buy[j] += float(b or 0)
-                sell[j] += float(s or 0)
-                observed[j] = True
+        ).group_by("_tick").agg(pl.sum("_buy"), pl.sum("_sell"))
+        exchange_frames.append(frame)
+    if not exchange_frames:
+        return np.full(n, np.nan)
+    frame = pl.concat(exchange_frames).group_by("_tick").agg(
+        pl.sum("_buy"), pl.sum("_sell")
+    ).collect(engine="streaming")
+    indices = positions.get_indexer(frame["_tick"].to_numpy())
+    matched = indices >= 0
+    buy, sell = np.zeros(n), np.zeros(n)
+    np.add.at(buy, indices[matched], frame["_buy"].to_numpy().astype(float)[matched])
+    np.add.at(sell, indices[matched], frame["_sell"].to_numpy().astype(float)[matched])
+    observed = np.zeros(n, dtype=bool)
+    observed[np.unique(indices[matched])] = True
     result = safe_divide(buy - sell, buy + sell)
     result[~observed] = np.nan
     return result
@@ -237,13 +264,7 @@ def active_trade_imbalance(context, date):
 def _order_flow_autocorrelation(quotes, lag):
     if quotes is None:
         return None
-    flow = quotes["ofi"]
-    result = np.full(flow.shape[1], np.nan)
-    for j in range(flow.shape[1]):
-        scale = np.nansum(np.abs(flow[:, j]))
-        if scale > 0:
-            result[j] = _lag_correlation(flow[:, j] / scale, lag)
-    return result
+    return _lag_correlation_columns(quotes["ofi"], lag)
 
 
 def order_flow_autocorrelation_lag1(quotes):
@@ -270,19 +291,23 @@ def impact_decay(quotes, horizon):
     mid = quotes["mid"]
     ret = np.diff(np.log(mid), axis=0)
     flow = quotes["ofi"][1:]
+    if len(ret) <= horizon:
+        return np.full(mid.shape[1], np.nan)
+    future_windows = np.lib.stride_tricks.sliding_window_view(ret, horizon, axis=0)
+    future_returns = np.moveaxis(future_windows, -1, 1)[1:]
+    immediate_return = ret[:-horizon]
+    signed_flow = np.sign(flow[:-horizon])
+    valid = (np.isfinite(future_returns).all(axis=1)
+             & np.isfinite(immediate_return)
+             & np.isfinite(signed_flow) & (signed_flow != 0))
+    immediate = signed_flow * immediate_return
+    remaining = signed_flow * future_returns.sum(axis=1)
+    ratios = safe_divide(remaining, immediate + remaining)
+    ratios[(np.abs(immediate) <= 1e-12) | ~valid] = np.nan
+    valid_columns = np.isfinite(ratios).any(axis=0)
     result = np.full(mid.shape[1], np.nan)
-    for j in range(mid.shape[1]):
-        ratios = []
-        for i in range(len(ret) - horizon):
-            future = ret[i + 1:i + horizon + 1]
-            if not np.isfinite(flow[i, j]) or not np.isfinite(ret[i, j]) or not np.isfinite(future).all():
-                continue
-            immediate = np.sign(flow[i, j]) * ret[i, j]
-            if abs(immediate) > 1e-12:
-                remaining = np.sign(flow[i, j]) * np.sum(future)
-                ratios.append(safe_divide(remaining, immediate + remaining))
-        if ratios:
-            result[j] = np.median(ratios)
+    if valid_columns.any():
+        result[valid_columns] = np.nanmedian(ratios[:, valid_columns], axis=0)
     return result
 
 
@@ -351,17 +376,18 @@ def jump_frequency_30m(quotes):
         return None
     ret = np.diff(np.log(quotes["mid"]), axis=0)
     result = np.full(ret.shape[1], np.nan)
-    for j in range(ret.shape[1]):
-        events = eligible = 0
-        for i in range(30, len(ret)):
-            history = ret[i - 30:i, j]
-            if not np.isfinite(ret[i, j]) or np.isfinite(history).sum() < 25:
-                continue
-            sigma = np.nanstd(history)
-            eligible += 1
-            events += int(sigma > 0 and abs(ret[i, j]) > 3 * sigma)
-        if eligible:
-            result[j] = events / eligible
+    if len(ret) <= 30:
+        return result
+    windows = np.lib.stride_tricks.sliding_window_view(ret, 30, axis=0)
+    samples = np.moveaxis(windows, -1, 1)[:-1]
+    valid_count = np.isfinite(samples).sum(axis=1)
+    sigma = np.nanstd(samples, axis=1)
+    eligible = np.isfinite(ret[30:]) & (valid_count[:len(ret) - 30] >= 25) & (sigma[:len(ret) - 30] > 0)
+    events = eligible & (np.abs(ret[30:]) > 3 * sigma[:len(ret) - 30])
+    denominator = eligible.sum(axis=0)
+    numerator = events.sum(axis=0)
+    valid = denominator > 0
+    result[valid] = numerator[valid] / denominator[valid]
     return result
 
 
@@ -370,23 +396,37 @@ def acd_jump_intensity(quotes):
     if quotes is None:
         return None
     ret = np.diff(np.log(quotes["mid"]), axis=0)
-    result = np.full(ret.shape[1], np.nan)
-    for j in range(ret.shape[1]):
-        events = []
-        for i in range(30, len(ret)):
-            sample = ret[i - 30:i, j]
-            if np.isfinite(ret[i, j]) and np.isfinite(sample).sum() >= 25:
-                sigma = np.nanstd(sample)
-                if sigma > 0 and abs(ret[i, j]) > 3 * sigma:
-                    events.append(i)
+    n_minutes, n_stocks = ret.shape
+    result = np.full(n_stocks, np.nan)
+    if n_minutes <= 30:
+        return result
+
+    # rolling[k] = ret[k:k+30]；第 i 根收益对应此前样本 rolling[i-30]。
+    windows = np.lib.stride_tricks.sliding_window_view(ret, 30, axis=0)
+    samples = np.moveaxis(windows, -1, 1)
+    past_samples = samples[:-1]
+    valid_count = np.isfinite(past_samples).sum(axis=1)
+    sigma = np.nanstd(past_samples, axis=1)
+    eligible_tail = np.isfinite(ret[30:]) & (valid_count[:n_minutes - 30] >= 25) & (sigma[:n_minutes - 30] > 0)
+    jump_tail = eligible_tail & (np.abs(ret[30:]) > 3 * sigma[:n_minutes - 30])
+    jump = np.zeros(ret.shape, dtype=bool)
+    jump[30:] = jump_tail
+
+    # 把逐分钟事件矩阵压成逐股事件位置；仅对实际发生事件的股票构造等待时间。
+    alpha, beta = 0.10, 0.80
+    for j in np.flatnonzero(jump.sum(axis=0) >= 2):
+        events = np.flatnonzero(jump[:, j])
         waits = np.diff(events).astype(float)
-        if len(waits):
-            alpha, beta = 0.10, 0.80
-            omega = (1 - alpha - beta) * np.mean(waits)
-            psi = max(float(np.mean(waits)), 1.0)
-            for wait in waits:
-                psi = omega + alpha * wait + beta * psi
-            result[j] = 1 / psi
+        if waits.size == 0:
+            continue
+        omega = (1 - alpha - beta) * np.mean(waits)
+        initial_psi = max(float(np.mean(waits)), 1.0)
+        psi = reduce(
+            lambda previous_psi, wait: omega + alpha * wait + beta * previous_psi,
+            waits,
+            initial_psi,
+        )
+        result[j] = 1 / psi
     return result
 
 
@@ -394,24 +434,27 @@ def standardized_acd_intensity(current, prior_history, min_observations=10):
     """当前 ACD 强度相对之前20个交易日的横截面逐股 z-score。"""
     x = np.asarray(prior_history, float)[-20:]
     current = np.asarray(current, float)
-    result = np.full(current.shape, np.nan)
-    for j in range(len(current)):
-        sample = x[:, j]
-        sample = sample[np.isfinite(sample)]
-        if np.isfinite(current[j]) and len(sample) >= min_observations and np.std(sample) > 0:
-            result[j] = (current[j] - np.mean(sample)) / np.std(sample)
-    return result
+    valid = np.isfinite(x)
+    count = valid.sum(axis=0)
+    mean = safe_divide(np.where(valid, x, 0.0).sum(axis=0), count)
+    centered = np.where(valid, x - mean, 0.0)
+    std = np.sqrt(safe_divide((centered ** 2).sum(axis=0), count))
+    zscore = safe_divide(current - mean, std)
+    zscore[(count < min_observations) | (std <= 0) | ~np.isfinite(current)] = np.nan
+    return zscore
 
 
 def jump_volume_divergence(acd_z, volume_history):
     """ACD跳跃强度z分数减去近5日成交量z分数。"""
     volume = np.asarray(volume_history, float)[-5:]
-    result = np.full(np.asarray(acd_z).shape, np.nan)
-    for j in range(result.size):
-        sample = volume[:, j]
-        sample = sample[np.isfinite(sample)]
-        if np.isfinite(acd_z[j]) and len(sample) >= 3 and np.std(sample) > 0:
-            result[j] = acd_z[j] - (sample[-1] - np.mean(sample)) / np.std(sample)
+    valid = np.isfinite(volume)
+    count = valid.sum(axis=0)
+    mean = safe_divide(np.where(valid, volume, 0.0).sum(axis=0), count)
+    centered = np.where(valid, volume - mean, 0.0)
+    std = np.sqrt(safe_divide((centered ** 2).sum(axis=0), count))
+    volume_z = safe_divide(volume[-1] - mean, std)
+    result = np.asarray(acd_z, float) - volume_z
+    result[(count < 3) | (std <= 0) | ~np.isfinite(acd_z)] = np.nan
     return result
 
 
@@ -427,12 +470,18 @@ def estimate_kyle_lambda(quotes):
     mid = quotes["mid"]
     ret = np.diff(np.log(mid), axis=0)
     flow_notional = quotes["ofi"][1:] * mid[1:]
-    result = np.full(mid.shape[1], np.nan)
-    for j in range(mid.shape[1]):
-        valid = np.isfinite(ret[:, j]) & np.isfinite(flow_notional[:, j])
-        if valid.sum() >= 30 and np.var(flow_notional[valid, j]) > 0:
-            x, y = flow_notional[valid, j], ret[valid, j]
-            result[j] = np.cov(x, y, ddof=0)[0, 1] / np.var(x)
+    valid = np.isfinite(ret) & np.isfinite(flow_notional)
+    count = valid.sum(axis=0)
+    x = np.where(valid, flow_notional, 0.0)
+    y = np.where(valid, ret, 0.0)
+    mean_x = safe_divide(x.sum(axis=0), count)
+    mean_y = safe_divide(y.sum(axis=0), count)
+    x_centered = np.where(valid, flow_notional - mean_x, 0.0)
+    y_centered = np.where(valid, ret - mean_y, 0.0)
+    variance = safe_divide((x_centered ** 2).sum(axis=0), count)
+    covariance = safe_divide((x_centered * y_centered).sum(axis=0), count)
+    result = safe_divide(covariance, variance)
+    result[(count < 30) | (variance <= 0)] = np.nan
     return result
 
 
@@ -465,11 +514,10 @@ def cancellation_rate(cancel_amount, effective_order_amount):
 def daily_cancellation_rate(context, date):
     """每日撤单金额/有效申报金额；委托初始名义额按该日委托表计算。"""
     n = len(context.ticks)
-    cancelled = np.zeros(n)
-    submitted = np.zeros(n)
-    observed = np.zeros(n, dtype=bool)
-    positions = {str(t).zfill(6)[:6]: i for i, t in enumerate(context.ticks)}
     import polars as pl
+    daily_frames = []
+    order_frames = []
+    cancel_frames = []
     for exchange in ("sh", "sz"):
         order_path = context.l2_path(date, exchange, "wt")
         cancel_path = context.l2_path(date, exchange, "cancel")
@@ -484,7 +532,8 @@ def daily_cancellation_rate(context, date):
         order_totals = orders.with_columns(
             pl.col("SecurityID").cast(pl.String).str.zfill(6).str.slice(0, 6).alias("_tick"),
             (pl.col("Price") * pl.col("OrderQty")).alias("_submitted"),
-        ).group_by("_tick").agg(pl.sum("_submitted").alias("submitted")).collect(engine="streaming")
+        ).group_by("_tick").agg(pl.sum("_submitted").alias("submitted"))
+        order_frames.append(order_totals)
         cancel_totals = None
         if cancel_path.exists():
             cancels = pl.scan_parquet(cancel_path).select(
@@ -507,28 +556,36 @@ def daily_cancellation_rate(context, date):
             ).with_columns(
                 pl.col("SecurityID").cast(pl.String).str.zfill(6).str.slice(0, 6).alias("_tick"),
                 (pl.col("Price") * pl.col("OrderQty")).alias("_cancelled"),
-            ).group_by("_tick").agg(pl.sum("_cancelled").alias("cancelled")).collect(engine="streaming")
-        submitted_map = dict(zip(order_totals["_tick"].to_list(), order_totals["submitted"].to_list()))
-        cancelled_map = {} if cancel_totals is None else dict(
-            zip(cancel_totals["_tick"].to_list(), cancel_totals["cancelled"].to_list())
-        )
-        for code in set(submitted_map) | set(cancelled_map):
-            j = positions.get(code)
-            if j is not None:
-                submitted[j] += float(submitted_map.get(code) or 0)
-                cancelled[j] += float(cancelled_map.get(code) or 0)
-                observed[j] = True
+            ).group_by("_tick").agg(pl.sum("_cancelled").alias("cancelled"))
+        if cancel_totals is None:
+            cancel_totals = pl.DataFrame(schema={"_tick": pl.String, "cancelled": pl.Float64}).lazy()
+        cancel_frames.append(cancel_totals)
+    if not order_frames:
+        return np.full(n, np.nan)
+    positions = pd.Index([str(t).zfill(6)[:6] for t in context.ticks])
+    order_totals = pl.concat(order_frames).group_by("_tick").agg(pl.sum("submitted")).rename(
+        {"submitted": "submitted"}
+    ).collect(engine="streaming")
+    cancel_totals = pl.concat(cancel_frames).group_by("_tick").agg(pl.sum("cancelled")).collect(engine="streaming")
+    codes = order_totals["_tick"].to_numpy()
+    indices = positions.get_indexer(codes)
+    matched = indices >= 0
+    submitted = np.zeros(n)
+    submitted[indices[matched]] = order_totals["submitted"].to_numpy().astype(float)[matched]
+    cancel_indices = positions.get_indexer(cancel_totals["_tick"].to_numpy())
+    cancel_matched = cancel_indices >= 0
+    cancelled = np.zeros(n)
+    np.add.at(cancelled, cancel_indices[cancel_matched], cancel_totals["cancelled"].to_numpy().astype(float)[cancel_matched])
+    observed = np.zeros(n, dtype=bool)
+    observed[np.unique(indices[matched])] = True
     result = cancellation_rate(cancelled, submitted)
     result[~observed] = np.nan
     return result
 
 
 def _daily_return(context, index):
-    close = np.asarray(context.row("d_essentials/close", index), float)
-    if index == 0:
-        return np.full(close.shape, np.nan)
-    previous = np.asarray(context.row("d_essentials/close", index - 1), float)
-    return safe_divide(close, previous) - 1
+    """读取 d_essentials/pct 并转换成收益率小数，pct 原值为百分数。"""
+    return np.asarray(context.row("d_essentials/pct", index), float) / 100.0
 
 
 class MicroMonitor:
