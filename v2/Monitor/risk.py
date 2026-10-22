@@ -117,3 +117,17 @@ class RiskMonitor:
     @staticmethod
     def table(result, decimals=6):
         return result.round(decimals)
+
+
+if __name__ == "__main__":
+    context = RiskContext()
+    try:
+        result = RiskMonitor(context).snapshot(
+            "2026-09-30",
+            domains=("全市场",),
+        )
+        print(RiskMonitor.table(result).to_string(
+            float_format=lambda value: f"{value:.6f}"
+        ))
+    finally:
+        context.close()
