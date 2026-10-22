@@ -28,9 +28,10 @@ def average_correlation(returns, window=60, period=1, history=252):
     return (float(np.nanmean(vals[-period:])),_p(vals,history)) if vals else (np.nan,np.nan)
 
 def downside_correlation(returns, window=120, period=1, history=252):
+    """在滚动120日中筛选市场收益最低10%的日期后计算相关性。"""
     r=_pct(returns); vals=[]
     for i in range(window,len(r)+1):
-        x=r[i-window:i]; x=x[np.nanmean(x,axis=1)<0]
+        x=r[i-window:i]; market=np.nanmean(x,axis=1); cutoff=np.nanquantile(market,0.10); x=x[market<=cutoff]
         if len(x)<3: vals.append(np.nan); continue
         x=np.where(np.isfinite(x),x,np.nanmedian(x,axis=0)); c=np.corrcoef(x.T); vals.append(np.nanmean(c[np.triu_indices_from(c,1)]))
     return (float(np.nanmean(vals[-period:])),_p(vals,history)) if vals else (np.nan,np.nan)
@@ -45,7 +46,8 @@ def pca_explained_ratio(returns, window=60, period=1, history=252):
     return (float(np.nanmean(vals[-period:])),_p(vals,history)) if vals else (np.nan,np.nan)
 
 def downside_resonance(returns, period=1, history=252):
-    r=_pct(returns); vals=np.nanmean(r < -0.05,axis=1)
+    r=_pct(returns); neg=np.nanmean(r<0,axis=1); extreme=np.nanmean(r<-0.05,axis=1)
+    vals=np.nanmean(np.vstack([neg,extreme]),axis=0)
     return float(np.nanmean(vals[-period:])),_p(vals,history)
 
 def worst_rolling_loss(index_returns, lookback=252, loss_window=5, history=252):
@@ -99,4 +101,19 @@ class RiskMonitor:
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
             for window in (30,60,90):
                 v,h=realized_volatility(ir,window,1,history); rows.append({"指标":f"历史波动率{window}日", "域":domain,"周期":1,"数值":v,"历史分位":h})
+        # Wind 指数波动率：直接使用 WSD 指标，避免用本地收益代理替代。
+        for code, label in (("000300.SH","中证300"),("000852.SH","中证1000")):
+            vol = self.option_volatility(asof, c.dates[start], c.dates[end], (code,))
+            for field, name in (("underlyinghisvol_30d","历史波动率30日"),("underlyinghisvol_60d","历史波动率60日"),("underlyinghisvol_90d","历史波动率90日"),("us_impliedvol","隐含波动率US"),("mid_impliedvol","隐含波动率中值"),("impliedvol_exch","隐含波动率交易所")):
+                x=vol.get((code,field),pd.Series(dtype=float)).reindex(c.dates[start:end+1]).ffill().dropna()
+                if len(x):
+                    rows.append({"指标":name,"域":label,"周期":1,"数值":float(x.iloc[-1]),"历史分位":_p(x.to_numpy(),history)})
+            iv=vol.get((code,"us_impliedvol"),pd.Series(dtype=float)); rv=vol.get((code,"underlyinghisvol_30d"),pd.Series(dtype=float))
+            if len(iv) and len(rv):
+                x=iv.reindex(iv.index.union(rv.index)).ffill().subtract(rv.reindex(iv.index.union(rv.index)).ffill()).dropna()
+                if len(x): rows.append({"指标":"波动率风险溢价","域":label,"周期":1,"数值":float(x.iloc[-1]),"历史分位":_p(x.to_numpy(),history)})
         return pd.DataFrame(rows).set_index(["指标","域","周期"])
+
+    @staticmethod
+    def table(result, decimals=6):
+        return result.round(decimals)
