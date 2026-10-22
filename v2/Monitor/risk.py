@@ -97,6 +97,6 @@ class RiskMonitor:
             for p in periods:
                 for n,fn in (("横截面收益离散度",lambda:cross_section_dispersion(r,p,history)),("平均收益相关性",lambda:average_correlation(r,60,p,history)),("下跌条件相关性",lambda:downside_correlation(r,120,p,history)),("首主成分解释率",lambda:pca_explained_ratio(r,60,p,history)),("下行共振",lambda:downside_resonance(r,p,history)),("跌停扩散比例",lambda:limit_down_ratio(floor,trade,p,history)),("最差滚动5日收益",lambda:worst_rolling_loss(ir,history,5,history))):
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
-            for window in (5,20,60):
-                v,h=realized_volatility(ir,window,1,history); rows.append({"指标":f"实现波动率RV{window}","域":domain,"周期":1,"数值":v,"历史分位":h})
+            for window in (30,60,90):
+                v,h=realized_volatility(ir,window,1,history); rows.append({"指标":f"历史波动率{window}日", "域":domain,"周期":1,"数值":v,"历史分位":h})
         return pd.DataFrame(rows).set_index(["指标","域","周期"])
