@@ -1,4 +1,4 @@
-"""Risk pressure monitor."""
+﻿"""Risk pressure monitor."""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
@@ -102,8 +102,7 @@ class RiskMonitor:
 
     def option_volatility(self, asof, start, end, index_codes=("000300.SH", "000852.SH")):
         """读取中证300/1000的 WSD 历史、隐含波动率及交易所隐含波动率。"""
-        fields=("underlyinghisvol_30d","underlyinghisvol_60d","underlyinghisvol_90d",
-                "us_impliedvol","mid_impliedvol","impliedvol_exch")
+        fields=("underlyinghisvol_30d","underlyinghisvol_60d","underlyinghisvol_90d","impliedvol_exch")
         out={}
         for code in index_codes:
             for field in fields:
@@ -126,14 +125,26 @@ class RiskMonitor:
         # Wind 指数波动率：直接使用 WSD 指标，避免用本地收益代理替代。
         for code, label in (("000300.SH","中证300"),("000852.SH","中证1000")):
             vol = self.option_volatility(asof, c.dates[start], c.dates[end], (code,))
-            for field, name in (("underlyinghisvol_30d","历史波动率30日"),("underlyinghisvol_60d","历史波动率60日"),("underlyinghisvol_90d","历史波动率90日"),("us_impliedvol","隐含波动率US"),("mid_impliedvol","隐含波动率中值"),("impliedvol_exch","隐含波动率交易所")):
+            for field, name in (
+                ("underlyinghisvol_30d","历史波动率30日"),
+                ("underlyinghisvol_60d","历史波动率60日"),
+                ("underlyinghisvol_90d","历史波动率90日"),
+                ("impliedvol_exch","交易所隐含波动率")
+            ):
                 x=vol.get((code,field),pd.Series(dtype=float)).reindex(c.dates[start:end+1]).ffill().dropna()
                 if len(x):
                     rows.append({"指标":name,"域":label,"周期":1,"数值":float(x.iloc[-1]),"历史分位":_p(x.to_numpy(),history)})
-            iv=vol.get((code,"us_impliedvol"),pd.Series(dtype=float)); rv=vol.get((code,"underlyinghisvol_30d"),pd.Series(dtype=float))
+            iv=vol.get((code,"impliedvol_exch"),pd.Series(dtype=float)); rv=vol.get((code,"underlyinghisvol_30d"),pd.Series(dtype=float))
             if len(iv) and len(rv):
                 x=iv.reindex(iv.index.union(rv.index)).ffill().subtract(rv.reindex(iv.index.union(rv.index)).ffill()).dropna()
                 if len(x): rows.append({"指标":"波动率风险溢价","域":label,"周期":1,"数值":float(x.iloc[-1]),"历史分位":_p(x.to_numpy(),history)})
+            rv30=vol.get((code,"underlyinghisvol_30d"),pd.Series(dtype=float))
+            rv60=vol.get((code,"underlyinghisvol_60d"),pd.Series(dtype=float))
+            rv90=vol.get((code,"underlyinghisvol_90d"),pd.Series(dtype=float))
+            for name,a,b in (("波动率期限结构RV30/RV60",rv30,rv60),("波动率期限结构RV60/RV90",rv60,rv90)):
+                if len(a) and len(b):
+                    z=a.reindex(a.index.union(b.index)).ffill().div(b.reindex(a.index.union(b.index)).ffill()).dropna()
+                    if len(z): rows.append({"指标":name,"域":label,"周期":1,"数值":float(z.iloc[-1]),"历史分位":_p(z.to_numpy(),history)})
         if micro_result is not None:
             required = ("相对价差分位", "深度下降分位", "Amihud分位")
             if all(k in micro_result for k in required):
@@ -158,3 +169,5 @@ if __name__ == "__main__":
         ))
     finally:
         context.close()
+
+
