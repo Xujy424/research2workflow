@@ -2,7 +2,6 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-import warnings
 from pathlib import Path
 try:
     from .context import MarketContext
@@ -96,9 +95,6 @@ def _pca_series(returns, window):
         keep = finite.sum(axis=0) >= max(1, int(np.ceil(window * .8)))
         x = x[:, keep]
         finite = finite[:, keep]
-        if x.shape[1] < 2:
-            vals.append(np.nan)
-            continue
         # Fill missing returns with each stock's finite-observation mean.
         # After centering, those entries are zero; observed deviations survive.
         means = np.where(finite, x, 0.0).sum(axis=0) / finite.sum(axis=0)
@@ -115,7 +111,7 @@ def _pca_series(returns, window):
         # The covariance normalization cancels in lambda_max / trace.
         gram = x @ x.T if x.shape[0] <= x.shape[1] else x.T @ x
         total = np.trace(gram)
-        vals.append(float(np.linalg.eigvalsh(gram)[-1] / total) if total > 0 else np.nan)
+        vals.append(float(np.linalg.eigvalsh(gram)[-1] / total))
     return np.asarray(vals)
 
 
@@ -223,25 +219,12 @@ class RiskMonitor:
         end = min(pd.Timestamp(asof), pd.Timestamp(end))
         out = {}
         for code in index_codes:
-            missing = []
             for tenor, moneyness in points:
                 options = surface_options.format(tenor=tenor, moneyness=moneyness)
-                try:
-                    x = self.context.wsd(code, surface_field, start, end,
-                                         options=options, strict=True)
-                except Exception as exc:
-                    warnings.warn(f'IV unavailable: {code}, {tenor}, {moneyness}: {exc}',
-                                  RuntimeWarning, stacklevel=2)
-                    x = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+                x = self.context.wsd(code, surface_field, start, end, options=options)
                 x = pd.to_numeric(x, errors='coerce') * surface_scale
                 x = x.where(np.isfinite(x) & (x >= 0))
                 out[(code,tenor,moneyness)] = x
-                if not x.notna().any():
-                    missing.append((tenor, moneyness))
-            if missing:
-                warnings.warn(f'WSD surface unavailable: {code}, points={missing}; '
-                              f'check field/options/permissions: {surface_field}',
-                              RuntimeWarning, stacklevel=2)
         return pd.DataFrame(out)
 
     @staticmethod
@@ -270,6 +253,7 @@ class RiskMonitor:
         eligible = np.isfinite(price_floor) & (price_floor > 0)
         dates = pd.DatetimeIndex(c.dates[start:end+1])
         rows=[]
+        rv_names = set()
         for domain in domains:
             w=c.domain_weights(start,end,domain)
             member = np.isfinite(w) & (w > 0)
@@ -277,7 +261,9 @@ class RiskMonitor:
             dr = np.where(active & np.isfinite(r), r, np.nan)
             domain_trade = np.where(member, trade, 0)
             # Domain benchmark uses current returns with prior-day weights.
-            ir=np.array([weighted_mean(_pct(dr[t]),w[t-1]) if t else np.nan for t in range(len(r))])
+            ir = np.full(len(r), np.nan)
+            ir[1:] = [weighted_mean(ret, weight)
+                      for ret, weight in zip(_pct(dr[1:]), w[:-1])]
             correlation = _correlation_series(dr, 60)
             downside = _correlation_series(dr, 120, downside=True, market_returns=ir)
             pca = _pca_series(dr, 60)
@@ -288,33 +274,32 @@ class RiskMonitor:
                     ("下跌条件相关性",lambda:_summarize(downside,p,history)),
                     ("首主成分解释率",lambda:_summarize(pca,p,history)),
                     ("市场下行共振",lambda:downside_resonance(dr,floor,domain_trade,p,history,eligible)),
-                    ("跌停扩散比例",lambda:limit_down_ratio(floor,domain_trade,p,history,eligible))
+                    ("跌停扩散比例",lambda:limit_down_ratio(floor,domain_trade,p,history,eligible)),
+                    ("最差滚动5日收益",lambda:worst_rolling_loss(ir * 100,history,5,history))
                 ):
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
-            # worst_rolling_loss takes percent returns; ir is already decimal.
-            v,h = worst_rolling_loss(ir * 100, history, 5, history)
-            rows.append({"指标":"最差滚动5日收益","域":domain,"周期":1,"数值":v,"历史分位":h})
-            for name, series in _rv_metrics(pd.Series(ir, index=dates)).items():
+            rv = _rv_metrics(pd.Series(ir, index=dates))
+            rv_names.update(rv)
+            for name, series in rv.items():
                 rows.append({"指标":name,"域":domain,"周期":1,
                              "数值":float(series.iloc[-1]),"历史分位":_p(series.to_numpy(),history)})
         # Use constant-tenor surface points and official index close returns.
-        for code, label in (("000300.SH", "沪深300"), ("000852.SH", "中证1000")):
+        for code, label in (
+            ("000300.SH", "沪深300"),
+            ("000852.SH", "中证1000"),
+        ):
             vol = self.option_volatility(asof, c.dates[start], c.dates[end], (code,))
             surface = vol[code].reindex(dates)
-            try:
-                close = c.wsd(code, 'close', c.dates[max(0, start-65)], c.dates[end], strict=True)
-            except Exception as exc:
-                warnings.warn(f'Index close unavailable: {code}: {exc}', RuntimeWarning, stacklevel=2)
-                close = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+            close = c.wsd(code, 'close', c.dates[max(0, start-65)], c.dates[end])
             metrics = self._volatility_metrics(surface, close)
             for name, series in metrics.items():
-                if label in domains and name in _rv_metrics(pd.Series(dtype=float)):
+                if label in domains and name in rv_names:
                     continue
                 x = series.reindex(dates)
                 # Missing as-of observations stay unavailable, rather than
                 # presenting an older quote as today's value.
                 rows.append({"指标": name, "域": label, "周期": 1,
-                             "数值": float(x.iloc[-1]) if len(x) else np.nan,
+                             "数值": float(x.iloc[-1]),
                              "历史分位": _p(x.to_numpy(), history)})
         if micro_result is not None:
             required = ("相对价差分位", "深度下降分位", "Amihud分位")
