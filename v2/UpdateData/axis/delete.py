@@ -49,6 +49,8 @@ class AxisDeleteResult:
 
 
 def _matrix_shape(spec, date_len, tick_len):
+    if spec.fixed_columns is not None:
+        tick_len = spec.fixed_columns
     if spec.middle == 1:
         return date_len, tick_len
     return date_len, spec.middle, tick_len
@@ -84,6 +86,8 @@ def _rewrite_matrix(
     keep_cols,
 ):
     """Write retained data to a new matrix, then replace the old file."""
+    if spec.fixed_columns is not None:
+        keep_cols = np.arange(spec.fixed_columns)
     old = np.memmap(
         spec.path,
         dtype=spec.dtype,

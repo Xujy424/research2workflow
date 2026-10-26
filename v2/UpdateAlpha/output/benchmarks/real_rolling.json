@@ -1,0 +1,28 @@
+[
+  {
+    "factor": "bayeshighvol_onset",
+    "date": "2026-06-29",
+    "mode": "rolling",
+    "synthetic": false,
+    "workers": 8,
+    "stocks": 5490,
+    "finite": 4202,
+    "seconds": 314.69519849994686,
+    "minute_read_seconds": 144.32426790014142,
+    "source_days_read": 10,
+    "requested_workers": 8
+  },
+  {
+    "factor": "bayeshighvol_onset",
+    "date": "2026-06-30",
+    "mode": "rolling",
+    "synthetic": false,
+    "workers": 8,
+    "stocks": 5490,
+    "finite": 4189,
+    "seconds": 31.234802899998613,
+    "minute_read_seconds": 14.129785900004208,
+    "source_days_read": 1,
+    "requested_workers": 8
+  }
+]

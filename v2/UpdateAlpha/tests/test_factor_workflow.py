@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from dataclasses import replace
 from datetime import time
 
 import matplotlib
@@ -89,6 +90,19 @@ class NewFactorWorkflowTests(unittest.TestCase):
             self.assertEqual(spec.context_class.__bases__, (backtest.AlphaContext,))
             self.assertEqual(spec.factor_class.__bases__, (backtest.AlphaBase,))
 
+    def test_process_workers_match_serial_and_close(self):
+        for name in ("vr_quantile_resid_corr", "bayesHighVol_onset", "sr_dispersion_stdnumtrades"):
+            spec = get_factor_spec(name)
+            config = inspect.signature(spec.context_class).parameters["config"].default
+            config = replace(config, show_progress=False, workers=1)
+            with spec.create_context(root=self.root, config=config) as context:
+                expected = context.daily_features(9)[spec.name].copy()
+            with spec.create_context(root=self.root, config=replace(config, workers=2)) as context:
+                actual = context.daily_features(9)[spec.name].copy()
+                self.assertIsNotNone(context._executor)
+            self.assertIsNone(context._executor)
+            np.testing.assert_array_equal(actual, expected)
+
     def test_all_eleven_calculate_store_and_plot_by_name(self):
         for name in NAMES:
             with self.subTest(factor=name):
@@ -96,7 +110,8 @@ class NewFactorWorkflowTests(unittest.TestCase):
                     name, root=self.root, start_date=str(self.dates[10]),
                     end_date=str(self.dates[10]), horizons=(1, 100), return_offset=1,
                     output_dir=self.root / "plots", num_groups=2,
-                    context_kwargs={"config": {"lookback_days": 1, "min_valid_days": 1}},
+                    context_kwargs={"config": {"lookback_days": 1, "min_valid_days": 1,
+                                                "show_progress": False}},
                 )
                 output, stats = result[name]["output"], result[name]["stats"]
                 self.assertTrue(output.is_file())

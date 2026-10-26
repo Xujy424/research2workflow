@@ -1,45 +1,36 @@
-# IO / MO 日更新
+# IO / MO 日度 IV30
 
-在 IDE 中直接运行文件，参数在底部 `main(...)` 中设置，不使用命令行。单日设置 `date`；历史回补改为 `start` 和 `end`。默认采用 close 和固定利率近似，不依赖外部合约或利率 CSV。
-
-未传 contracts 时，以标的指数当日收盘价的65%—135%、50点步长生成候选行权价，覆盖近三个月及随后三个季月，通过 WSD 查询实际可用报价。候选代码不保证完整挂牌覆盖，到期时间暂按第三个周五15:00估计，未核实节假日顺延。诊断明确标记 `wsd_probed_grid_proxy` 和 `unverified_third_friday`，不能视为官方 VIX。探测范围较宽，可能发出较多 WSD 请求。
-
-不修改 stock、GetData 或现有 daily_update。入口与 stock 更新器一样显式传入日期、共享日期轴、数据读取器和输出目录。
+在 IDE 直接运行 `update_iv30.py`，修改底部 `if __name__ == "__main__"` 中的日期和调用参数即可：
 
 ```python
-import numpy as np
-from v2.UpdateData.option import update_iv30, update_history
-
-# ctx 为已有 DataContext；也可传入其他兼容的 dated Series/DataFrame reader。
-dates = np.load('D:/data/axis/dates.npy', allow_pickle=False)
-current, diagnostics = update_iv30(
-    '2026-10-26', dates, ctx.wsd, 'D:/data/option',
-    price_field='close', flat_rate=0.02,
-)
-# update_history(start, end, dates, ctx.wsd, root, **同上参数)
+value = update_iv30(date, dates, context.wsd, Path(ROOT) / "option",
+                    prefix="MO", price_field="close", rate=0.02)
+# 主入口循环 IO、MO；只计算中证1000时将循环改为 ("MO",)。
 ```
 
-可选传入内存合约表或提供器以替换候选探测，列为 `code,prefix,cp,strike,listed,expiry`。
-prefix 为 IO/MO，cp 为 C/P，listed 为实际挂牌日，expiry 为实际到期结算时间
-（上海本地无时区时间戳，必须包含时分秒）。支持传入 `contracts(day)` 回调，便于每日同步合约清单。
-实际合约表模式使用给定的到期结算时间。WSD 候选探测模式不能证明完整历史挂牌覆盖。
+仅输出 `ROOT/option/HS300_IV30.bin` 和 `CSI1000_IV30.bin`，不再生成报价、合约、诊断或衍生指标文件。
+每个文件均为 float32、形状 `(len(dates), 1)`，行对应 `ROOT/axis/dates.npy`（含预留行），
+列数固定为1；单位为年化百分数，缺失和未写入位置为 NaN，重复更新覆盖同一行。
+此前版本产生的 CSV/JSON 不再读取或更新，也不会自动删除。
 
-利率表列为 `date,tenor_days,rate`：rate 为连续复利年利率小数（2% 写 0.02）。
-仅使用当日曲线，期限必须落在节点范围内；不自动前填或外推。
-也支持 `rate_curve(day)` 回调。若明确接受固定利率近似，传入 `flat_rate=0.02`，省略 rate_curve。
+```python
+dates = np.load(ROOT / "axis/dates.npy", allow_pickle=False)
+iv = np.memmap(ROOT / "option/CSI1000_IV30.bin", dtype=np.float32,
+               mode="r", shape=(len(dates), 1))
+```
 
-买卖字段需在实际 WSD 服务确认可获取历史日终同步报价后填写，代码不猜字段名。
-缺少真实 bid/ask 时可显式指定 `price_field='close'` 或已确认的结算价字段，省略 bid/ask 字段；
-诊断会标记代理口径，不使用零买价截断规则，也不自动从中间价降级。
+`UpdateData.axis` 已支持 option 固定单列矩阵：日期扩容、历史插行、历史裁剪同步维护，股票列扩容不影响它。
+应先维护共享日期轴，再加载 dates 并更新 IV；不要手工替换日期轴或保持旧 memmap 跨越轴维护。
+单日接口为 `update_iv30(date, dates, wsd, option_root, prefix="IO", **参数)`，返回一个浮点数。
+计算与存储解耦：`calculate_iv30` 获取报价并返回 IV，`maturity_variance` 是纯 NumPy 方差计算。
 
-输出：`daily/YYYY-MM-DD/quotes.csv` 保存当日候选或输入合约及原始报价、失败原因；
-同目录 `diagnostics.json` 保存计算口径、各期限 F/K0/利率/方差、选定期限及缺失原因；
-`index_iv30.csv` 保存 HS300_IV30、CSI1000_IV30、大小盘差、5交易日变化、756交易日分位数
-（至少126个有效值，分位数含当日）。波动率单位为年化百分数，变化和差值为百分点。
-历史重跑覆盖当日并重新计算衍生序列；不足30天两侧期限时保存 NaN，不外推。
-报价文件与序列分别原子替换，不支持并发写同一目录。
+WSD 候选探测以指数收盘价65%—135%、50点步长生成行权价，按近三个月及随后三季月查找。
+优先查询30天两侧最近期限，仅当报价不足时尝试其他候选期限；缺少任一侧时返回 NaN，不外推。
+到期时间暂按第三个周五15:00、估值时间15:00，未验证节假日顺延；候选网格不保证完整合约覆盖。
+`close`/结算价、固定连续复利利率 `rate` 均属近似，因此结果是类 VIX 代理值。
+中间价模式请设置 `price_field=None, bid_field=已验证字段, ask_field=已验证字段`，应用连续两档零买价截断。
+WSD 缺失候选应返回空序列或 NaN；读取异常直接抛出，避免把服务故障吞成正常更新。
 
-序列采用 CSV，而非 stock 的 bin：现有轴维护将 bin 解释为股票矩阵，期权不应混入。
-交易日期仍通过共享 dates 校验，未更新的轴内交易日保留缺失，防止 diff(5) 跨越缺口压缩。
-本入口不初始化或修改日期轴，需在日期轴更新后调用。未接入 Monitor；IV-RV 需明确 RV 口径后添加。
-当前实现使用每日15:00估值时间，不处理盘中计算。
+本地模拟 WSD 测速（5次中位数，4000/6000点，正常两期限）：IO 0.110秒/229次请求，MO 0.151秒/341次请求。
+纯单期限方差约145微秒。这些是模拟数据耗时，真实耗时主要取决于逐合约 WSD 请求；
+主入口打印每个指数的实际总耗时。默认不并发访问共享请求客户端。

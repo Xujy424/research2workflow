@@ -15,6 +15,7 @@ from v2.UpdateAlpha import get_factor_spec
 from v2.UpdateAlpha.operators import linear_quantile_residual as quantile_residual
 from v2.UpdateAlpha.operators import time_series_corr
 from v2.UpdateAlpha.pricevolume.highVol_onset import onset_counts
+from v2.UpdateAlpha.pricevolume.lowVol_onset import onset_counts as low_onset_counts
 from v2.UpdateAlpha.pricevolume.bayesHighVol_onset import posterior_probability
 from v2.UpdateAlpha.pricevolume.sr_dispersion_stdnumtrades import (
     sparse_gamma, l2_minute_trade_counts,
@@ -79,11 +80,11 @@ class VolumeDispersionTests(unittest.TestCase):
     def test_onset_excludes_current_dispersion_and_incomplete_future(self):
         gamma = np.array([0, 0, 1, 0, 0, np.nan, 0, 0], float)
         low, high = np.ones(8), np.ones(8)
-        result = onset_counts(gamma, low, high, 2)
-        self.assertEqual(result[0], (2, 2, 0, 0))
+        result = onset_counts(gamma, high, 2)
+        self.assertEqual(result, (2, 2, 0, 0))
         # Last two positions are not base minutes, and missing minute 5 is
         # neither compressed away nor counted as a non-dispersion state.
-        self.assertEqual(result[1], (0, 0, 2, 2))
+        self.assertEqual(low_onset_counts(gamma, low, 2), (0, 0, 2, 2))
 
     def test_l2_execution_counts_and_minute_alignment(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,7 +153,7 @@ class VolumeDispersionTests(unittest.TestCase):
                   "m_essentials/amount": close * volume,
                   "m_essentials/numtrades": rng.poisson(100, (241, 3)).astype(float),
                   "basic/tradable": np.ones(3)}
-        def read(field, day):
+        def read(field, day, **kwargs):
             if field not in fields:
                 raise FileNotFoundError(field)
             return fields[field]
@@ -161,7 +162,7 @@ class VolumeDispersionTests(unittest.TestCase):
             context = spec.context_class.__new__(spec.context_class)
             import inspect
             config = inspect.signature(spec.context_class).parameters["config"].default
-            kwargs = {}
+            kwargs = {"show_progress": False}
             if "sparse_minutes" in config.__dataclass_fields__:
                 kwargs["sparse_minutes"] = 12
             if "numtrades_field" in config.__dataclass_fields__:

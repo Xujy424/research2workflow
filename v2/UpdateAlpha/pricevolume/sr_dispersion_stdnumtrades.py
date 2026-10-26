@@ -9,6 +9,9 @@ Market minute return is the equal-weight mean of tradable stocks.
 Sparse support defaults to 24 minutes (configurable; unspecified in report).
 See volume_dispersion.md for the backtest entry and time alignment.
 """
+import os
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -18,6 +21,7 @@ import polars as pl
 from datetime import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from v2.UpdateAlpha.operators import least_trimmed_squares_slope
 from v2.UpdateAlpha.alphabase import AlphaBase, AlphaContext, AlphaMeta
 from v2.GetData import DataPool
 from v2.UpdateData.config import ROOT
@@ -30,6 +34,8 @@ class SRDispersionStdnumtradesConfig:
     min_minutes: int = 120
     sparse_minutes: int = 24
     numtrades_field: str | None = None
+    show_progress: bool = True
+    workers: int = 0
 
     def __post_init__(self):
         if self.lookback_days < 1 or self.lag_days < 0:
@@ -40,59 +46,24 @@ class SRDispersionStdnumtradesConfig:
             raise ValueError('min_minutes must be in [5, 240]')
         if not 0 <= self.sparse_minutes < self.min_minutes - 1:
             raise ValueError('sparse_minutes must leave at least two ordinary minutes')
+        if self.workers < 0:
+            raise ValueError('workers must be nonnegative; 0 means automatic')
 
 def sparse_gamma(y, market, sparsity):
-    """Global l0 fit of y = beta*abs(market) + diag(market**2)*gamma.
-
-    A selected nonzero-market row can be fit exactly. Thus minimize the sum
-    of the T-s smallest squared residuals over scalar beta (trimmed LS).
-    Residual ordering changes only at pairwise intersections of squared
-    residual lines. Enumerate those intervals, solve their quadratic minima,
-    and choose the global minimum. No l1 surrogate or local sparse solver.
-    """
+    """Report-specific diagonal model; the scalar trimmed LS solver is generic."""
     x = np.abs(np.asarray(market, float))
     y = np.asarray(y, float)
     gamma = np.zeros_like(y)
-    eligible = x > 0
-    a, b = (x[eligible], y[eligible])
-    s = min(sparsity, max(0, len(a) - 1))
-    if not len(a):
-        return gamma
-    keep = len(a) - s
+    positions = np.flatnonzero(x > 0)
+    s = min(sparsity, max(0, len(positions) - 1))
     if s == 0:
         return gamma
-    scale = a.max()
-    a = a / scale
-    lo, hi = (np.min(b / a), np.max(b / a))
-    i, j = np.triu_indices(len(a), 1)
-    roots = []
-    for numerator, denominator in ((b[i] - b[j], a[i] - a[j]), (b[i] + b[j], a[i] + a[j])):
-        nonzero = denominator != 0
-        values = numerator[nonzero] / denominator[nonzero]
-        roots.append(values[(values > lo) & (values < hi)])
-    edges = np.unique(np.r_[lo, *roots, hi])
-    if len(edges) == 1:
-        beta = edges[0]
-    else:
-        best_loss, beta = (np.inf, lo)
-        for start in range(0, len(edges) - 1, 256):
-            stop = min(start + 256, len(edges) - 1)
-            left, right = (edges[start:stop], edges[start + 1:stop + 1])
-            mid = left + (right - left) / 2
-            squared = (b[None, :] - mid[:, None] * a) ** 2
-            selected = np.argpartition(squared, keep - 1, axis=1)[:, :keep]
-            ax, by = (a[selected], b[selected])
-            candidate = np.clip((ax * by).sum(1) / (ax * ax).sum(1), left, right)
-            error = (b[None, :] - candidate[:, None] * a) ** 2
-            loss = np.partition(error, keep - 1, axis=1)[:, :keep].sum(1)
-            k = np.argmin(loss)
-            if loss[k] < best_loss:
-                best_loss, beta = (loss[k], candidate[k])
-    residual = b - beta * a
+    beta = least_trimmed_squares_slope(x[positions], y[positions], s)
+    residual = y[positions] - beta * x[positions]
     selected = np.argsort(residual ** 2, kind='stable')[-s:]
-    positions = np.flatnonzero(eligible)[selected]
-    gamma[positions] = residual[selected] / x[positions] ** 2
-    gamma[positions[np.abs(residual[selected]) <= 1e-12 * max(1, np.max(np.abs(y)))]] = 0
+    output = positions[selected]
+    gamma[output] = residual[selected] / x[output] ** 2
+    gamma[output[np.abs(residual[selected]) <= 1e-12 * max(1, np.max(np.abs(y)))]] = 0
     return gamma
 
 def l2_minute_trade_counts(l2_root, date, ticks):
@@ -125,23 +96,43 @@ def l2_minute_trade_counts(l2_root, date, ticks):
                 result[minute_index, stock] = count
     return result
 
+def _stock_feature(task):
+    stock, r, v, market, cfg, extra = task
+    value = np.nan
+    good = np.isfinite(r) & np.isfinite(market)
+    if good.sum() < cfg.min_minutes:
+        return (stock, value)
+    gamma = np.full(240, np.nan)
+    gamma[good] = sparse_gamma(np.abs(r[good] - market[good]), market[good], cfg.sparse_minutes)
+    dispersion = gamma > 0
+    all_trades = extra
+    valid_trades = good & np.isfinite(all_trades) & (all_trades >= 0)
+    selected = all_trades[dispersion & valid_trades]
+    mean = all_trades[valid_trades].mean() if valid_trades.any() else np.nan
+    if len(selected) >= 2 and mean > 0:
+        value = np.std(selected) / mean
+    return (stock, value)
+
 class SRDispersionStdnumtradesContext(AlphaContext):
     """Read and cache daily features for sr_dispersion_stdnumtrades."""
 
     def __init__(self, root=ROOT, config=SRDispersionStdnumtradesConfig(), universe='self', l2_root=None):
+        self._executor = None
         self.config = config
         self.l2_root = Path(l2_root) if l2_root is not None else Path(root) / 'stock' / 'l2'
         self._daily_cache = {}
         super().__init__(DataPool(root, asset='stock'), universe=universe)
 
     def _read(self, field, day):
-        return np.asarray(self.data.read(field, day), dtype=float)
+        return np.asarray(self.data.read(field, day, copy=False), dtype=float)
 
     def daily_features(self, day):
         key = day
         if key in self._daily_cache:
             return self._daily_cache[key]
         cfg = self.config
+        if cfg.show_progress:
+            print(f'sr_dispersion_stdnumtrades: loading source day {day} minute data', file=sys.stdout, flush=True)
         n = self.data.axis.tick_count
         close = self._read('m_essentials/close', day)
         volume = self._read('m_essentials/volume', day)
@@ -167,26 +158,31 @@ class SRDispersionStdnumtradesContext(AlphaContext):
             trades = l2_minute_trade_counts(self.l2_root, self.data.axis.trade_dates[day], self.data.axis.ticks)
         if trades.shape != ret.shape:
             raise ValueError('numtrades field must match the minute price axes')
-        for stock in np.flatnonzero(tradable):
-            r, v = (ret[:, stock], vol[:, stock])
-            good = np.isfinite(r) & np.isfinite(market)
-            if good.sum() < cfg.min_minutes:
-                continue
-            gamma = np.full(240, np.nan)
-            gamma[good] = sparse_gamma(np.abs(r[good] - market[good]), market[good], cfg.sparse_minutes)
-            dispersion = gamma > 0
-            all_trades = trades[:, stock]
-            valid_trades = good & np.isfinite(all_trades) & (all_trades >= 0)
-            selected = all_trades[dispersion & valid_trades]
-            mean = all_trades[valid_trades].mean() if valid_trades.any() else np.nan
-            if len(selected) >= 2 and mean > 0:
-                output['sr_dispersion_stdnumtrades'][stock] = np.std(selected) / mean
+        stocks = np.flatnonzero(tradable)
+        workers = cfg.workers or (min(8, os.cpu_count() or 1) if len(stocks) >= 256 else 1)
+        tasks = ((stock, ret[:, stock], vol[:, stock], market, cfg, trades[:, stock]) for stock in stocks)
+        if workers > 1:
+            if self._executor is None:
+                self._executor = ProcessPoolExecutor(max_workers=workers)
+            results = self._executor.map(_stock_feature, tasks, chunksize=32)
+        else:
+            results = map(_stock_feature, tasks)
+        for stock, value in tqdm(results, total=len(stocks), desc=f'sr_dispersion_stdnumtrades day {day} stocks', file=sys.stdout, leave=False, mininterval=1, disable=not cfg.show_progress, bar_format='{desc}: {n_fmt}/{total_fmt} [{elapsed}, {rate_fmt}]'):
+            output['sr_dispersion_stdnumtrades'][stock] = value
         self._daily_cache[key] = output
         oldest = day - cfg.lookback_days - cfg.lag_days
         for item in list(self._daily_cache):
             if item < oldest:
                 del self._daily_cache[item]
         return output
+
+    def close(self):
+        try:
+            if self._executor is not None:
+                self._executor.shutdown(wait=True, cancel_futures=True)
+                self._executor = None
+        finally:
+            super().close()
 
 class SRDispersionStdnumtradesFactor(AlphaBase):
     meta = AlphaMeta('sr_dispersion_stdnumtrades', 'Dispersion-minute trade-count std divided by daily mean', direction=-1)

@@ -46,6 +46,7 @@ class MatrixSpec:
     path: Path
     dtype: np.dtype
     middle: int
+    fixed_columns: int | None = None
 
 
 def axis_paths(root=ROOT):
@@ -103,6 +104,11 @@ def discover_matrix_specs(root, date_len, tick_len):
 
     root = Path(root)
     for path in _iter_matrix_paths(root):
+        if path.relative_to(root).parts[0] == "option":
+            if path.stat().st_size != date_len * np.dtype(np.float32).itemsize:
+                raise ValueError(f"invalid date x 1 float32 option matrix: {path}")
+            specs.append(MatrixSpec(path, np.dtype(np.float32), 1, 1))
+            continue
         middle = _matrix_middle(path)
         elements = base * middle
         size = path.stat().st_size
@@ -139,6 +145,8 @@ def _iter_matrix_paths(root):
 
 
 def _resize_matrix(spec, old_dates, old_ticks, new_dates, new_ticks):
+    if spec.fixed_columns is not None:
+        old_ticks = new_ticks = spec.fixed_columns
     if new_dates < old_dates or new_ticks < old_ticks:
         raise ValueError("axis shrinking is not supported")
     if new_dates == old_dates and new_ticks == old_ticks:
@@ -175,10 +183,11 @@ def insert_matrix_date_rows(root, index, n_valid, date_len, tick_len):
     """Insert one empty date row into every matrix without changing axes."""
     specs = discover_matrix_specs(root, date_len, tick_len)
     for spec in specs:
+        columns = spec.fixed_columns if spec.fixed_columns is not None else tick_len
         shape = (
-            (date_len, tick_len)
+            (date_len, columns)
             if spec.middle == 1
-            else (date_len, spec.middle, tick_len)
+            else (date_len, spec.middle, columns)
         )
         array = np.memmap(
             spec.path, dtype=spec.dtype, mode="r+", shape=shape

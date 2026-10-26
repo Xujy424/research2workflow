@@ -1,0 +1,16 @@
+[
+  {
+    "name": "bayeshighvol_onset",
+    "source_date": "2026-06-29",
+    "total_stocks": 5490,
+    "finite": 4921,
+    "seconds": 97.78378380002687
+  },
+  {
+    "name": "bayeshighvol_onset",
+    "source_date": "2026-06-30",
+    "total_stocks": 5490,
+    "finite": 4924,
+    "seconds": 94.08053059998201
+  }
+]

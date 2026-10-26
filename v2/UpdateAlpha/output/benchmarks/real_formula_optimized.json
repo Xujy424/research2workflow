@@ -1,0 +1,41 @@
+[
+  {
+    "factor": "bayeshighvol_onset",
+    "date": "2026-06-30",
+    "mode": "daily",
+    "synthetic": false,
+    "workers": 8,
+    "stocks": 5490,
+    "finite": 4924,
+    "seconds": 33.767976900038775,
+    "minute_read_seconds": 17.594651699939277,
+    "source_days_read": 1,
+    "requested_workers": 8
+  },
+  {
+    "factor": "lr_score_mor",
+    "date": "2026-06-30",
+    "mode": "daily",
+    "synthetic": false,
+    "workers": 1,
+    "stocks": 5490,
+    "finite": 4937,
+    "seconds": 19.035272700013593,
+    "minute_read_seconds": 18.387445700005628,
+    "source_days_read": 1,
+    "requested_workers": 8
+  },
+  {
+    "factor": "lr_beta2_aft_minus_mor",
+    "date": "2026-06-30",
+    "mode": "daily",
+    "synthetic": false,
+    "workers": 1,
+    "stocks": 5490,
+    "finite": 4937,
+    "seconds": 17.984560000011697,
+    "minute_read_seconds": 17.157123500015587,
+    "source_days_read": 1,
+    "requested_workers": 8
+  }
+]

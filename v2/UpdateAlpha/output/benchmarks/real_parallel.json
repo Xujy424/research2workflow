@@ -1,0 +1,15 @@
+[
+  {
+    "factor": "bayeshighvol_onset",
+    "date": "2026-06-30",
+    "mode": "daily",
+    "synthetic": false,
+    "workers": 8,
+    "stocks": 5490,
+    "finite": 4924,
+    "seconds": 40.3437689000275,
+    "minute_read_seconds": 16.85920080001233,
+    "source_days_read": 1,
+    "requested_workers": 8
+  }
+]

@@ -1,0 +1,68 @@
+[
+  {
+    "name": "vr_quantile_resid_corr",
+    "stocks": 16,
+    "new_day_seconds": 0.24802540004020557,
+    "cached_seconds": 0.00013340002624318004
+  },
+  {
+    "name": "vr_q80_ret_corr",
+    "stocks": 16,
+    "new_day_seconds": 0.13384030002634972,
+    "cached_seconds": 0.00014269998064264655
+  },
+  {
+    "name": "lr_score_mor",
+    "stocks": 16,
+    "new_day_seconds": 0.030402200005482882,
+    "cached_seconds": 0.00011490000179037452
+  },
+  {
+    "name": "lr_beta2_aft_minus_mor",
+    "stocks": 16,
+    "new_day_seconds": 0.0035660999710671604,
+    "cached_seconds": 5.6500022765249014e-05
+  },
+  {
+    "name": "sr_dispersion_stdnumtrades",
+    "stocks": 16,
+    "new_day_seconds": 3.4561564000323415,
+    "cached_seconds": 9.90999978967011e-05
+  },
+  {
+    "name": "sr_dispersion_mean_vwap",
+    "stocks": 16,
+    "new_day_seconds": 3.3060308000422083,
+    "cached_seconds": 0.00011729996185749769
+  },
+  {
+    "name": "sr_dispersion_volume_absret_corr",
+    "stocks": 16,
+    "new_day_seconds": 3.2070364999817684,
+    "cached_seconds": 8.430000161752105e-05
+  },
+  {
+    "name": "highVol_onset",
+    "stocks": 16,
+    "new_day_seconds": 3.620281099982094,
+    "cached_seconds": 9.960000170394778e-05
+  },
+  {
+    "name": "lowVol_onset",
+    "stocks": 16,
+    "new_day_seconds": 3.6145487999892794,
+    "cached_seconds": 0.00019029999384656549
+  },
+  {
+    "name": "bayesHighVol_onset",
+    "stocks": 16,
+    "new_day_seconds": 3.2809290000004694,
+    "cached_seconds": 8.460000390186906e-05
+  },
+  {
+    "name": "bayesLowVol_onset",
+    "stocks": 16,
+    "new_day_seconds": 3.2169087999500334,
+    "cached_seconds": 9.730004239827394e-05
+  }
+]

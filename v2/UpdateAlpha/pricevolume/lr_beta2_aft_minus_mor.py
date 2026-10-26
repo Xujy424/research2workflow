@@ -8,6 +8,7 @@ at 09:31-11:30 and 13:01-15:00. Population standard deviations are used.
 Market minute return is the equal-weight mean of tradable stocks.
 See volume_dispersion.md for the backtest entry and time alignment.
 """
+from tqdm import tqdm
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -26,6 +27,7 @@ class LRBeta2AftMinusMorConfig:
     min_valid_days: int = 10
     min_minutes: int = 120
     min_morning_minutes: int = 20
+    show_progress: bool = True
 
     def __post_init__(self):
         if self.lookback_days < 1 or self.lag_days < 0:
@@ -46,13 +48,15 @@ class LRBeta2AftMinusMorContext(AlphaContext):
         super().__init__(DataPool(root, asset='stock'), universe=universe)
 
     def _read(self, field, day):
-        return np.asarray(self.data.read(field, day), dtype=float)
+        return np.asarray(self.data.read(field, day, copy=False), dtype=float)
 
     def daily_features(self, day):
         key = day
         if key in self._daily_cache:
             return self._daily_cache[key]
         cfg = self.config
+        if cfg.show_progress:
+            print(f'lr_beta2_aft_minus_mor: loading source day {day} minute data', file=sys.stdout, flush=True)
         n = self.data.axis.tick_count
         close = self._read('m_essentials/close', day)
         volume = self._read('m_essentials/volume', day)
@@ -71,31 +75,48 @@ class LRBeta2AftMinusMorContext(AlphaContext):
         count = (np.isfinite(ret) & tradable).sum(1)
         market = np.divide(np.where(tradable & np.isfinite(ret), ret, 0).sum(1), count, out=np.full(240, np.nan), where=count > 0)
         output = {'lr_beta2_aft_minus_mor': np.full(n, np.nan)}
-        for stock in np.flatnonzero(tradable):
-            r, v = (ret[:, stock], vol[:, stock])
-            good = np.isfinite(r) & np.isfinite(market)
-            if good.sum() < cfg.min_minutes:
+        paired = np.isfinite(ret) & np.isfinite(market[:, None])
+        eligible = tradable & (paired.sum(axis=0) >= cfg.min_minutes)
+        betas = np.full((2, n), np.nan)
+        scores = np.full(n, np.nan)
+        for group, (segment, threshold) in enumerate(((np.arange(240) < 30, cfg.min_morning_minutes), (np.arange(240) >= 30, cfg.min_minutes - 30))):
+            common_mask = segment & np.isfinite(market)
+            if common_mask.sum() < max(3, threshold):
                 continue
-            betas, score = ([], np.nan)
-            for segment, threshold in ((np.arange(240) < 30, cfg.min_morning_minutes), (np.arange(240) >= 30, cfg.min_minutes - 30)):
-                mask = good & segment
+            complete = eligible & np.all(np.isfinite(ret[common_mask]), axis=0)
+            columns = np.flatnonzero(complete)
+            if len(columns):
+                x = np.abs(market[common_mask])
+                scale = x.max()
+                if scale > 0:
+                    design = np.column_stack((np.ones(len(x)), x / scale, (x / scale) ** 2))
+                    target = np.abs(ret[common_mask][:, columns] - market[common_mask, None])
+                    coefficient, _, rank, _ = np.linalg.lstsq(design, target, rcond=None)
+                    if rank == 3:
+                        betas[group, columns] = coefficient[2] / scale ** 2
+                        if group == 0:
+                            variance = np.sum((target - target.mean(axis=0)) ** 2, axis=0)
+                            error = np.sum((target - design @ coefficient) ** 2, axis=0)
+                            scores[columns] = 1 - np.divide(error, variance, out=np.full(len(columns), np.nan), where=variance > 0)
+            irregular = np.flatnonzero(eligible & ~complete)
+            for stock in tqdm(irregular, desc=f'lr_beta2_aft_minus_mor day {day} missing-sample fits', file=sys.stdout, leave=False, mininterval=1, disable=not cfg.show_progress):
+                mask = paired[:, stock] & segment
                 if mask.sum() < max(3, threshold):
-                    betas.append(np.nan)
                     continue
                 x = np.abs(market[mask])
-                y = np.abs(r[mask] - market[mask])
+                target = np.abs(ret[mask, stock] - market[mask])
                 scale = x.max()
                 if scale <= 0:
-                    betas.append(np.nan)
                     continue
                 design = np.column_stack((np.ones(len(x)), x / scale, (x / scale) ** 2))
-                coef, _, rank, _ = np.linalg.lstsq(design, y, rcond=None)
+                coefficient, _, rank, _ = np.linalg.lstsq(design, target, rcond=None)
                 if rank < 3:
-                    betas.append(np.nan)
                     continue
-                betas.append(coef[2] / scale ** 2)
-            output['lr_beta2_aft_minus_mor'][stock] = betas[1] - betas[0]
-            continue
+                betas[group, stock] = coefficient[2] / scale ** 2
+                if group == 0:
+                    variance = np.sum((target - target.mean()) ** 2)
+                    scores[stock] = 1 - np.sum((target - design @ coefficient) ** 2) / variance if variance > 0 else np.nan
+        output['lr_beta2_aft_minus_mor'] = betas[1] - betas[0]
         self._daily_cache[key] = output
         oldest = day - cfg.lookback_days - cfg.lag_days
         for item in list(self._daily_cache):
