@@ -2,6 +2,7 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
+import warnings
 from pathlib import Path
 try:
     from .context import MarketContext
@@ -161,16 +162,66 @@ class RiskContext(MarketContext):
 
 class RiskMonitor:
     DEFAULT_FIELDS={"returns":"d_essentials/pct","hit_floor":"basic/floor_only","has_trade":"basic/hastrade"}
-    def __init__(self,context,field_map=None): self.context=context; self.fields={**self.DEFAULT_FIELDS,**(field_map or {})}
+    def __init__(self, context, field_map=None, *,
+                 surface_field="品种隐含波动率曲面(%)",
+                 surface_options="Period=D;期限={tenor}天;价值状态={moneyness}%",
+                 surface_scale=0.01):
+        self.context = context
+        self.fields = {**self.DEFAULT_FIELDS, **(field_map or {})}
+        # User-supplied Wind display name/options; replace with API-generated
+        # identifiers if the data service requires them. Percent -> decimal.
+        self.surface_field = surface_field
+        self.surface_options = surface_options
+        self.surface_scale = surface_scale
 
     def option_volatility(self, asof, start, end, index_codes=("000300.SH", "000852.SH")):
-        """读取中证300/1000的 WSD 历史、隐含波动率及交易所隐含波动率。"""
-        fields=("underlyinghisvol_30d","underlyinghisvol_60d","underlyinghisvol_90d","impliedvol_exch")
-        out={}
+        """固定期限/价值状态曲面，列为(code, tenor, moneyness)，值为年化小数。
+
+        价值状态方向须由 Wind 元数据确认；这里原样传入，不推断看涨/看跌。
+        缺失数据保留 NaN，不跨日期前向填充。asof 限制查询截止日期。
+        """
+        end = min(pd.Timestamp(asof), pd.Timestamp(end))
+        points = ((7,100),(30,90),(30,95),(30,100),(30,105),(60,100))
+        out = {}
         for code in index_codes:
-            for field in fields:
-                out[(code,field)]=self.context.wsd(code,field,start,end)
+            missing = []
+            for tenor, moneyness in points:
+                options = self.surface_options.format(tenor=tenor, moneyness=moneyness)
+                x = self.context.wsd(code, self.surface_field, start, end,
+                                     options=options, strict=True)
+                x = pd.to_numeric(x, errors='coerce') * self.surface_scale
+                x = x.where(np.isfinite(x) & (x >= 0))
+                out[(code,tenor,moneyness)] = x
+                if not x.notna().any():
+                    missing.append((tenor, moneyness))
+            if missing:
+                warnings.warn(f'WSD surface unavailable: {code}, points={missing}; '
+                              f'check field/options/permissions: {self.surface_field}',
+                              RuntimeWarning, stacklevel=2)
         return pd.DataFrame(out)
+
+    @staticmethod
+    def _volatility_metrics(surface, close):
+        """Same-date surface spreads and trailing calendar-30-day RV proxy.
+
+        RV uses daily log returns with 252-day annualization. It is a backward
+        looking comparison, not an estimate of expected future variance premium.
+        """
+        metrics = {}
+        for tenor, m in ((7,100),(30,90),(30,95),(30,100),(30,105),(60,100)):
+            metrics[f'隐含波动率{tenor}天_{m}%'] = surface[(tenor,m)]
+        atm = surface[(30,100)]
+        metrics['95%-100%隐波差_30天'] = surface[(30,95)] - atm
+        metrics['105%-100%隐波差_30天'] = surface[(30,105)] - atm
+        metrics['95%-105%隐波差_30天'] = surface[(30,95)] - surface[(30,105)]
+        metrics['隐波期限差7天-30天'] = surface[(7,100)] - atm
+        metrics['隐波期限差30天-60天'] = atm - surface[(60,100)]
+        close = close.where(np.isfinite(close) & (close > 0)).sort_index()
+        log_returns = np.log(close / close.shift(1))
+        rv = log_returns.rolling('30D', min_periods=15).std() * np.sqrt(252)
+        metrics['历史实现波动率_过去30日历天'] = rv
+        metrics['平值隐波30天-历史实现波动率'] = atm - rv
+        return metrics
     def snapshot(self,asof,history=252,periods=PERIODS,domains=("全市场",), micro_result=None):
         c=self.context; 
         end=c.position(asof); 
@@ -197,29 +248,20 @@ class RiskMonitor:
                     ("最差滚动5日收益",lambda:worst_rolling_loss(ir,history,5,history))
                 ):
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
-        # Wind 指数波动率：直接使用 WSD 指标，避免用本地收益代理替代。
-        for code, label in (("000300.SH","中证300"),("000852.SH","中证1000")):
+        # Use constant-tenor surface points and official index close returns.
+        for code, label in (("000300.SH", "\u6caa\u6df1300"), ("000852.SH", "\u4e2d\u8bc11000")):
             vol = self.option_volatility(asof, c.dates[start], c.dates[end], (code,))
-            for field, name in (
-                ("underlyinghisvol_30d","历史波动率30日"),
-                ("underlyinghisvol_60d","历史波动率60日"),
-                ("underlyinghisvol_90d","历史波动率90日"),
-                ("impliedvol_exch","交易所隐含波动率")
-            ):
-                x=vol.get((code,field),pd.Series(dtype=float)).reindex(c.dates[start:end+1]).ffill().dropna()
-                if len(x):
-                    rows.append({"指标":name,"域":label,"周期":1,"数值":float(x.iloc[-1]),"历史分位":_p(x.to_numpy(),history)})
-            iv=vol.get((code,"impliedvol_exch"),pd.Series(dtype=float)); rv=vol.get((code,"underlyinghisvol_30d"),pd.Series(dtype=float))
-            if len(iv) and len(rv):
-                x=iv.reindex(iv.index.union(rv.index)).ffill().subtract(rv.reindex(iv.index.union(rv.index)).ffill()).dropna()
-                if len(x): rows.append({"指标":"波动率风险溢价","域":label,"周期":1,"数值":float(x.iloc[-1]),"历史分位":_p(x.to_numpy(),history)})
-            rv30=vol.get((code,"underlyinghisvol_30d"),pd.Series(dtype=float))
-            rv60=vol.get((code,"underlyinghisvol_60d"),pd.Series(dtype=float))
-            rv90=vol.get((code,"underlyinghisvol_90d"),pd.Series(dtype=float))
-            for name,a,b in (("波动率期限结构RV30/RV60",rv30,rv60),("波动率期限结构RV60/RV90",rv60,rv90)):
-                if len(a) and len(b):
-                    z=a.reindex(a.index.union(b.index)).ffill().div(b.reindex(a.index.union(b.index)).ffill()).dropna()
-                    if len(z): rows.append({"指标":name,"域":label,"周期":1,"数值":float(z.iloc[-1]),"历史分位":_p(z.to_numpy(),history)})
+            dates = pd.DatetimeIndex(c.dates[start:end+1])
+            surface = vol[code].reindex(dates)
+            close = c.wsd(code, 'close', c.dates[max(0, start-40)], c.dates[end], strict=True)
+            metrics = self._volatility_metrics(surface, close)
+            for name, series in metrics.items():
+                x = series.reindex(dates)
+                # Missing as-of observations stay unavailable, rather than
+                # presenting an older quote as today's value.
+                rows.append({"\u6307\u6807": name, "\u57df": label, "\u5468\u671f": 1,
+                             "\u6570\u503c": float(x.iloc[-1]) if len(x) else np.nan,
+                             "\u5386\u53f2\u5206\u4f4d": _p(x.to_numpy(), history)})
         if micro_result is not None:
             required = ("相对价差分位", "深度下降分位", "Amihud分位")
             if all(k in micro_result for k in required):

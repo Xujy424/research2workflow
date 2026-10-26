@@ -176,18 +176,23 @@ class MarketContext:
         result = pd.to_numeric(result, errors='coerce').sort_index()
         return result.loc[pd.Timestamp(start):pd.Timestamp(end)]
 
-    def wsd(self, code, field, start, end):
+    def wsd(self, code, field, start, end, *, options=None, strict=False):
         """调用 WSDQuant/New，返回单证券日期序列。"""
         start, end = pd.Timestamp(start).strftime('%Y-%m-%d'), pd.Timestamp(end).strftime('%Y-%m-%d')
         if self.wsd_reader is not None:
-            frame = self.wsd_reader(secCodes=code, indicator=field, startDate=start, endDate=end)
+            kwargs = dict(secCodes=code, indicator=field, startDate=start, endDate=end)
+            if options is not None:
+                kwargs['param'] = options
+            frame = self.wsd_reader(**kwargs)
         else:
             params = dict(secCodes=code, indicator=field, startDate=start,
-                          endDate=end, isFromCache='false', param='Period=D')
+                          endDate=end, isFromCache='false', param=options or 'Period=D')
             url = 'http://dataservice/api/WSDQuant/New?' + urlencode(params)
             try:
                 response = self._request_client().request_client(url, None, 'get')
-            except Exception:
+            except Exception as exc:
+                if strict:
+                    raise RuntimeError(f'WSD request failed: {code}, {field}, {options}') from exc
                 return pd.Series(dtype=float, index=pd.DatetimeIndex([]))
             frame = pd.DataFrame(response[0]['CodeData']).rename(columns={'FDate': 'date', 'Value': field})
         return self._series(frame, field, start, end)
