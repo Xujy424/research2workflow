@@ -38,7 +38,9 @@ def _mean_pair_correlation(x):
     if x.shape[1] < 2:
         return np.nan
     if not np.isfinite(x).all():
-        x = np.where(np.isfinite(x), x, np.nanmedian(x, axis=0))
+        finite = np.isfinite(x)
+        medians = np.nanmedian(np.where(finite, x, np.nan), axis=0)
+        x = np.where(finite, x, medians)
     x = x - x.mean(axis=0)
     norms = np.linalg.norm(x, axis=0)
     valid = np.isfinite(norms) & (norms > 0)
@@ -52,6 +54,8 @@ def _mean_pair_correlation(x):
 def _correlation_series(returns, window, downside=False):
     r = _pct(returns)
     vals = []
+    if downside:
+        r = np.where(np.isfinite(r), r, np.nan)
     market = np.nanmean(r, axis=1) if downside else None
     for i in range(window, len(r) + 1):
         x = r[i-window:i]
@@ -80,12 +84,18 @@ def _pca_series(returns, window):
     vals = []
     for i in range(window, len(r) + 1):
         x = r[i-window:i]
-        x = x[:, np.isfinite(x).sum(axis=0) >= int(window * .8)]
+        finite = np.isfinite(x)
+        # Require at least 80% finite observations (round up).
+        keep = finite.sum(axis=0) >= max(1, int(np.ceil(window * .8)))
+        x = x[:, keep]
+        finite = finite[:, keep]
         if x.shape[1] < 2:
             vals.append(np.nan)
             continue
-        # Preserve the existing missing-value/centering convention.
-        x = np.nan_to_num(x - x.mean(axis=0))
+        # Fill missing returns with each stock's finite-observation mean.
+        # After centering, those entries are zero; observed deviations survive.
+        means = np.where(finite, x, 0.0).sum(axis=0) / finite.sum(axis=0)
+        x = np.where(finite, x, means) - means
         x -= x.mean(axis=0)
         # X.T @ X and X @ X.T have the same nonzero eigenvalues.
         # The covariance normalization cancels in lambda_max / trace.
