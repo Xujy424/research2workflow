@@ -131,8 +131,10 @@ class SRDispersionStdnumtradesContext(AlphaContext):
         if key in self._daily_cache:
             return self._daily_cache[key]
         cfg = self.config
+        source_date = str(self.data.axis.trade_dates[day]) if hasattr(self.data.axis, 'trade_dates') else str(day)
         if cfg.show_progress:
-            print(f'sr_dispersion_stdnumtrades: loading source day {day} minute data', file=sys.stdout, flush=True)
+            tqdm.write(f'[sr_dispersion_stdnumtrades] reading source {source_date}', file=sys.stdout)
+            sys.stdout.flush()
         n = self.data.axis.tick_count
         close = self._read('m_essentials/close', day)
         volume = self._read('m_essentials/volume', day)
@@ -167,7 +169,7 @@ class SRDispersionStdnumtradesContext(AlphaContext):
             results = self._executor.map(_stock_feature, tasks, chunksize=32)
         else:
             results = map(_stock_feature, tasks)
-        for stock, value in tqdm(results, total=len(stocks), desc=f'sr_dispersion_stdnumtrades day {day} stocks', file=sys.stdout, leave=False, mininterval=1, disable=not cfg.show_progress, bar_format='{desc}: {n_fmt}/{total_fmt} [{elapsed}, {rate_fmt}]'):
+        for stock, value in tqdm(results, total=len(stocks), desc=f'sr_dispersion_stdnumtrades day {day} stocks', file=sys.stdout, leave=False, mininterval=1, disable=not cfg.show_progress or not sys.stdout.isatty(), bar_format='{desc}: {n_fmt}/{total_fmt} [{elapsed}, {rate_fmt}]', position=1):
             output['sr_dispersion_stdnumtrades'][stock] = value
         self._daily_cache[key] = output
         oldest = day - cfg.lookback_days - cfg.lag_days
@@ -194,6 +196,13 @@ class SRDispersionStdnumtradesFactor(AlphaBase):
         start = end - cfg.lookback_days + 1
         if start < 0:
             return np.full(axis.tick_count, np.nan, dtype=np.float32)
+        if cfg.show_progress:
+            cache = getattr(self.context, '_daily_cache', {})
+            missing = sum((day not in cache for day in range(start, end + 1)))
+            if missing:
+                phase = 'window warm-up' if missing > 1 else 'daily increment'
+                tqdm.write(f'[sr_dispersion_stdnumtrades] {phase}: {missing} new source day(s), {cfg.lookback_days - missing} cached', file=sys.stdout)
+                sys.stdout.flush()
         rows = np.stack([self.context.daily_features(day)[self.meta.name] for day in range(start, end + 1)])
         valid = np.isfinite(rows)
         count = valid.sum(0)

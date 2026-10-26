@@ -7,6 +7,8 @@ from pathlib import Path
 from datetime import time
 from types import SimpleNamespace
 from dataclasses import replace
+from contextlib import redirect_stdout
+from io import StringIO
 
 import numpy as np
 import polars as pl
@@ -143,6 +145,29 @@ class VolumeDispersionTests(unittest.TestCase):
         context.data.axis.date_position = lambda _: 9
         self.assertTrue(np.isnan(VRQuantileResidCorrFactor(context).calculate("2026-10-26")).all())
         self.assertEqual(calls, [])
+
+    def test_progress_distinguishes_warmup_from_daily_increment(self):
+        calls, cache = [], {}
+
+        def daily(day):
+            if day not in cache:
+                calls.append(day)
+                cache[day] = {"vr_quantile_resid_corr": np.array([float(day), np.nan])}
+            return cache[day]
+
+        axis = SimpleNamespace(tick_count=2, date_position=lambda _: 15)
+        context = SimpleNamespace(config=VolumeDispersionConfig(), daily_features=daily,
+                                  _daily_cache=cache, data=SimpleNamespace(axis=axis))
+        output = StringIO()
+        with redirect_stdout(output):
+            factor = VRQuantileResidCorrFactor(context)
+            factor.calculate("2026-06-29")
+            axis.date_position = lambda _: 16
+            factor.calculate("2026-06-30")
+        self.assertEqual(calls, list(range(5, 16)))
+        self.assertIn("window warm-up: 10 new source day(s), 0 cached", output.getvalue())
+        self.assertIn("daily increment: 1 new source day(s), 9 cached", output.getvalue())
+        self.assertNotIn("\r", output.getvalue())
 
     def test_daily_families_and_missing_numtrades(self):
         rng = np.random.default_rng(156)

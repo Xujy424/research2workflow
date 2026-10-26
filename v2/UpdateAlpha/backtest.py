@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from time import perf_counter
 import argparse
 import inspect
 import json
@@ -317,12 +318,28 @@ def run_registered(
         factor = spec.factor_class(context)
         if calculate:
             selected_dates, _, _ = select_period(context, start_date, end_date)
-            for trade_date in tqdm(
+            interactive = sys.stdout.isatty()
+            for completed, trade_date in enumerate(tqdm(
                 selected_dates,
                 desc=f"Updating {factor.meta.name}",
                 file=sys.stdout,
-            ):
+                disable=not interactive,
+                position=0,
+            ), start=1):
+                started = perf_counter()
+                if not interactive:
+                    print(
+                        f"[{factor.meta.name}] {completed}/{len(selected_dates)} "
+                        f"{pd.Timestamp(trade_date):%Y-%m-%d}: calculating",
+                        flush=True,
+                    )
                 factor.update(trade_date, folder=folder)
+                if not interactive:
+                    print(
+                        f"[{factor.meta.name}] {completed}/{len(selected_dates)} "
+                        f"completed in {perf_counter() - started:.1f}s",
+                        flush=True,
+                    )
 
         return plot_group_ret(
             factor.meta.name,

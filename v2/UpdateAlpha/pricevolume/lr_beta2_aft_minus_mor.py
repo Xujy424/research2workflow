@@ -55,8 +55,10 @@ class LRBeta2AftMinusMorContext(AlphaContext):
         if key in self._daily_cache:
             return self._daily_cache[key]
         cfg = self.config
+        source_date = str(self.data.axis.trade_dates[day]) if hasattr(self.data.axis, 'trade_dates') else str(day)
         if cfg.show_progress:
-            print(f'lr_beta2_aft_minus_mor: loading source day {day} minute data', file=sys.stdout, flush=True)
+            tqdm.write(f'[lr_beta2_aft_minus_mor] reading source {source_date}', file=sys.stdout)
+            sys.stdout.flush()
         n = self.data.axis.tick_count
         close = self._read('m_essentials/close', day)
         volume = self._read('m_essentials/volume', day)
@@ -99,7 +101,7 @@ class LRBeta2AftMinusMorContext(AlphaContext):
                             error = np.sum((target - design @ coefficient) ** 2, axis=0)
                             scores[columns] = 1 - np.divide(error, variance, out=np.full(len(columns), np.nan), where=variance > 0)
             irregular = np.flatnonzero(eligible & ~complete)
-            for stock in tqdm(irregular, desc=f'lr_beta2_aft_minus_mor day {day} missing-sample fits', file=sys.stdout, leave=False, mininterval=1, disable=not cfg.show_progress):
+            for stock in tqdm(irregular, desc=f'lr_beta2_aft_minus_mor day {day} missing-sample fits', file=sys.stdout, leave=False, mininterval=1, disable=not cfg.show_progress or not sys.stdout.isatty(), position=1):
                 mask = paired[:, stock] & segment
                 if mask.sum() < max(3, threshold):
                     continue
@@ -134,6 +136,13 @@ class LRBeta2AftMinusMorFactor(AlphaBase):
         start = end - cfg.lookback_days + 1
         if start < 0:
             return np.full(axis.tick_count, np.nan, dtype=np.float32)
+        if cfg.show_progress:
+            cache = getattr(self.context, '_daily_cache', {})
+            missing = sum((day not in cache for day in range(start, end + 1)))
+            if missing:
+                phase = 'window warm-up' if missing > 1 else 'daily increment'
+                tqdm.write(f'[lr_beta2_aft_minus_mor] {phase}: {missing} new source day(s), {cfg.lookback_days - missing} cached', file=sys.stdout)
+                sys.stdout.flush()
         rows = np.stack([self.context.daily_features(day)[self.meta.name] for day in range(start, end + 1)])
         valid = np.isfinite(rows)
         count = valid.sum(0)
