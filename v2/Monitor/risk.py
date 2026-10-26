@@ -229,19 +229,19 @@ class RiskMonitor:
 
     @staticmethod
     def _volatility_metrics(surface, close):
-        """原表：RV5/20/60、期限比值、IV30 与方差风险溢价代理。
+        """IV30 与方差风险溢价代理；RV5/20/60 在域指标中统一计算。
 
         RV 按交易日、简单收益样本标准差计算，统一年化小数。
         代理的 RV30 为30个交易日，与 IV30 的日历期限并非严格匹配。
         """
         close = close.where(np.isfinite(close) & (close > 0)).sort_index()
         returns = close.pct_change(fill_method=None)
-        metrics = _rv_metrics(returns)
         atm = surface[(30,100)]
         rv30 = returns.rolling(30).std(ddof=1) * np.sqrt(252)
-        metrics['指数隐含波动率IV30'] = atm
-        metrics['波动率风险溢价代理IV30²-RV30²'] = atm**2 - rv30**2
-        return metrics
+        return {
+            '指数隐含波动率IV30': atm,
+            '波动率风险溢价代理IV30²-RV30²': atm**2 - rv30**2,
+        }
     def snapshot(self,asof,history=252,periods=PERIODS,domains=("全市场",), micro_result=None):
         c=self.context; 
         end=c.position(asof); 
@@ -253,7 +253,6 @@ class RiskMonitor:
         eligible = np.isfinite(price_floor) & (price_floor > 0)
         dates = pd.DatetimeIndex(c.dates[start:end+1])
         rows=[]
-        rv_names = set()
         for domain in domains:
             w=c.domain_weights(start,end,domain)
             member = np.isfinite(w) & (w > 0)
@@ -279,7 +278,6 @@ class RiskMonitor:
                 ):
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
             rv = _rv_metrics(pd.Series(ir, index=dates))
-            rv_names.update(rv)
             for name, series in rv.items():
                 rows.append({"指标":name,"域":domain,"周期":1,
                              "数值":float(series.iloc[-1]),"历史分位":_p(series.to_numpy(),history)})
@@ -293,8 +291,6 @@ class RiskMonitor:
             close = c.wsd(code, 'close', c.dates[max(0, start-65)], c.dates[end])
             metrics = self._volatility_metrics(surface, close)
             for name, series in metrics.items():
-                if label in domains and name in rv_names:
-                    continue
                 x = series.reindex(dates)
                 # Missing as-of observations stay unavailable, rather than
                 # presenting an older quote as today's value.
