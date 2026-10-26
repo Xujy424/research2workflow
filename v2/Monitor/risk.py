@@ -141,6 +141,7 @@ def realized_volatility(index_returns, window=20, period=1, history=252):
     vals=pd.Series(_pct(index_returns).reshape(-1)).rolling(window).std().to_numpy()*np.sqrt(252)
     return float(np.nanmean(vals[-period:])),_p(vals,history)
 
+
 class RiskContext(MarketContext):
     """风险模块数据上下文。
 
