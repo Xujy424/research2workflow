@@ -22,31 +22,83 @@ def cross_section_dispersion(returns, period=1, history=252):
     r=_pct(returns); daily=np.nanstd(r,axis=1)
     return float(np.nanmean(daily[-period:])), _p(daily,history)
 
+def _summarize(vals, period, history):
+    return (float(np.nanmean(vals[-period:])), _p(vals, history)) if len(vals) else (np.nan, np.nan)
+
+
+def _mean_pair_correlation(x):
+    """Exact off-diagonal mean in O(T*N), without an N*N matrix.
+
+    For centered unit-norm columns z_j, sum(i != j) corr(i,j)
+    equals ||sum_j z_j||**2 - n. Constant/empty columns are excluded,
+    matching nanmean(corrcoef(...)) after per-column median imputation.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[:, np.isfinite(x).any(axis=0)]
+    if x.shape[1] < 2:
+        return np.nan
+    if not np.isfinite(x).all():
+        x = np.where(np.isfinite(x), x, np.nanmedian(x, axis=0))
+    x = x - x.mean(axis=0)
+    norms = np.linalg.norm(x, axis=0)
+    valid = np.isfinite(norms) & (norms > 0)
+    n = int(valid.sum())
+    if n < 2:
+        return np.nan
+    zsum = (x[:, valid] / norms[valid]).sum(axis=1)
+    return float(np.clip((zsum @ zsum - n) / (n * (n - 1)), -1, 1))
+
+
+def _correlation_series(returns, window, downside=False):
+    r = _pct(returns)
+    vals = []
+    market = np.nanmean(r, axis=1) if downside else None
+    for i in range(window, len(r) + 1):
+        x = r[i-window:i]
+        if downside:
+            m = market[i-window:i]
+            x = x[m <= np.nanquantile(m, 0.10)]
+            if len(x) < 3:
+                vals.append(np.nan)
+                continue
+        vals.append(_mean_pair_correlation(x))
+    return np.asarray(vals)
+
+
 def average_correlation(returns, window=60, period=1, history=252):
-    """平均收益相关性：滚动60日股票两两收益相关系数的非对角均值。"""
-    r=_pct(returns); vals=[]
-    for i in range(window,len(r)+1):
-        x=r[i-window:i]; x=np.where(np.isfinite(x),x,np.nanmedian(x,axis=0)); c=np.corrcoef(x.T); vals.append(np.nanmean(c[np.triu_indices_from(c,1)]))
-    return (float(np.nanmean(vals[-period:])),_p(vals,history)) if vals else (np.nan,np.nan)
+    """Rolling mean pair correlation via normalized column sums."""
+    return _summarize(_correlation_series(returns, window), period, history)
+
 
 def downside_correlation(returns, window=120, period=1, history=252):
-    """在滚动120日中筛选市场收益最低10%的日期后计算相关性。"""
-    r=_pct(returns); vals=[]
-    for i in range(window,len(r)+1):
-        x=r[i-window:i]; market=np.nanmean(x,axis=1); cutoff=np.nanquantile(market,0.10); x=x[market<=cutoff]
-        if len(x)<3: vals.append(np.nan); continue
-        x=np.where(np.isfinite(x),x,np.nanmedian(x,axis=0)); c=np.corrcoef(x.T); vals.append(np.nanmean(c[np.triu_indices_from(c,1)]))
-    return (float(np.nanmean(vals[-period:])),_p(vals,history)) if vals else (np.nan,np.nan)
+    """Rolling correlation on the lowest 10% of market-return days."""
+    return _summarize(_correlation_series(returns, window, downside=True), period, history)
+
+
+def _pca_series(returns, window):
+    r = _pct(returns)
+    vals = []
+    for i in range(window, len(r) + 1):
+        x = r[i-window:i]
+        x = x[:, np.isfinite(x).sum(axis=0) >= int(window * .8)]
+        if x.shape[1] < 2:
+            vals.append(np.nan)
+            continue
+        # Preserve the existing missing-value/centering convention.
+        x = np.nan_to_num(x - x.mean(axis=0))
+        x -= x.mean(axis=0)
+        # X.T @ X and X @ X.T have the same nonzero eigenvalues.
+        # The covariance normalization cancels in lambda_max / trace.
+        gram = x @ x.T if x.shape[0] <= x.shape[1] else x.T @ x
+        total = np.trace(gram)
+        vals.append(float(np.linalg.eigvalsh(gram)[-1] / total) if total > 0 else np.nan)
+    return np.asarray(vals)
+
 
 def pca_explained_ratio(returns, window=60, period=1, history=252):
-    """首主成分解释率：滚动60日收益协方差矩阵第一特征值占比。"""
-    r=_pct(returns); vals=[]
-    for i in range(window,len(r)+1):
-        x=r[i-window:i]; x=x[:,np.isfinite(x).sum(0)>=int(window*.8)]
-        if x.shape[1]<2: vals.append(np.nan); continue
-        x=np.nan_to_num(x-x.mean(0)); s=np.linalg.svd(np.cov(x,rowvar=False),compute_uv=False)
-        vals.append(float(s[0]/s.sum()) if s.sum()>0 else np.nan)
-    return (float(np.nanmean(vals[-period:])),_p(vals,history)) if vals else (np.nan,np.nan)
+    """Leading covariance eigenvalue share via the smaller Gram matrix."""
+    return _summarize(_pca_series(returns, window), period, history)
+
 
 def downside_resonance(returns, hit_floor=None, has_trade=None, period=1, history=252):
     """下行共振：负收益、极端下跌和跌停扩散三个分量等权平均。"""
@@ -112,15 +164,16 @@ class RiskMonitor:
         c=self.context; end=c.position(asof); start=max(0,end-history-260); r=c.matrix(self.fields["returns"],start,end)
         floor=c.matrix(self.fields["hit_floor"],start,end).astype(bool)
         trade=c.matrix(self.fields["has_trade"],start,end).astype(bool)
-        if r.shape[1] > 300:
-            keep=np.linspace(0,r.shape[1]-1,300,dtype=int); r=r[:,keep]; floor=floor[:,keep]; trade=trade[:,keep]
+        # These unweighted market series are shared across periods and domains.
+        correlation = _correlation_series(r, 60)
+        downside = _correlation_series(r, 120, downside=True)
+        pca = _pca_series(r, 60)
         rows=[]
         for domain in domains:
             w=c.domain_weights(start,end,domain)
-            if r.shape[1] != w.shape[1]: w=w[:,keep]
             ir=np.array([weighted_mean(_pct(r[t]),w[t-1]) if t else np.nan for t in range(len(r))])
             for p in periods:
-                for n,fn in (("横截面收益离散度",lambda:cross_section_dispersion(r,p,history)),("平均收益相关性",lambda:average_correlation(r,60,p,history)),("下跌条件相关性",lambda:downside_correlation(r,120,p,history)),("首主成分解释率",lambda:pca_explained_ratio(r,60,p,history)),("下行共振",lambda:downside_resonance(r,floor,trade,p,history)),("跌停扩散比例",lambda:limit_down_ratio(floor,trade,p,history)),("最差滚动5日收益",lambda:worst_rolling_loss(ir,history,5,history))):
+                for n,fn in (("横截面收益离散度",lambda:cross_section_dispersion(r,p,history)),("平均收益相关性",lambda:_summarize(correlation,p,history)),("下跌条件相关性",lambda:_summarize(downside,p,history)),("首主成分解释率",lambda:_summarize(pca,p,history)),("下行共振",lambda:downside_resonance(r,floor,trade,p,history)),("跌停扩散比例",lambda:limit_down_ratio(floor,trade,p,history)),("最差滚动5日收益",lambda:worst_rolling_loss(ir,history,5,history))):
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
         # Wind 指数波动率：直接使用 WSD 指标，避免用本地收益代理替代。
         for code, label in (("000300.SH","中证300"),("000852.SH","中证1000")):
