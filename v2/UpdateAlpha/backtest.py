@@ -16,6 +16,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import argparse
+import inspect
+import json
+from dataclasses import is_dataclass, replace
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -29,6 +33,7 @@ if __package__:
     from ..ResearchFlow.FactorTest.metrics import IC, rankIC
     from ..ResearchFlow.matrix_math import calc_group_ret
     from ..UpdateData.config import ROOT
+    from ..GetData import DataPool
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
     if str(PROJECT_ROOT) not in sys.path:
@@ -38,6 +43,7 @@ else:
     from v2.ResearchFlow.FactorTest.metrics import IC, rankIC
     from v2.ResearchFlow.matrix_math import calc_group_ret
     from v2.UpdateData.config import ROOT
+    from v2.GetData import DataPool
 
 
 DEFAULT_ROOT = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
@@ -85,11 +91,13 @@ def _forward_label(
     return_offset,
 ):
     """Build labels using pct[t + offset : t + offset + horizon]."""
+    label = np.full(pred_shape, np.nan, dtype=np.float64)
+    if len(daily_return) - return_offset < horizon:
+        return label
     windows = np.lib.stride_tricks.sliding_window_view(
         daily_return[return_offset:], horizon, axis=0
     )
     forward_return = np.prod(1.0 + windows, axis=-1) - 1.0
-    label = np.full(pred_shape, np.nan, dtype=np.float64)
     selected = forward_return[start_idx:end_idx + 1]
     label[:len(selected)] = selected
     return label
@@ -140,6 +148,15 @@ def plot_group_ret(
         where=count > 1,
     ))
     pred = np.divide(centered, std, out=np.full_like(pred, np.nan), where=std > 0)
+    if num_groups < 2:
+        raise ValueError("num_groups must be at least 2")
+    usable = np.isfinite(pred).sum(axis=1) >= num_groups
+    if not usable.any():
+        raise ValueError(
+            f"{name}: no date has {num_groups} valid, varying factor values; "
+            "check source data, warm-up history, universe and calculation dates"
+        )
+    pred[~usable] = np.nan
 
     direction = factor_class.meta.direction if factor_class is not None else 1
     test_pred = pred * direction
@@ -172,12 +189,22 @@ def plot_group_ret(
             horizon,
             return_offset,
         )
-        ic = IC(test_pred, label)
-        rank_ic = rankIC(test_pred, label)
-        group_return = calc_group_ret(test_pred, label, num_groups)
+        paired = np.isfinite(test_pred) & np.isfinite(label)
+        evaluable = paired.sum(axis=1) >= num_groups
+        ic, rank_ic = np.full(len(pred), np.nan), np.full(len(pred), np.nan)
+        group_return = np.full((num_groups, len(pred)), np.nan)
+        if evaluable.any():
+            signals = np.where(paired[evaluable], test_pred[evaluable], np.nan)
+            labels = label[evaluable]
+            ic[evaluable] = IC(signals, labels)
+            rank_ic[evaluable] = rankIC(signals, labels)
+            group_return[:, evaluable] = calc_group_ret(signals, labels, num_groups)
+        else:
+            ax.text(.5, .5, "No complete forward-return windows", transform=ax.transAxes,
+                    ha="center", va="center")
         cumulative_return = np.nancumsum(group_return, axis=1)
 
-        for group, values in enumerate(cumulative_return, start=1):
+        for group, values in enumerate(cumulative_return if evaluable.any() else (), start=1):
             suffix = (
                 " (Low)" if group == 1
                 else " (High)" if group == num_groups
@@ -191,14 +218,15 @@ def plot_group_ret(
                 label=f"Group {group}{suffix}",
             )
 
-        mean_ic = float(np.nanmean(ic))
-        mean_rank_ic = float(np.nanmean(rank_ic))
+        mean_ic = float(np.mean(ic[np.isfinite(ic)])) if np.isfinite(ic).any() else np.nan
+        mean_rank_ic = float(np.mean(rank_ic[np.isfinite(rank_ic)])) if np.isfinite(rank_ic).any() else np.nan
         stats.append(
             {
                 "factor": name,
                 "horizon": horizon,
                 "mean_ic": mean_ic,
                 "mean_rank_ic": mean_rank_ic,
+                "valid_dates": int(np.sum(np.isfinite(group_return).any(axis=0))),
             }
         )
         ax.set_title(
@@ -207,7 +235,8 @@ def plot_group_ret(
         )
         ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
         ax.grid(alpha=0.25)
-        ax.legend(ncol=2, fontsize=8)
+        if evaluable.any():
+            ax.legend(ncol=2, fontsize=8)
         locator = mdates.AutoDateLocator()
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
@@ -228,7 +257,7 @@ def plot_group_ret(
     destination = (
         Path(output_dir)
         if output_dir is not None
-        else Path.cwd() / "v2"/"UpdateAlpha"/"output" / name
+        else Path(__file__).resolve().parent / "output" / name
     )
     destination.mkdir(parents=True, exist_ok=True)
     first_date = pd.Timestamp(selected_dates[0])
@@ -238,7 +267,9 @@ def plot_group_ret(
     fig.savefig(output, dpi=160, bbox_inches="tight")
     plt.close(fig)
     print(f"saved: {output}")
-    return output, pd.DataFrame(stats)
+    stats = pd.DataFrame(stats)
+    stats.to_csv(destination / f"{name}_stats_{range_tag}.csv", index=False)
+    return output, stats
 
 
 def run_registered(
@@ -272,8 +303,17 @@ def run_registered(
         raise ValueError("pass universe directly, not through context_kwargs")
     kwargs.setdefault("root", root)
     kwargs["universe"] = universe
-    
-    with spec.context_class(**kwargs) as context:
+    if isinstance(kwargs.get("config"), dict):
+        parameter = inspect.signature(spec.context_class).parameters.get("config")
+        default = parameter.default if parameter is not None else None
+        if not is_dataclass(default):
+            raise TypeError(f"{spec.name} does not have a dataclass config default")
+        kwargs["config"] = replace(default, **kwargs["config"])
+
+    # Existing matrices need only local data, even for SQL-backed factors.
+    context = (spec.create_context(**kwargs) if calculate else
+               AlphaContext(DataPool(kwargs["root"], asset="stock"), universe=universe))
+    with context:
         factor = spec.factor_class(context)
         if calculate:
             selected_dates, _, _ = select_period(context, start_date, end_date)
@@ -335,6 +375,8 @@ def run_from_ide(
 ):
     """Run one or more factors directly from Python without parsing argv."""
 
+    if isinstance(factors, str):
+        factors = (factors,)
     results = {}
     for name in factors:
         output, stats = run_registered(
@@ -357,13 +399,52 @@ def run_from_ide(
     return results
 
 
-if __name__ == "__main__":
-    # IDE direct-run configuration. Factor names are shown by list_factors().
-    from v2.UpdateAlpha.pricevolume.tgd import TGDConfig
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("factors", nargs="*")
+    parser.add_argument("--list", action="store_true", help="list valid factor names")
+    parser.add_argument("--start", dest="start_date")
+    parser.add_argument("--end", dest="end_date")
+    parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    parser.add_argument("--plot-only", action="store_true")
+    parser.add_argument("--folder", default="factor_pool")
+    parser.add_argument("--horizons", nargs="+", type=int, default=DEFAULT_HORIZONS)
+    parser.add_argument("--num-groups", type=int, default=10)
+    parser.add_argument("--return-offset", type=int, default=2)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--universe", default="self")
+    parser.add_argument("--config", type=json.loads, help="factor config overrides as a JSON object")
+    parser.add_argument("--l2-root", type=Path)
+    args = parser.parse_args(argv)
+    if args.list:
+        print(list_factors().to_string(index=False))
+        return
+    if not args.factors:
+        parser.error("provide a factor name or --list")
+    kwargs = {}
+    if args.config is not None:
+        if not isinstance(args.config, dict):
+            parser.error("--config must be a JSON object")
+        kwargs["config"] = args.config
+    if args.l2_root is not None:
+        kwargs["l2_root"] = args.l2_root
+    return run_from_ide(
+        args.factors, start_date=args.start_date, end_date=args.end_date,
+        root=args.root, calculate=not args.plot_only, folder=args.folder,
+        horizons=args.horizons, num_groups=args.num_groups,
+        return_offset=args.return_offset, output_dir=args.output_dir,
+        universe=args.universe, context_kwargs=kwargs,
+    )
 
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        main()
+        raise SystemExit(0)
+    # IDE direct-run configuration. Factor names are shown by list_factors().
     FACTORS = ("vm_diff",)  # cov, cov_current, cov_decay_optimized, extra_large_attention, main_force_control, sentiment_instability, vm_diff
     # CONTEXT_KWARGS = {
-    #     "config": TGDConfig(extreme_minutes=None),
+    #     "config": {"extreme_minutes": None},  # Example for tgd.
     # }
     CONTEXT_KWARGS = None
 

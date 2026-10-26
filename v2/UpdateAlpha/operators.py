@@ -146,6 +146,9 @@ def time_series_range(values, window, min_observations):
 def time_series_corr(x, y, min_observations):
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
+    scalar = x.ndim == 1 and y.ndim == 1
+    if scalar:
+        x, y = x[:, None], y[:, None]
     if x.ndim != 2 or y.shape != x.shape:
         raise ValueError("x and y must share a time x observations shape")
     valid = np.isfinite(x) & np.isfinite(y)
@@ -161,11 +164,43 @@ def time_series_corr(x, y, min_observations):
     xc = np.where(valid, x - x_mean, 0.0)
     yc = np.where(valid, y - y_mean, 0.0)
     denominator = np.sqrt(np.sum(xc * xc, axis=0) * np.sum(yc * yc, axis=0))
-    return np.divide(
+    result = np.divide(
         np.sum(xc * yc, axis=0), denominator,
         out=np.full(x.shape[1], np.nan),
         where=(count >= min_observations) & (denominator > 0),
     )
+    return float(result[0]) if scalar else result
+
+
+def linear_quantile_residual(y, design, quantile):
+    """Residuals from linear check-loss minimization on finite observations.
+
+    ``design`` contains any desired intercept. No intercept, lag, selection
+    rule or domain-specific feature is implicitly added to the regression.
+    """
+    from scipy.optimize import linprog
+    from scipy.sparse import csr_matrix, eye, hstack
+
+    y, design = np.asarray(y, float), np.asarray(design, float)
+    if y.ndim != 1 or design.ndim != 2 or len(y) != len(design) or not len(y):
+        raise ValueError("expected nonempty y[N] and design[N, P]")
+    if not 0 < quantile < 1:
+        raise ValueError("quantile must be strictly between zero and one")
+    if not np.isfinite(y).all() or not np.isfinite(design).all():
+        raise ValueError("quantile regression inputs must be finite")
+    n, p = design.shape
+    scale = np.linalg.norm(design, axis=0)
+    scale[scale == 0] = 1
+    x = design / scale
+    constraints = hstack((csr_matrix(x), eye(n), -eye(n)), format="csr")
+    fit = linprog(
+        np.r_[np.zeros(p), np.full(n, quantile), np.full(n, 1 - quantile)],
+        A_eq=constraints, b_eq=y,
+        bounds=[(None, None)] * p + [(0, None)] * (2 * n), method="highs",
+    )
+    if not fit.success:
+        raise RuntimeError(f"quantile regression failed: {fit.message}")
+    return y - x @ fit.x[:p]
 
 
 __all__ = [
@@ -174,6 +209,7 @@ __all__ = [
     "safe_ratio_return",
     "selected_mean_diff",
     "time_series_corr",
+    "linear_quantile_residual",
     "time_series_range",
     "time_series_zscore",
 ]

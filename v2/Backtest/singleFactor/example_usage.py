@@ -236,6 +236,7 @@ def load_backtest_inputs(
         get_factor_spec(name).factor_class.meta.direction
         if adjust_direction else 1
     )
+    name = get_factor_spec(name).name if adjust_direction else name.strip().lower()
     with DataPool(root, asset="stock") as data:
         dates = pd.DatetimeIndex(data.axis.trade_dates)
         selected = np.flatnonzero(
@@ -292,10 +293,21 @@ if __name__ == "__main__":
     END_DATE = "2026-06-30"
     UNIVERSE = 'zzfull'
     FACTOR_NAME = "vm_diff"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
+    CALCULATE_FACTOR = True  # False reuses the existing factor matrix.
+    FACTOR_CONTEXT_KWARGS = None  # e.g. {"config": {"lookback_days": 20}}
     SIGNAL_LAG = 2
     SHOW_PLOTS = False
     OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / FACTOR_NAME
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Use the same name/context registry for calculation and grouped plots.
+    from v2.UpdateAlpha.backtest import run_registered
+    run_registered(
+        FACTOR_NAME, start_date=START_DATE, end_date=END_DATE,
+        root=ROOT_PATH, calculate=CALCULATE_FACTOR, universe=UNIVERSE,
+        return_offset=SIGNAL_LAG, output_dir=OUTPUT_DIR,
+        context_kwargs=FACTOR_CONTEXT_KWARGS,
+    )
 
     inputs = load_backtest_inputs(
         ROOT_PATH,
