@@ -161,7 +161,10 @@ class RiskMonitor:
                 out[(code,field)]=self.context.wsd(code,field,start,end)
         return pd.DataFrame(out)
     def snapshot(self,asof,history=252,periods=PERIODS,domains=("全市场",), micro_result=None):
-        c=self.context; end=c.position(asof); start=max(0,end-history-260); r=c.matrix(self.fields["returns"],start,end)
+        c=self.context; 
+        end=c.position(asof); 
+        start=max(0,end-history-260); 
+        r=c.matrix(self.fields["returns"],start,end)
         floor=c.matrix(self.fields["hit_floor"],start,end).astype(bool)
         trade=c.matrix(self.fields["has_trade"],start,end).astype(bool)
         # These unweighted market series are shared across periods and domains.
@@ -173,7 +176,15 @@ class RiskMonitor:
             w=c.domain_weights(start,end,domain)
             ir=np.array([weighted_mean(_pct(r[t]),w[t-1]) if t else np.nan for t in range(len(r))])
             for p in periods:
-                for n,fn in (("横截面收益离散度",lambda:cross_section_dispersion(r,p,history)),("平均收益相关性",lambda:_summarize(correlation,p,history)),("下跌条件相关性",lambda:_summarize(downside,p,history)),("首主成分解释率",lambda:_summarize(pca,p,history)),("下行共振",lambda:downside_resonance(r,floor,trade,p,history)),("跌停扩散比例",lambda:limit_down_ratio(floor,trade,p,history)),("最差滚动5日收益",lambda:worst_rolling_loss(ir,history,5,history))):
+                for n,fn in (
+                    ("横截面收益离散度",lambda:cross_section_dispersion(r,p,history)),
+                    ("平均收益相关性",lambda:_summarize(correlation,p,history)),
+                    ("下跌条件相关性",lambda:_summarize(downside,p,history)),
+                    ("首主成分解释率",lambda:_summarize(pca,p,history)),
+                    ("下行共振",lambda:downside_resonance(r,floor,trade,p,history)),
+                    ("跌停扩散比例",lambda:limit_down_ratio(floor,trade,p,history)),
+                    ("最差滚动5日收益",lambda:worst_rolling_loss(ir,history,5,history))
+                ):
                     v,h=fn(); rows.append({"指标":n,"域":domain,"周期":p,"数值":v,"历史分位":h})
         # Wind 指数波动率：直接使用 WSD 指标，避免用本地收益代理替代。
         for code, label in (("000300.SH","中证300"),("000852.SH","中证1000")):
