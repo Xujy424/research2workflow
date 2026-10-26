@@ -5,7 +5,7 @@ const req=createRequire('C:/Users/xujiayi/.cache/codex-runtimes/codex-primary-ru
 const {Presentation,PresentationFile}=await import(pathToFileURL(req.resolve('@oai/artifact-tool')).href);
 const p=Presentation.create({slideSize:{width:1280,height:720}});
 const rows=[
-['AI风格感知：检验PRIME思路的适用性',true],
+['AI风格感知：条件输入与状态门控',true],
 ['Q1整理宏观与风格指标，结合各类因子，为现有时序模型补充市场状态输入。',false],
 ['Q2比较有无风格感知的模型，检查不同市场阶段的因子权重与样本外表现。',false],
 ['多任务学习：共享GRU，预测不同期限',true],
