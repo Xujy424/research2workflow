@@ -298,28 +298,14 @@ if __name__ == '__main__':
     import warnings
     warnings.filterwarnings('ignore', category=RuntimeWarning)
     context = MarketContext()
-    # try:
-    #     result = StyleMonitor(context).snapshot('2026-09-30')
-    #     for section in ('market', 'industry', 'style'):
-    #         print(f'\n===== {section} =====')
-    #         print(StyleMonitor.table(result, section))
-    # finally:
-    #     context.close()
+    try:
+        result = StyleMonitor(context).snapshot('2026-09-30')
+        for section in ('market', 'industry', 'style'):
+            print(f'\n===== {section} =====')
+            print(StyleMonitor.table(result, section))
+    finally:
+        context.close()
 
 
-    from tqdm import tqdm
-    import matplotlib.pyplot as plt
-
-    dates = np.load("Z:/axis/dates.npy", allow_pickle=True)
-    valid_dates = dates[~np.isnat(dates)][2000:]
-    growth2values = []
-    for date in tqdm(valid_dates):
-        str_date = pd.Timestamp(date).strftime("%Y-%m-%d")
-        result = StyleMonitor(context).snapshot(date)
-        val = result['style'].loc['成长价值收益差分位',10]
-        growth2values.append(val)
-    growth2values = pd.Series(np.array(growth2values), index=valid_dates)
-    growth2values.plot()
-    plt.show()
 
 
