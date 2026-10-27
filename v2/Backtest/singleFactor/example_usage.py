@@ -292,7 +292,7 @@ if __name__ == "__main__":
     START_DATE = "2026-01-01"
     END_DATE = "2026-09-27"
     UNIVERSE = 'zzfull'
-    FACTOR_NAME = "bayeshighvol_onset"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
+    FACTOR_NAME = "vr_quantile_resid_corr"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
     CALCULATE_FACTOR = False  # False reuses the existing factor matrix.
     FACTOR_CONTEXT_KWARGS = None  # e.g. {"config": {"lookback_days": 20}}
     SIGNAL_LAG = 2
