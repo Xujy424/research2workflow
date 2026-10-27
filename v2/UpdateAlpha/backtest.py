@@ -459,13 +459,13 @@ if __name__ == "__main__":
         main()
         raise SystemExit(0)
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("sr_dispersion_stdnumtrades",)  # cov, cov_current, cov_decay_optimized, extra_large_attention, main_force_control, sentiment_instability, vm_diff
+    FACTORS = ("lr_beta2_aft_minus_mor",)  # cov, cov_current, cov_decay_optimized, extra_large_attention, main_force_control, sentiment_instability, vm_diff
     # CONTEXT_KWARGS = {
     #     "config": {"extreme_minutes": None},  # Example for tgd.
     # }
     CONTEXT_KWARGS = None
 
-    START_DATE = "2023-06-30"
+    START_DATE = "2024-01-01"
     END_DATE = "2026-09-30"
 
     # True: calculate factor values first and then plot.
