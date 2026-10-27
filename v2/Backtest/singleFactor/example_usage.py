@@ -289,8 +289,8 @@ def _read_universe_weight(data, universe, start, end):
 
 if __name__ == "__main__":
     ROOT_PATH = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
-    START_DATE = "2023-01-01"
-    END_DATE = "2026-06-30"
+    START_DATE = "2026-01-01"
+    END_DATE = "2026-09-27"
     UNIVERSE = 'zzfull'
     FACTOR_NAME = "bayeshighvol_onset"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
     CALCULATE_FACTOR = False  # False reuses the existing factor matrix.
