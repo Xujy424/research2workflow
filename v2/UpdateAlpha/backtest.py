@@ -459,7 +459,7 @@ if __name__ == "__main__":
         main()
         raise SystemExit(0)
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("vr_quantile_resid_corr",)  # cov, cov_current, cov_decay_optimized, extra_large_attention, main_force_control, sentiment_instability, vm_diff
+    FACTORS = ("bayeshighvol_onset",)  # cov, cov_current, cov_decay_optimized, extra_large_attention, main_force_control, sentiment_instability, vm_diff
     # CONTEXT_KWARGS = {
     #     "config": {"extreme_minutes": None},  # Example for tgd.
     # }
