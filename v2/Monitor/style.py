@@ -298,15 +298,17 @@ if __name__ == '__main__':
     import warnings
     warnings.filterwarnings('ignore', category=RuntimeWarning)
     context = MarketContext()
-    try:
-        result = StyleMonitor(context).snapshot('2026-09-30')
-        for section in ('market', 'industry', 'style'):
-            print(f'\n===== {section} =====')
-            print(StyleMonitor.table(result, section))
-    finally:
-        context.close()
+    # try:
+    #     result = StyleMonitor(context).snapshot('2026-09-30')
+    #     for section in ('market', 'industry', 'style'):
+    #         print(f'\n===== {section} =====')
+    #         print(StyleMonitor.table(result, section))
+    # finally:
+    #     context.close()
 
 
+    from tqdm import tqdm
+    import matplotlib.pyplot as plt
 
     dates = np.load("Z:/axis/dates.npy", allow_pickle=True)
     valid_dates = dates[~np.isnat(dates)]
