@@ -8,6 +8,19 @@ value = update_iv30(date, dates, context.wsd, Path(ROOT) / "option",
 # 主入口循环 IO、MO；只计算中证1000时将循环改为 ("MO",)。
 ```
 
+利率可直接传小数 `rate=0.02`；设置 `rate=None` 时注入 EDB 读取器和已核实的指标代码：
+
+```python
+value = update_iv30(date, dates, context.wsd, Path(ROOT) / "option",
+                    prefix="IO", rate=None, edb=context.edb,
+                    rate_code=verified_rate_code, rate_scale=0.01)
+```
+
+每次更新仅查询一次当日 EDB，所有候选期限共用该利率，不在逐合约循环中查询。
+`rate_scale=0.01` 将百分数转为小数；若读取器已返回小数则设为1。
+缺失当日利率直接报错，不自动前填或回退2%。此接口使用单一利率近似，未实现期限曲线匹配；
+缩放只转换单位，不转换复利口径。若直接采用短端到期收益率，仍属于连续复利利率的近似。
+
 仅输出 `ROOT/option/HS300_IV30.bin` 和 `CSI1000_IV30.bin`，不再生成报价、合约、诊断或衍生指标文件。
 每个文件均为 float32、形状 `(len(dates), 1)`，行对应 `ROOT/axis/dates.npy`（含预留行），
 列数固定为1；单位为年化百分数，缺失和未写入位置为 NaN，重复更新覆盖同一行。

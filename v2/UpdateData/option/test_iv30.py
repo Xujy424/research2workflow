@@ -1,15 +1,33 @@
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 from time import perf_counter
 import numpy as np
 import pandas as pd
-from .update_iv30 import calculate_iv30, maturity_variance, update_iv30
+from .update_iv30 import calculate_iv30, maturity_variance, update_iv30, resolve_rate
 from ..axis.reset_axis import ensure_axis_capacity, insert_matrix_date_rows
 from ..axis.delete import delete_before
 
 
 class IV30Tests(unittest.TestCase):
+    def test_edb_rate_resolution(self):
+        day = pd.Timestamp("2026-10-26")
+        edb = Mock(return_value=pd.Series([2.0], index=[day]))
+        self.assertEqual(resolve_rate(day, 0.03, edb=edb), 0.03)
+        edb.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("v2.UpdateData.option.update_iv30.calculate_iv30", return_value=25.0) as calculate:
+                update_iv30(day, np.array([day], dtype="datetime64[D]"), self.reader,
+                            directory, rate=None, edb=edb, rate_code="test")
+                self.assertEqual(calculate.call_args.kwargs["rate"], 0.02)
+        edb.assert_called_once_with("test", "2026-10-26", "2026-10-26")
+        edb.return_value = pd.Series([2.0], index=[day - pd.Timedelta(days=1)])
+        with self.assertRaisesRegex(ValueError, "missing or invalid rate"):
+            resolve_rate(day, None, edb=edb, rate_code="test")
+        with self.assertRaisesRegex(ValueError, "requires edb"):
+            resolve_rate(day, None)
+
     def reader(self, code, field, start, end):
         self.calls += 1
         if code in ("000300.SH", "000852.SH"):

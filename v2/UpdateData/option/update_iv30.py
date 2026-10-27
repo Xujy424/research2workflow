@@ -25,17 +25,41 @@ TARGET = 30 / 365
 def quote(wsd, code, field, day):
     """Read one dated value without accepting stale or duplicate observations."""
     result = wsd(code, field, str(day.date()), str(day.date()))
+    return dated_value(result, day, field)
+
+
+def dated_value(result, day, field):
+    """Extract a single same-day observation from a dated provider response."""
     if isinstance(result, pd.DataFrame):
         if "date" in result:
             result = result.set_index("date")
         result = result[field] if field in result else result.squeeze("columns")
     if not isinstance(result, pd.Series):
-        raise ValueError("WSD must return a dated Series or single-field DataFrame")
+        raise ValueError("reader must return a dated Series or single-field DataFrame")
     mask = pd.to_datetime(result.index).tz_localize(None).normalize() == day
     values = result.loc[mask]
     if len(values) > 1:
-        raise ValueError(f"duplicate WSD observations: {code}")
+        raise ValueError(f"duplicate observations for {day.date()}: {field}")
     return float(values.iloc[0]) if len(values) else np.nan
+
+
+def resolve_rate(day, rate, *, edb=None, rate_code=None, rate_scale=0.01):
+    """Explicit decimal rate, or one same-day EDB observation (usually percent).
+
+    EDB series must already match the desired rate convention. Scaling changes
+    units only; using a quoted YTM as a continuous rate remains an approximation.
+    """
+    if rate is None:
+        if edb is None or not rate_code:
+            raise ValueError("rate=None requires edb and a verified rate_code")
+        if not np.isfinite(rate_scale) or rate_scale <= 0:
+            raise ValueError("rate_scale must be positive and finite")
+        date = str(day.date())
+        rate = dated_value(edb(rate_code, date, date), day, "value") * rate_scale
+    rate = float(rate)
+    if not np.isfinite(rate):
+        raise ValueError(f"missing or invalid rate for {day.date()}")
+    return rate
 
 
 def expiry_candidates(day):
@@ -181,13 +205,16 @@ def calculate_iv30(day, wsd, prefix, *, rate=0.02, price_field="close",
     return float(100 * np.sqrt(total / TARGET))
 
 
-def update_iv30(date, dates, wsd, root, *, prefix="IO", **kwargs):
-    """Write one IV to option-root/<index>_IV30.bin, shape (len(dates), 1)."""
+def update_iv30(date, dates, wsd, root, *, prefix="IO", rate=0.02,
+                edb=None, rate_code=None, rate_scale=0.01, **kwargs):
+    """Write IV to a date x 1 matrix; rate=None reads EDB once per update."""
     prefix = prefix.upper()
     if prefix not in OUTPUT_NAMES:
         raise ValueError("prefix must be IO or MO")
     row = date_index(date, dates)
-    value = calculate_iv30(date, wsd, prefix, **kwargs)
+    day = asof(date)
+    rate = resolve_rate(day, rate, edb=edb, rate_code=rate_code, rate_scale=rate_scale)
+    value = calculate_iv30(day, wsd, prefix, rate=rate, **kwargs)
     array = ensure_memmap(Path(root) / f"{OUTPUT_NAMES[prefix]}.bin", (len(dates), 1))
     array[row, 0] = value
     array.flush()
@@ -210,6 +237,9 @@ if __name__ == "__main__":
                 prefix=prefix,
                 price_field="close",
                 rate=0.02,
+                # EDB mode: set rate=None and supply:
+                # edb=context.edb, rate_code="<verified short-term rate code>",
+                # rate_scale=0.01,  # EDB 2.0 (%) -> decimal 0.02
             )
             print(f"{date} {prefix} IV30={value:.4f}, elapsed={perf_counter() - started:.3f}s",
                   flush=True)
