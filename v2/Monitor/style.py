@@ -311,7 +311,7 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
     dates = np.load("Z:/axis/dates.npy", allow_pickle=True)
-    valid_dates = dates[~np.isnat(dates)]
+    valid_dates = dates[~np.isnat(dates)][2000:]
     growth2values = []
     for date in tqdm(valid_dates):
         str_date = pd.Timestamp(date).strftime("%Y-%m-%d")
