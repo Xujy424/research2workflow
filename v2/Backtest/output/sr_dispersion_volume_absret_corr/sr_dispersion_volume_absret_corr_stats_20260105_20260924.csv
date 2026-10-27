@@ -1,0 +1,5 @@
+factor,horizon,mean_ic,mean_rank_ic,valid_dates
+sr_dispersion_volume_absret_corr,1,0.007156807340607075,0.01746137858702429,178
+sr_dispersion_volume_absret_corr,5,0.015591169193242346,0.03011619993658032,175
+sr_dispersion_volume_absret_corr,10,0.016792082803692408,0.032059824688363985,170
+sr_dispersion_volume_absret_corr,20,0.01833383451101103,0.03374842533412464,160
