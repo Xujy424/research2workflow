@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 
@@ -37,6 +38,11 @@ def dated_value(result, day, field):
         result = result[field] if field in result else result.squeeze("columns")
     if not isinstance(result, pd.Series):
         raise ValueError("reader must return a dated Series or single-field DataFrame")
+    if result.empty:
+        return np.nan
+    if len(result) == 1:
+        timestamp = pd.Timestamp(result.index[0]).tz_localize(None).normalize()
+        return float(result.iloc[0]) if timestamp == day else np.nan
     mask = pd.to_datetime(result.index).tz_localize(None).normalize() == day
     values = result.loc[mask]
     if len(values) > 1:
@@ -142,31 +148,36 @@ def maturity_variance(strikes, prices, term, rate, *, bids=None, min_strikes=8):
 
 
 def fetch_maturity_variance(day, wsd, prefix, expiry, strikes, *, rate,
-                            price_field, bid_field, ask_field, min_strikes):
+                            price_field, bid_field, ask_field, min_strikes, workers=1):
     """Fetch one option maturity and return its term and implied variance."""
     midpoint = price_field is None
-    prices = np.full((len(strikes), 2), np.nan)
-    bids = np.full_like(prices, np.nan) if midpoint else None
     month = expiry.strftime("%y%m")
-    for i, strike in enumerate(strikes):
-        for side, cp in enumerate(("C", "P")):
-            code = f"{prefix}{month}-{cp}-{int(strike)}.CFE"
-            if midpoint:
-                bid = quote(wsd, code, bid_field, day)
-                ask = quote(wsd, code, ask_field, day)
-                if np.isfinite([bid, ask]).all() and bid >= 0 and ask > 0 and ask >= bid:
-                    prices[i, side], bids[i, side] = (bid + ask) / 2, bid
-            else:
-                value = quote(wsd, code, price_field, day)
-                if np.isfinite(value) and value > 0:
-                    prices[i, side] = value
+    codes = [f"{prefix}{month}-{cp}-{int(strike)}.CFE" for strike in strikes for cp in ("C", "P")]
+    fields = (bid_field, ask_field) if midpoint else (price_field,)
+    if workers == 1:
+        values = [quote(wsd, code, field, day) for code in codes for field in fields]
+    else:
+        # Preserve request order; worker failures propagate and prevent writes.
+        # The initial index quote initializes MarketContext's client beforehand.
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(quote, wsd, code, field, day) for code in codes for field in fields]
+            values = [future.result() for future in futures]
+    values = np.asarray(values).reshape(len(strikes), 2, len(fields))
+    bids = None
+    if midpoint:
+        bids, asks = values[:, :, 0], values[:, :, 1]
+        valid = np.isfinite(values).all(axis=2) & (bids >= 0) & (asks > 0) & (asks >= bids)
+        prices = np.where(valid, (bids + asks) / 2, np.nan)
+    else:
+        prices = values[:, :, 0]
+        prices = np.where(np.isfinite(prices) & (prices > 0), prices, np.nan)
     term = (expiry - day).days / 365
     return term, maturity_variance(strikes, prices, term, rate, bids=bids, min_strikes=min_strikes)
 
 
 def calculate_iv30(day, wsd, prefix, *, rate=0.02, price_field="close",
                    bid_field=None, ask_field=None, strike_step=50,
-                   strike_bounds=(0.65, 1.35), min_strikes=8):
+                   strike_bounds=(0.65, 1.35), min_strikes=8, workers=1):
     """Fetch only needed expiries; never extrapolate beyond available terms.
 
     Optional bid/ask mode applies the consecutive-zero-bid rule. WSD failures
@@ -174,6 +185,8 @@ def calculate_iv30(day, wsd, prefix, *, rate=0.02, price_field="close",
     Invalid candidate codes should be returned as empty/NaN by the reader.
     """
     day = asof(day)
+    if not isinstance(workers, int) or workers < 1:
+        raise ValueError("workers must be a positive integer")
     prefix = prefix.upper()
     if prefix not in INDEX_CODES:
         raise ValueError("prefix must be IO or MO")
@@ -203,6 +216,7 @@ def calculate_iv30(day, wsd, prefix, *, rate=0.02, price_field="close",
             term, var = fetch_maturity_variance(
                 day, wsd, prefix, expiry, strikes, rate=rate, price_field=price_field,
                 bid_field=bid_field, ask_field=ask_field, min_strikes=min_strikes,
+                workers=workers,
             )
             if np.isfinite(var):
                 if term == TARGET:
@@ -239,24 +253,48 @@ def update_iv30(date, dates, wsd, root, *, prefix="IO", rate=0.02,
 if __name__ == "__main__":
     from v2.Monitor.context import MarketContext
     from v2.UpdateData.config import ROOT
+    from tqdm import tqdm
 
-    date = "2026-07-24"
+    # date = "2026-07-24"
+    # dates = np.load(Path(ROOT) / "axis" / "dates.npy", allow_pickle=False)
+    # context = MarketContext(root=ROOT)
+    # try:
+    #     for prefix in ("IO", "MO"):
+    #         started = perf_counter()
+    #         value = update_iv30(
+    #             date, dates, context.wsd, Path(ROOT) / "option",
+    #             prefix=prefix,
+    #             price_field="close",
+    #             rate=None,
+    #             edb=context.edb,
+    #             rate_code=RATE_CODE,
+    #             rate_compounding="annual",  # Confirm the published convention.
+    #             workers=4,  # Use 1 if the injected WSD reader is not thread-safe.
+    #             # To reproduce the previous fixed-rate run, use rate=0.02.
+    #         )
+    #         print(f"{date} {prefix} IV30={value:.4f}, elapsed={perf_counter() - started:.3f}s",
+    #               flush=True)
+    # finally:
+    #     context.close()
+
+
+
     dates = np.load(Path(ROOT) / "axis" / "dates.npy", allow_pickle=False)
-    context = MarketContext(root=ROOT)
-    try:
-        for prefix in ("IO", "MO"):
-            started = perf_counter()
+    valid_dates = dates[~np.isnat(dates)]
+    for prefix in ("IO", "MO"): 
+        for date in tqdm(valid_dates):
             value = update_iv30(
-                date, dates, context.wsd, Path(ROOT) / "option",
+                date, dates, MarketContext(root=ROOT).wsd, Path(ROOT) / "option",
                 prefix=prefix,
                 price_field="close",
                 rate=None,
-                edb=context.edb,
+                edb=MarketContext(root=ROOT).edb,
                 rate_code=RATE_CODE,
                 rate_compounding="annual",  # Confirm the published convention.
+                workers=4,  # Use 1 if the injected WSD reader is not thread-safe.
                 # To reproduce the previous fixed-rate run, use rate=0.02.
             )
-            print(f"{date} {prefix} IV30={value:.4f}, elapsed={perf_counter() - started:.3f}s",
-                  flush=True)
-    finally:
-        context.close()
+
+
+
+

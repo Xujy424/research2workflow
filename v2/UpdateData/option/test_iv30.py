@@ -11,6 +11,22 @@ from ..axis.delete import delete_before
 
 
 class IV30Tests(unittest.TestCase):
+    def test_parallel_matches_serial(self):
+        for prefix in ("IO", "MO"):
+            for fields in ({}, dict(price_field=None, bid_field="bid", ask_field="ask")):
+                serial = calculate_iv30("2026-07-24", self.reader, prefix, workers=1, **fields)
+                parallel = calculate_iv30("2026-07-24", self.reader, prefix, workers=4, **fields)
+                self.assertAlmostEqual(serial, parallel)
+
+    def test_parallel_error_does_not_write(self):
+        reader = Mock(side_effect=[pd.Series([4000], index=[pd.Timestamp("2026-07-24")])]
+                      + [RuntimeError("WSD failure")] * 114)
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "WSD failure"):
+                update_iv30("2026-07-24", np.array(["2026-07-24"], dtype="datetime64[D]"),
+                            reader, directory, workers=4)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
     def test_edb_rate_resolution(self):
         day = pd.Timestamp("2026-10-26")
         edb = Mock(return_value=pd.Series([2.0], index=[day]))
