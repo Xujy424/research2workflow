@@ -305,3 +305,19 @@ if __name__ == '__main__':
             print(StyleMonitor.table(result, section))
     finally:
         context.close()
+
+
+
+    dates = np.load("Z:/axis/dates.npy", allow_pickle=True)
+    valid_dates = dates[~np.isnat(dates)]
+    growth2values = []
+    for date in tqdm(valid_dates):
+        str_date = pd.Timestamp(date).strftime("%Y-%m-%d")
+        result = StyleMonitor(context).snapshot(date)
+        val = result['style'].loc['成长价值收益差分位',10]
+        growth2values.append(val)
+    growth2values = pd.Series(np.array(growth2values), index=valid_dates)
+    growth2values.plot()
+    plt.show()
+
+
