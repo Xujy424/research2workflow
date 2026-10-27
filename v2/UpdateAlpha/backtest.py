@@ -465,8 +465,8 @@ if __name__ == "__main__":
     # }
     CONTEXT_KWARGS = None
 
-    START_DATE = "2023-01-01"
-    END_DATE = "2026-06-30"
+    START_DATE = "2026-06-30"
+    END_DATE = "2026-09-30"
 
     # True: calculate factor values first and then plot.
     # False: plot an existing factor_pool matrix only.
