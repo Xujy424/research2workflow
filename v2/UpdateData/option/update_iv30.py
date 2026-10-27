@@ -20,6 +20,7 @@ else:
 INDEX_CODES = {"IO": "000300.SH", "MO": "000852.SH"}
 OUTPUT_NAMES = {"IO": "HS300_IV30", "MO": "CSI1000_IV30"}
 TARGET = 30 / 365
+RATE_CODE = "M1001102"  # ChinaBond government spot yield, 1 year, percent
 
 
 def quote(wsd, code, field, day):
@@ -43,11 +44,14 @@ def dated_value(result, day, field):
     return float(values.iloc[0]) if len(values) else np.nan
 
 
-def resolve_rate(day, rate, *, edb=None, rate_code=None, rate_scale=0.01):
-    """Explicit decimal rate, or one same-day EDB observation (usually percent).
+def resolve_rate(day, rate, *, edb=None, rate_code=RATE_CODE, rate_scale=0.01,
+                 rate_compounding="annual"):
+    """Return continuous annual decimal rate; explicit rates are already continuous.
 
-    EDB series must already match the desired rate convention. Scaling changes
-    units only; using a quoted YTM as a continuous rate remains an approximation.
+    For EDB, annual means a one-year effective return: r=log(1+y).
+    A flat continuous zero curve is assumed for other maturities. The screenshot
+    identifies the series and units, not its compounding; confirm with metadata
+    and use continuous if the published yield is already continuously compounded.
     """
     if rate is None:
         if edb is None or not rate_code:
@@ -56,6 +60,12 @@ def resolve_rate(day, rate, *, edb=None, rate_code=None, rate_scale=0.01):
             raise ValueError("rate_scale must be positive and finite")
         date = str(day.date())
         rate = dated_value(edb(rate_code, date, date), day, "value") * rate_scale
+        if rate_compounding == "annual":
+            if rate <= -1:
+                raise ValueError("annual effective yield must exceed -100%")
+            rate = np.log1p(rate)
+        elif rate_compounding != "continuous":
+            raise ValueError("rate_compounding must be annual or continuous")
     rate = float(rate)
     if not np.isfinite(rate):
         raise ValueError(f"missing or invalid rate for {day.date()}")
@@ -95,6 +105,8 @@ def maturity_variance(strikes, prices, term, rate, *, bids=None, min_strikes=8):
     if not len(paired):
         return np.nan
     star = paired[np.argmin(np.abs(prices[paired, 0] - prices[paired, 1]))]
+    # Flat continuous zero curve: growth(T) = exp(r*T) = (1+y_1y)**T.
+    # Do not multiply rate by term before passing it to this function.
     growth = np.exp(rate * term)
     forward = strikes[star] + growth * (prices[star, 0] - prices[star, 1])
     base = np.searchsorted(strikes, forward, side="right") - 1
@@ -206,14 +218,16 @@ def calculate_iv30(day, wsd, prefix, *, rate=0.02, price_field="close",
 
 
 def update_iv30(date, dates, wsd, root, *, prefix="IO", rate=0.02,
-                edb=None, rate_code=None, rate_scale=0.01, **kwargs):
+                edb=None, rate_code=RATE_CODE, rate_scale=0.01,
+                rate_compounding="annual", **kwargs):
     """Write IV to a date x 1 matrix; rate=None reads EDB once per update."""
     prefix = prefix.upper()
     if prefix not in OUTPUT_NAMES:
         raise ValueError("prefix must be IO or MO")
     row = date_index(date, dates)
     day = asof(date)
-    rate = resolve_rate(day, rate, edb=edb, rate_code=rate_code, rate_scale=rate_scale)
+    rate = resolve_rate(day, rate, edb=edb, rate_code=rate_code,
+                        rate_scale=rate_scale, rate_compounding=rate_compounding)
     value = calculate_iv30(day, wsd, prefix, rate=rate, **kwargs)
     array = ensure_memmap(Path(root) / f"{OUTPUT_NAMES[prefix]}.bin", (len(dates), 1))
     array[row, 0] = value
@@ -236,10 +250,11 @@ if __name__ == "__main__":
                 date, dates, context.wsd, Path(ROOT) / "option",
                 prefix=prefix,
                 price_field="close",
-                rate=0.02,
-                # EDB mode: set rate=None and supply:
-                # edb=context.edb, rate_code="<verified short-term rate code>",
-                # rate_scale=0.01,  # EDB 2.0 (%) -> decimal 0.02
+                rate=None,
+                edb=context.edb,
+                rate_code=RATE_CODE,
+                rate_compounding="annual",  # Confirm the published convention.
+                # To reproduce the previous fixed-rate run, use rate=0.02.
             )
             print(f"{date} {prefix} IV30={value:.4f}, elapsed={perf_counter() - started:.3f}s",
                   flush=True)

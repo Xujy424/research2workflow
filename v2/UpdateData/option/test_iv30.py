@@ -20,13 +20,29 @@ class IV30Tests(unittest.TestCase):
             with patch("v2.UpdateData.option.update_iv30.calculate_iv30", return_value=25.0) as calculate:
                 update_iv30(day, np.array([day], dtype="datetime64[D]"), self.reader,
                             directory, rate=None, edb=edb, rate_code="test")
-                self.assertEqual(calculate.call_args.kwargs["rate"], 0.02)
+                self.assertAlmostEqual(calculate.call_args.kwargs["rate"], np.log1p(0.02))
         edb.assert_called_once_with("test", "2026-10-26", "2026-10-26")
+        for days in (20, 50, 180):
+            rate = resolve_rate(day, None, edb=edb)
+            self.assertAlmostEqual(np.exp(rate * days / 365), 1.02**(days / 365))
+        self.assertEqual(resolve_rate(day, None, edb=edb, rate_compounding="continuous"), .02)
         edb.return_value = pd.Series([2.0], index=[day - pd.Timedelta(days=1)])
         with self.assertRaisesRegex(ValueError, "missing or invalid rate"):
             resolve_rate(day, None, edb=edb, rate_code="test")
         with self.assertRaisesRegex(ValueError, "requires edb"):
             resolve_rate(day, None)
+
+    def test_edb_and_explicit_continuous_rate_equivalent(self):
+        day = pd.Timestamp("2026-10-26")
+        edb = Mock(return_value=pd.Series([2.0], index=[day]))
+        dates = np.array([day], dtype="datetime64[D]")
+        with tempfile.TemporaryDirectory() as directory:
+            for prefix in ("IO", "MO"):
+                explicit = update_iv30(day, dates, self.reader, directory,
+                                       prefix=prefix, rate=np.log1p(.02))
+                fetched = update_iv30(day, dates, self.reader, directory,
+                                      prefix=prefix, rate=None, edb=edb)
+                self.assertAlmostEqual(explicit, fetched)
 
     def reader(self, code, field, start, end):
         self.calls += 1

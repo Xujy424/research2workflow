@@ -13,13 +13,18 @@ value = update_iv30(date, dates, context.wsd, Path(ROOT) / "option",
 ```python
 value = update_iv30(date, dates, context.wsd, Path(ROOT) / "option",
                     prefix="IO", rate=None, edb=context.edb,
-                    rate_code=verified_rate_code, rate_scale=0.01)
+                    rate_code="M1001102", rate_scale=0.01,
+                    rate_compounding="annual")
 ```
 
-每次更新仅查询一次当日 EDB，所有候选期限共用该利率，不在逐合约循环中查询。
+默认指标为截图中的中债国债即期收益率：1年 `M1001102`，不使用到期收益率 `M0325686`。
+每次更新仅查询一次当日 EDB，所有候选期限共用转换后的年化利率，不在逐合约循环中查询。
 `rate_scale=0.01` 将百分数转为小数；若读取器已返回小数则设为1。
-缺失当日利率直接报错，不自动前填或回退2%。此接口使用单一利率近似，未实现期限曲线匹配；
-缩放只转换单位，不转换复利口径。若直接采用短端到期收益率，仍属于连续复利利率的近似。
+缺失当日利率直接报错，不自动前填或回退2%。按一年有效收益率假设，`annual` 使用
+`r=log1p(y)` 转为连续复利；若源数据已是连续复利则设 `continuous`。截图仅显示指标和百分数单位，
+复利口径需依据 Wind 指标说明确认。显式传入的 rate 始终按连续复利年利率小数解释，不再转换。
+其他期限假设连续复利零息曲线水平：`exp(r*T)=(1+y)**T`，不将 `r*T` 再当作年利率传入。
+这保证期限和复利换算一致，但不能由一个1年节点恢复真实的短端期限曲线。
 
 仅输出 `ROOT/option/HS300_IV30.bin` 和 `CSI1000_IV30.bin`，不再生成报价、合约、诊断或衍生指标文件。
 每个文件均为 float32、形状 `(len(dates), 1)`，行对应 `ROOT/axis/dates.npy`（含预留行），
