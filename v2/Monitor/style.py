@@ -224,11 +224,6 @@ class StyleMonitor:
             w = weights[u]
             members = np.isfinite(w) & (w > 0)
             close = c.index_close(u, dates[0], dates[-1]).reindex(dates).ffill().to_numpy(dtype=float)
-            index_code = {
-                'hs300': '000300.SH', 'zz500': '000905.SH',
-                'zz1000': '000852.SH', 'zz2000': '932000.CSI',
-                'zzfull': '000985.SH',
-            }.get(u)
             for h in periods:
                 market.loc['点位252历史分位',(u,h)] = level_percentile(close, 252, h)
                 market.loc['相对收益',(u,h)] = relative_return(r, w[-h-1], benchmark_daily, h)
