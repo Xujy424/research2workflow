@@ -137,6 +137,7 @@ INDICATORS = {
     'macro_m2_yoy': IndicatorSpec(*('macro_m2_yoy', 'macro', 'M2同比', 'macro_yoy:calculate', '', {'yoy_name': 'M2同比', 'balance_name': 'M2余额'})),
     'macro_tsf_yoy': IndicatorSpec(*('macro_tsf_yoy', 'macro', '社融存量同比', 'macro_yoy:calculate', '', {'yoy_name': '社融存量同比', 'balance_name': '社融存量'})),
     'macro_credit_impulse': IndicatorSpec(*('macro_credit_impulse', 'macro', '信用脉冲', 'macro_credit_impulse:calculate', '', {})),
+    
     'effective_spread': IndicatorSpec(*('effective_spread', 'micro', '相对买卖价差', 'effective_spread:effective_spread', '', {})),
     'five_level_depth_notional': IndicatorSpec(*('five_level_depth_notional', 'micro', '五档盘口深度', 'five_level_depth_notional:five_level_depth_notional', '', {})),
     'order_flow_imbalance': IndicatorSpec(*('order_flow_imbalance', 'micro', '标准化OFI', 'order_flow_imbalance:order_flow_imbalance', '', {})),
@@ -161,6 +162,7 @@ INDICATORS = {
     'impact_path_30m': IndicatorSpec(*('impact_path_30m', 'micro', '冲击路径_30m', 'impact_path:calculate', '', {'horizon': 30})),
     'impact_path_60m': IndicatorSpec(*('impact_path_60m', 'micro', '冲击路径_60m', 'impact_path:calculate', '', {'horizon': 60})),
     'impact_path_120m': IndicatorSpec(*('impact_path_120m', 'micro', '冲击路径_120m', 'impact_path:calculate', '', {'horizon': 120})),
+    
     'amount_change': IndicatorSpec(*('amount_change', 'moneyflow', '成交额变化', 'amount_change:amount_change', '', {'baseline': 20})),
     'top_share': IndicatorSpec(*('top_share', 'moneyflow', 'top10%成交额占比', 'top_share:top_share', '', {'fraction': 0.1})),
     'turnover': IndicatorSpec(*('turnover', 'moneyflow', '自由流通换手率', 'turnover:turnover', '', {})),
@@ -169,6 +171,7 @@ INDICATORS = {
     'large_trade_share': IndicatorSpec(*('large_trade_share', 'moneyflow', '大单成交占比', 'category_share:calculate', '', {})),
     'medium_trade_share': IndicatorSpec(*('medium_trade_share', 'moneyflow', '中单成交占比', 'category_share:calculate', '', {})),
     'small_trade_share': IndicatorSpec(*('small_trade_share', 'moneyflow', '小单成交占比', 'category_share:calculate', '', {})),
+    
     'level_percentile': IndicatorSpec(*('level_percentile', 'style', '点位252历史分位', 'level_percentile:level_percentile', 'market', {})),
     'relative_return': IndicatorSpec(*('relative_return', 'style', '相对收益', 'relative_return:relative_return', 'market', {})),
     'new_high_low_share': IndicatorSpec(*('new_high_low_share', 'style', '新高新低差占比历史分位', 'new_high_low_share:new_high_low_share', 'market', {})),
@@ -184,6 +187,7 @@ INDICATORS = {
     'rotation_speed_percentile': IndicatorSpec(*('rotation_speed_percentile', 'style', '行业轮动速度分位', 'rotation_speed_percentile:rotation_speed_percentile', 'style', {})),
     'pe_return_spread': IndicatorSpec(*('pe_return_spread', 'style', 'PE收益差分位', 'valuation_spread_percentile:calculate', 'style', {})),
     'pb_return_spread': IndicatorSpec(*('pb_return_spread', 'style', 'PB收益差分位', 'valuation_spread_percentile:calculate', 'style', {})),
+    
     'cross_section_dispersion': IndicatorSpec(*('cross_section_dispersion', 'risk', '横截面收益离散度', 'cross_section_dispersion:cross_section_dispersion', '', {})),
     'average_correlation': IndicatorSpec(*('average_correlation', 'risk', '平均收益相关性', 'average_correlation:average_correlation', '', {'window': 60})),
     'downside_correlation': IndicatorSpec(*('downside_correlation', 'risk', '下跌条件相关性', 'downside_correlation:downside_correlation', '', {'window': 120})),
