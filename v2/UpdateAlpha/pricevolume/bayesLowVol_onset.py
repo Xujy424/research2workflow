@@ -199,7 +199,7 @@ class BayesLowVolOnsetContext(AlphaContext):
             super().close()
 
 class BayesLowVolOnsetFactor(AlphaBase):
-    meta = AlphaMeta('bayeslowvol_onset', 'Empirical-Bayes low-volume future dispersion absorption', direction=1)
+    meta = AlphaMeta('bayeslowvol_onset', 'Empirical-Bayes low-volume future dispersion absorption', direction=-1)
     dependencies = ('m_essentials/close', 'm_essentials/volume', 'basic/tradable')
 
     def calculate(self, asof):

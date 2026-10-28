@@ -104,9 +104,10 @@ def discover_matrix_specs(root, date_len, tick_len):
 
     root = Path(root)
     for path in _iter_matrix_paths(root):
-        if path.relative_to(root).parts[0] == "option":
+        relative_parts = path.relative_to(root).parts
+        if relative_parts[0] == "option" or relative_parts[:2] == ("median_variables", "monitor"):
             if path.stat().st_size != date_len * np.dtype(np.float32).itemsize:
-                raise ValueError(f"invalid date x 1 float32 option matrix: {path}")
+                raise ValueError(f"invalid date x 1 float32 scalar matrix: {path}")
             specs.append(MatrixSpec(path, np.dtype(np.float32), 1, 1))
             continue
         middle = _matrix_middle(path)
