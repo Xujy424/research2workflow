@@ -289,10 +289,10 @@ def _read_universe_weight(data, universe, start, end):
 
 if __name__ == "__main__":
     ROOT_PATH = Path("Z:/") if Path("Z:/axis/dates.npy").is_file() else ROOT
-    START_DATE = "2026-01-01"
+    START_DATE = "2024-01-01"
     END_DATE = "2026-09-27"
     UNIVERSE = 'zzfull'
-    FACTOR_NAME = "sr_dispersion_stdnumtrades"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
+    FACTOR_NAME = "vr_q80_ret_corr"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
     CALCULATE_FACTOR = False  # False reuses the existing factor matrix.
     FACTOR_CONTEXT_KWARGS = None  # e.g. {"config": {"lookback_days": 20}}
     SIGNAL_LAG = 2
