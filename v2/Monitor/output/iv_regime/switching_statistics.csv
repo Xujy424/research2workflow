@@ -1,0 +1,9 @@
+sample,model,switches,median_complete_run,complete_runs_le5
+all,iv_only,36,19.0,6
+all,price_confirm3,106,7.0,37
+all,score_zero_threshold,180,6.0,84
+all,score_hysteresis,24,50.0,0
+2024_onward,iv_only,21,18.5,5
+2024_onward,price_confirm3,38,10.0,7
+2024_onward,score_zero_threshold,79,6.0,37
+2024_onward,score_hysteresis,8,57.0,0
