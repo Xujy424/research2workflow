@@ -63,6 +63,7 @@ DEFAULT_SERIES = {
 INDEX_DOMAINS = ("沪深300", "中证500", "中证1000", "中证2000")
 
 STYLE_DOMAINS = tuple(f"barra{i}" for i in range(1, 11))
+ALL_DOMAINS = ('全市场',) + INDEX_DOMAINS + STYLE_DOMAINS + tuple(INDUSTRY_MAP)
 
 DECAY_HORIZONS = (1, 5, 15, 30)
 

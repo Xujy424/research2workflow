@@ -578,9 +578,10 @@ class RiskMonitor:
                              "历史分位": _p(x.to_numpy(), history)})
         if micro_result is not None and (metrics is None or "流动性压力历史分位" in metrics):
             required = ("相对价差分位", "深度下降分位", "Amihud分位")
+            v, h = np.nan, np.nan
             if all(k in micro_result for k in required):
                 v,h=liquidity_pressure_percentile(*(micro_result[k] for k in required), history)
-                rows.append({"指标":"流动性压力历史分位","域":"全市场","周期":1,"数值":v,"历史分位":h})
+            rows.append({"指标":"流动性压力历史分位","域":"全市场","周期":1,"数值":v,"历史分位":h})
         elif metrics is not None and "流动性压力历史分位" in metrics:
             # 未注入三个压力分量时显式保留缺失，不将旧值误当成今日计算结果。
             rows.append({"指标":"流动性压力历史分位","域":"全市场","周期":1,"数值":np.nan,"历史分位":np.nan})

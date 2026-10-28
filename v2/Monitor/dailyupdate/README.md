@@ -52,6 +52,11 @@ finally:
 ```
 
 `names=None` 表示全部已注册指标；`modules=('style', 'risk')` 可按模块筛选。
+原面板输出的注册覆盖：macro 11、micro 24、moneyflow 8、style 15、risk 15，共73项。
+这里统计指标及窗口变体，不是将每个域、每个周期展开后的文件数量。
+`domains` 默认只计算全市场；如需原面板支持的全部域，可从config导入 `ALL_DOMAINS`，
+使用 `MonitorConfig(domains=ALL_DOMAINS)`。各指标仍按其原有域限制筛选，不会为不适用域构造数值。
+风格模块的指数池由universes控制，行业池由industries控制。
 `calculate_daily(...)` 只计算、不保存。结果列统一为：
 `name, module, domain, period, value, percentile`。
 仅提供分位的指标，其 `value` 为NaN；这不代表额外计算了未定义的原始值。
@@ -104,6 +109,8 @@ path = metric_path(ROOT, 'rv20', '全市场', 1, 'value')
 资金流大小单占比、信用脉冲GDP插值等也保留旧口径。
 宏观数据按观测日期截断不能消除发布时间差异和历史修订，尚不等于严格的PIT回测数据。
 风险IV接口保留原字段与参数，需由实际数据服务支持，不会静默替换为其他价格口径。
+原代码中的 `liquidity_coverage`（需要委托需求额）、`index_eps_bond_spread` 等独立工具函数
+没有在原snapshot中形成独立输出，本次仍作为utils兼容函数保留，不计入上述73项每日指标。
 
 ## 验证
 
@@ -113,3 +120,5 @@ python -m unittest v2.Monitor.dailyupdate.tests.test_workflow
 
 另已对重构前后的五类面板使用同一模拟输入逐表验证（含缺失值），计算一致；
 实际本地成长价值、大小盘、RV20的两个交易日更新与读取也已验证。
+覆盖测试还逐项调用全部73项指标，检查全量结果和二进制输出；模拟测试允许依赖缺失时输出NaN，
+不代表外部EDB/WSD及L2源已全部通过真实数据验证。

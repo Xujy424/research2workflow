@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+import warnings
 import tempfile
 import unittest
 
@@ -64,7 +65,73 @@ def make_context(root):
     return MonitorContext(root=root, data=pool, wsd_reader=forbidden, edb_reader=forbidden, industry_map={'a': 0, 'b': 1})
 
 
+class WindFixture:
+    def __call__(self, **kwargs):
+        dates = pd.bdate_range(kwargs['startDate'], kwargs['endDate'])
+        level = 100 if kwargs['indicator'] == 'close' else 25
+        return pd.Series(level + np.arange(len(dates)) / 100, index=dates)
+
+
+def make_full_context(root):
+    """All source interfaces are represented, without remote requests."""
+    c = make_context(root)
+    c.data.fields['m_essentials/amount'] = c.data.fields['d_essentials/amount']
+    c.wsd_reader = WindFixture()
+    c.edb_reader = Mock(return_value=pd.Series(2 + np.arange(len(c.dates)) / 100, index=c.dates))
+    rng = np.random.default_rng(8)
+    mid = np.exp(np.cumsum(rng.normal(0, .001, (150, len(c.ticks))), axis=0)) * 100
+    bid_qty, ask_qty = rng.uniform(1, 100, (2, 5, *mid.shape))
+    quotes = dict(mid=mid, spread=np.full_like(mid, 2), ofi=rng.normal(0, 10, mid.shape),
+                  bid_px=np.tile(mid[None] - .01, (5, 1, 1)), ask_px=np.tile(mid[None] + .01, (5, 1, 1)),
+                  bid_qty=bid_qty, ask_qty=ask_qty, depth=bid_qty.sum(0) + ask_qty.sum(0),
+                  best_imbalance=(bid_qty[0] - ask_qty[0]) / (bid_qty[0] + ask_qty[0]))
+    c.aligned_snapshot = Mock(return_value=quotes)
+    return c
+
+
 class WorkflowTests(unittest.TestCase):
+    def test_incomplete_liquidity_inputs_preserve_missing_output(self):
+        with tempfile.TemporaryDirectory() as root:
+            c = make_context(root)
+            cfg = MonitorConfig(module_options={'risk': {'micro_result': {'相对价差分位': [.1, .2]}}})
+            result = calculate_daily(c.dates[-1], c, names='liquidity_pressure_percentile', config=cfg)
+            self.assertEqual(set(result.name), {'liquidity_pressure_percentile'})
+            self.assertTrue(result[['value', 'percentile']].isna().all().all())
+            c.close()
+
+    def test_every_registered_indicator_calculates_and_writes(self):
+        from v2.Monitor.dailyupdate.dailyupdate import write_daily
+        with tempfile.TemporaryDirectory() as root:
+            c = make_full_context(root)
+            cfg = MonitorConfig(history=20, industries=('a', 'b'))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                result = calculate_daily(c.dates[-1], c, config=cfg)
+            self.assertEqual(set(result['name']), set(INDICATORS))
+            self.assertFalse(result.duplicated(['name', 'domain', 'period']).any())
+            write_daily(c.dates[-1], result, root, c.data.axis.full_dates, config=cfg)
+            files = list((Path(root) / cfg.output_folder).rglob('*.bin'))
+            self.assertGreater(len(files), len(INDICATORS))
+            self.assertTrue(all(path.stat().st_size == 4 * len(c.data.axis.full_dates) for path in files))
+            for name in INDICATORS:
+                row = result.loc[result.name.eq(name)].iloc[0]
+                field = 'percentile' if np.isnan(row.value) else 'value'
+                path = metric_path(root, name, row.domain, row.period, field, cfg)
+                self.assertTrue(path.is_file(), f'{name}: no binary output')
+            c.close()
+
+    def test_every_indicator_can_run_on_its_own(self):
+        with tempfile.TemporaryDirectory() as root:
+            c = make_full_context(root)
+            cfg = MonitorConfig(history=20, industries=('a', 'b'))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                for name in INDICATORS:
+                    with self.subTest(name=name):
+                        result = calculate_daily(c.dates[-1], c, names=name, config=cfg)
+                        self.assertEqual(set(result['name']), {name})
+            c.close()
+
     def test_window_variants_share_one_function_and_one_context(self):
         import inspect
         from v2.Monitor.dailyupdate import context as context_module
