@@ -8,9 +8,9 @@ try:
     from .utils import historical_percentile, weighted_mean
 except ImportError:
     import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from v2.Monitor.context import MarketContext
-    from v2.Monitor.utils import historical_percentile, weighted_mean
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from v2.Monitor.dailyupdate.context import MarketContext
+    from v2.Monitor.dailyupdate.utils import historical_percentile, weighted_mean
 
 PERIODS=(1,5,10,20)
 

@@ -251,7 +251,7 @@ def update_iv30(date, dates, wsd, root, *, prefix="IO", rate=0.02,
 
 
 if __name__ == "__main__":
-    from v2.Monitor.context import MarketContext
+    from v2.Monitor.dailyupdate.context import MarketContext
     from v2.UpdateData.config import ROOT
     from tqdm import tqdm
 

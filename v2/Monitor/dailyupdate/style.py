@@ -14,11 +14,11 @@ try:
 except ImportError:  # 直接以脚本路径运行时没有 package parent
     import sys
     from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from v2.Monitor.utils import (as_float, safe_divide, weighted_mean,
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from v2.Monitor.dailyupdate.utils import (as_float, safe_divide, weighted_mean,
                                   compound_return, historical_percentile,
                                   rank_rotation)
-    from v2.Monitor.context import MarketContext
+    from v2.Monitor.dailyupdate.context import MarketContext
 
 
 def level_percentile(index_close, history=252, period=1):

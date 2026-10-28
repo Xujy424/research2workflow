@@ -14,12 +14,12 @@ import pandas as pd
 from tqdm import tqdm
 
 try:
-    from ..GetData import DataPool
-    from ..UpdateData.config import ROOT
+    from ...GetData import DataPool
+    from ...UpdateData.config import ROOT
 except ImportError:  # 直接以脚本路径运行时没有 package parent
     import sys
     from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from v2.GetData import DataPool
     from v2.UpdateData.config import ROOT
 
@@ -148,7 +148,7 @@ class MarketContext:
         if self._client is None:
             if self.client_factory is None:
                 try:
-                    from ..GetData.ZSFundRequestClient import RequestZSFundDateServer
+                    from ...GetData.ZSFundRequestClient import RequestZSFundDateServer
                 except ImportError:
                     from v2.GetData.ZSFundRequestClient import RequestZSFundDateServer
                 self._client = RequestZSFundDateServer()
