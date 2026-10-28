@@ -1,4 +1,18 @@
-"""HS300 price-direction regimes and separate IV risk overlay."""
+"""
+HS300 price-direction regimes and separate IV risk overlay.
+当前逻辑是 “IV动量＋价格动量打分，再用双阈值划分状态”：
+1. IV动量，占70%
+   比较IV的EMA5和EMA20，并用近期IV变化的波动幅度归一化。IV下降贡献正分，IV上升贡献负分。
+2. 价格动量，占30%
+   计算指数过去5日收益，用近期日收益波动率归一化。上涨贡献正分，下跌贡献负分。
+3. 平滑综合评分
+   两项加权后，将极端评分截在 [-3, 3]，再做EMA3平滑。
+4. 双阈值防抖
+   - 评分 ≥ +0.5：绿色，偏进攻。
+   - 评分 ≤ −0.5：红色，偏防御。
+   - 介于两者之间：保持原状态。
+信号越过阈值当天即切换，不等待连续确认。双阈值减少反复切换，但当前检验尚未证明它能稳定预测后续涨跌。
+"""
 from pathlib import Path
 from time import perf_counter
 import numpy as np
