@@ -4,6 +4,30 @@ import numpy as np
 import pandas as pd
 
 
+def metric_result(rows):
+    """单指标统一输出；名称和模块由注册表调度器补充，不在公式中写死。"""
+    return pd.DataFrame(rows).reindex(columns=['domain', 'period', 'value', 'percentile'])
+
+
+def macro_result(series, history=252, scale=1.0, change_scale=1.0):
+    """对已取出的序列计算当前值、5/20日变化及分位，不进行取数。"""
+    rows = []
+    for lag in (0, 5, 20):
+        value = level(series) if lag == 0 else change(series, lag)
+        rank = percentile(series, history) if lag == 0 else rolling_change_percentile(series, lag, history)
+        rows.append(dict(domain='全市场', period=lag,
+                         value=value * (scale if lag == 0 else change_scale), percentile=rank))
+    return metric_result(rows)
+
+
+def lagged_weighted_returns(returns, weights):
+    """当日收益配前一交易日权重，避免使用当日成分权重计算历史组合收益。"""
+    result = np.full(len(returns), np.nan)
+    for t in range(1, len(returns)):
+        result[t] = weighted_mean(returns[t], weights[t - 1])
+    return result
+
+
 def as_float(x):
     return np.asarray(x, dtype=float)
 

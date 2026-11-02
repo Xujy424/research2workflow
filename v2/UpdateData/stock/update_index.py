@@ -77,27 +77,76 @@ def _write_index_row(date, dates, ticks, root, name, weights):
     mask_arr.flush()
 
 
-def update_index(date, dates, ticks, conn, root):
-    """
-    每日更新六个指数最近一期成分权重和成分 mask。
+def _snapshot_weights(latest, index_code, valid_ticks):
+    """Return raw snapshot weights and their EndDate."""
+    frame = (
+        latest.filter(pl.col("index_code") == index_code)
+        .select(["tick", "snapshot_date", "weight"])
+        .sort("tick")
+        .to_pandas()
+    )
+    if frame.empty:
+        return np.full(len(valid_ticks), np.nan), None
+    snapshot_date = pd.Timestamp(frame["snapshot_date"].max()).normalize()
+    weights = frame.set_index("tick")["weight"].reindex(valid_ticks).to_numpy(dtype=float)
+    return weights, snapshot_date
 
-    对每个指数取 date 之前最近的完整快照，而不是对每只股票分别前填；
-    这样股票被调出指数后，会在下一次快照中正确变为 NaN/False。
-    """
+
+def _drift_weights(previous_weights, pct):
+    """Drift weights by constituent daily returns (pct is in percent units)."""
+    member = np.isfinite(previous_weights) & (previous_weights > 0)
+    daily_return = np.where(np.isfinite(pct), pct / 100, 0.0)
+    weights = np.where(member, previous_weights * (1 + daily_return), np.nan)
+    total = np.nansum(weights)
+    if total > 0:
+        weights *= np.nansum(previous_weights) / total
+    return weights
+
+
+def update_index(date, dates, ticks, conn, root):
+    """Write daily weights from snapshots and price drift between snapshots."""
     date = _asof(date)
+    dt = _date_index(date, dates)
 
     n_valid = np.count_nonzero(ticks != "")
     valid_ticks = ticks[:n_valid]
     
     latest = _read_latest_index_snapshot(date, conn)
+    pct_path = Path(root) / "d_essentials" / "pct.bin"
+    matrix_shape = (len(dates), len(ticks))
+    expected_size = int(np.prod(matrix_shape, dtype=np.int64)) * np.dtype(np.float32).itemsize
+    if dt > 0 and not pct_path.exists():
+        raise FileNotFoundError(
+            f"{pct_path} is missing; run update_d_essentials before update_index"
+        )
+    if dt > 0 and pct_path.stat().st_size != expected_size:
+        raise ValueError(f"{pct_path} does not match the stock date/tick axis")
+    pct = np.memmap(pct_path, dtype=np.float32, mode="r", shape=matrix_shape) if dt > 0 else None
     result = {}
 
     for index_code, name in INDEX_CODE_TO_NAME.items():
-        weight = (
-            latest
-            .filter(pl.col("index_code") == index_code)
-            .select(["tick", "weight"])
-        ).sort('tick').to_pandas().set_index('tick').reindex(index=valid_ticks).values.astype(float).flatten()
+        snapshot, snapshot_date = _snapshot_weights(latest, index_code, valid_ticks)
+        if snapshot_date is None or snapshot_date == date or dt == 0:
+            weight = snapshot
+        else:
+            weight_path = Path(root) / "index" / "weight" / f"{name}_weight.bin"
+            if weight_path.exists() and weight_path.stat().st_size == expected_size:
+                previous_weights = np.memmap(
+                    weight_path, dtype=np.float32, mode="r", shape=matrix_shape
+                )[dt - 1, :n_valid].astype(float)
+            else:
+                previous_weights = np.full(n_valid, np.nan)
+
+            if np.isfinite(previous_weights).any():
+                weight = _drift_weights(
+                    previous_weights,
+                    np.asarray(pct[dt, :n_valid], dtype=float),
+                )
+            else:
+                raise ValueError(
+                    f"Missing previous {name} weights for {date.date()}; "
+                    "update index weights in date order from the snapshot date"
+                )
 
         _write_index_row(date, dates, ticks, root, name, weight)
         result[name] = weight

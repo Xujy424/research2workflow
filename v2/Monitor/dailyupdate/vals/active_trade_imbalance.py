@@ -1,11 +1,14 @@
-"""独立指标：active_trade_imbalance；支持直接注入数组或时间序列。"""
+"""主动成交不平衡; Context entry for fetching and calculating this indicator."""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from ..utils import safe_divide
+from ..config import MonitorConfig
+from ..utils import metric_result
+from ..utils import _weighted_rows, _history_percentile
 
 
-def active_trade_imbalance(context, date):
+def _compute(context, date):
     """(主动买入成交额-主动卖出成交额)/两侧主动成交额。"""
     # 按本指标定义计算，沿用原有窗口、单位和缺失值处理口径。
     n = len(context.ticks)
@@ -39,3 +42,31 @@ def active_trade_imbalance(context, date):
     result = safe_divide(buy - sell, buy + sell)
     result[~observed] = np.nan
     return result
+
+
+def calculate(context, date, config=None, *, scope='index'):
+    """从统一Context读取本指标输入，计算当日各域/周期的数值。"""
+    config = config or MonitorConfig()
+    warmup = max(config.history + max(config.periods) + 30, 252 + max(config.periods) + 30)
+    start, end = context.window(date, warmup)
+    daily = np.full((end-start+1, len(context.ticks)), np.nan)
+    parameters = {}
+    for row, idx in enumerate(range(start, end+1)):
+        key = ('active_trade_imbalance', tuple(sorted(parameters.items())), idx)
+        values = context.factor_cache.get(key)
+        if values is None:
+            values = _compute(context, context.dates[idx])
+            values = np.full(len(context.ticks), np.nan) if values is None else values
+            context.cache_factor(key, values)
+        daily[row] = values
+    # 按域取权重；barra域按高低组分别加权后相减。
+    rows = []
+    for domain in context.eligible_domains(config.domains, scope):
+        high, low = context.domain_pair_weights(start, end, domain)
+        series = _weighted_rows(daily, high)
+        if low is not None:
+            series = series - _weighted_rows(daily, low)
+        for period in config.periods:
+            rows.append(dict(domain=domain, period=period,
+                             percentile=_history_percentile(series, config.history, period)))
+    return metric_result(rows)

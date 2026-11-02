@@ -7,26 +7,47 @@ dailyupdate/
   context.py       唯一的 MonitorContext：本地轴/矩阵、EDB、WSD、L2及缓存
   utils.py         共用数学运算，无文件读取和网络请求
   config.py        参数、字段映射、数据代码及指标注册表
-  dailyupdate.py   取数编排、统一结果、按日保存、历史循环主入口
+  dailyupdate.py   仅注册表调度、结果校验、按日保存及历史循环主入口
   vals/            52个参数化指标脚本，对应73个注册输出
   tests/           计算、存储和轴维护验证
 ```
 
-旧的 `macro/micro/moneyflow/style/risk.py` 仅保留兼容导入，不再存放公式。
-`MarketContext` 以及旧模块导出的 Context 名称均指向同一个 `MonitorContext`，没有分模块子类。
+不再有五类Monitor汇总器，旧的 `macro/micro/moneyflow/style/risk.py` 已移除。
+只有一个 `MonitorContext`；`MarketContext` 仅是同一类的兼容别名。
+每个指标脚本公开 `calculate(context, date, config=None, ...)`，自己取数并计算。
+复杂的盘口公式在同文件保留私有数值核 `_compute`，供指标依赖复用，不属于额外窗口变体。
+调度器无需知道指标属于哪一类，新增注册项无需修改分类分支。
 
 ## 参数化指标与注册表
 
 同一个指标的窗口变体共用一个函数，例如：
 
 ```python
-from v2.Monitor.dailyupdate import INDICATORS
+from v2.Monitor.dailyupdate import INDICATORS, MonitorContext
+from v2.UpdateData.config import ROOT
 
 spec = INDICATORS['impact_path_120m']
 print(spec.module, spec.function, spec.parameters)
-# micro, impact_path:calculate, {'horizon': 120}
-values = spec.load()(quotes)  # 自动绑定 horizon=120
+# micro, impact_path:calculate, {'horizon': 120, 'scope': 'all'}
+context = MonitorContext(root=ROOT)
+try:
+    values = spec.load()(context, '2026-09-30')  # 自动取L2数据并绑定horizon=120
+finally:
+    context.close()
 ```
+
+也可以直接调用单个指标，不经过每日更新器：
+
+```python
+from v2.Monitor.dailyupdate.vals.macro_level import calculate
+context = MonitorContext(root=ROOT)
+try:
+    values = calculate(context, '2026-09-30', series='DR007')
+finally:
+    context.close()
+```
+
+单指标返回 `domain, period, value, percentile`；调度器只补充注册表中的name和module。
 
 冲击路径10/30/60/120分钟、冲击保留率1/5/15/30分钟、相关性lag1/lag5、RV5/20/60及RV期限比
 均采用参数绑定；不再复制窗口专属函数。PE/PB调和估值分位、宏观水平/利差/同比也分别共用函数。
@@ -61,7 +82,7 @@ finally:
 `name, module, domain, period, value, percentile`。
 仅提供分位的指标，其 `value` 为NaN；这不代表额外计算了未定义的原始值。
 缺少原始文件或读取失败直接报错；原始观测不足时按原公式返回NaN。
-同日先计算完所选模块再写文件，单个文件flush后结束；跨文件没有事务，不支持并发写同一输出。
+同日先计算完所选指标再写文件，单个文件flush后结束；跨文件没有事务，不支持并发写同一输出。
 
 ## 本地存储
 
@@ -94,7 +115,9 @@ path = metric_path(ROOT, 'rv20', '全市场', 1, 'value')
 直接在IDE运行 `dailyupdate.py`，底部主入口已给出历史循环；修改开始/结束日期和 `names` 即可。
 整个循环复用一个Context，按日期轴交易日依次计算。
 默认示例只计算本地成长价值指标，避免首次运行就触发所有远端和L2依赖。
-模块选项通过 `MonitorConfig.module_options` 传入对应面板编排器；域、周期、指数池等集中在Config。
+域、周期、指数池等集中在Config；指标自己的参数由注册表绑定。
+`module_options` 目前保留风险曲面参数 `option_settings` 和流动性压力输入 `micro_result`，
+由对应指标自己读取，不再传给任何分类汇总器。
 
 ## 数据依赖和口径边界
 
@@ -105,8 +128,9 @@ path = metric_path(ROOT, 'rv20', '全市场', 1, 'value')
 - macro：按注册指标依赖请求EDB/WSD，同一Context对EDB全序列只请求一次，返回前截断到估值日。
 - micro：读取L2分钟快照/委托成交文件；报价缓存最多保留两天，完整历史回补仍可能耗时较长。
 
-本次是结构重构，不改变原公式：低growth组仍是原来的“价值代理”，没有额外引入btop；
+本次保留原公式口径：低growth组仍是原来的“价值代理”，没有额外引入btop；
 资金流大小单占比、信用脉冲GDP插值等也保留旧口径。
+另外修正了冲击路径的旧索引误写：首分钟价格应为P_(t+1)，不是起点P_t；旧实现分母恒为0。
 宏观数据按观测日期截断不能消除发布时间差异和历史修订，尚不等于严格的PIT回测数据。
 风险IV接口保留原字段与参数，需由实际数据服务支持，不会静默替换为其他价格口径。
 原代码中的 `liquidity_coverage`（需要委托需求额）、`index_eps_bond_spread` 等独立工具函数
@@ -118,7 +142,8 @@ path = metric_path(ROOT, 'rv20', '全市场', 1, 'value')
 python -m unittest v2.Monitor.dailyupdate.tests.test_workflow
 ```
 
-另已对重构前后的五类面板使用同一模拟输入逐表验证（含缺失值），计算一致；
+保存了接口重构前的73项、359条模拟输出；除上述冲击路径修正外，其余输出逐项一致，
+冲击路径另用对数价格匀速增长的解析案例验证10/30/60/120分钟窗口。
 实际本地成长价值、大小盘、RV20的两个交易日更新与读取也已验证。
 覆盖测试还逐项调用全部73项指标，检查全量结果和二进制输出；模拟测试允许依赖缺失时输出NaN，
 不代表外部EDB/WSD及L2源已全部通过真实数据验证。
