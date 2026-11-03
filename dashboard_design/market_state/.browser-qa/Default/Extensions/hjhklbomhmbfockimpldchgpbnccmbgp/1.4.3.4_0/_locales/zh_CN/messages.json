@@ -1,0 +1,18 @@
+{
+   "extensionDescription": {
+      "description": "浏览器扩展的描述。",
+      "message": "Browser Security 由 Broadcom 的 Symantec 端点安全部门提供。"
+   },
+   "extensionName": {
+      "description": "浏览器扩展的名称。",
+      "message": "Symantec Endpoint Protection"
+   },
+   "notificationContent1": {
+      "description": "出现在 Symantec Endpoint Protection 客户端上的通知。",
+      "message": "Symantec Endpoint Protection 阻止了以下网站:"
+   },
+   "notificationTitle": {
+      "description": "通知页的标题。",
+      "message": "已阻止恶意网站!"
+   }
+}

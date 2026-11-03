@@ -1,0 +1,18 @@
+{
+   "extensionDescription": {
+      "description": "Описание расширения браузера.",
+      "message": "Решение для безопасности браузера от подразделения Symantec Endpoint Security компании Broadcom."
+   },
+   "extensionName": {
+      "description": "Имя расширения браузера.",
+      "message": "Symantec Endpoint Protection"
+   },
+   "notificationContent1": {
+      "description": "Текст уведомления, отображаемый в клиенте Symantec Endpoint Protection.",
+      "message": "Программа Symantec Endpoint Protection заблокировала этот веб-сайт"
+   },
+   "notificationTitle": {
+      "description": "Заголовок страницы уведомления.",
+      "message": "Вредоносный сайт заблокирован!"
+   }
+}

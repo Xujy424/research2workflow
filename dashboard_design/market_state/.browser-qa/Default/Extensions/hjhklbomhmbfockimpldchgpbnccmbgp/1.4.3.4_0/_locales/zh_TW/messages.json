@@ -1,0 +1,18 @@
+{
+   "extensionDescription": {
+      "description": "瀏覽器延伸的描述。",
+      "message": "Broadcom 的 Symantec Endpoint Security 部門提供的瀏覽器安全性。"
+   },
+   "extensionName": {
+      "description": "瀏覽器延伸的名稱。",
+      "message": "Symantec Endpoint Protection"
+   },
+   "notificationContent1": {
+      "description": "Symantec Endpoint Protection 用戶端上顯示的通知文字。",
+      "message": "Symantec Endpoint Protection 已攔截此網站:"
+   },
+   "notificationTitle": {
+      "description": "通知頁面的標題。",
+      "message": "已攔截惡意網站！"
+   }
+}

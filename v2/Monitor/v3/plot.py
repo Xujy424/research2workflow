@@ -38,7 +38,10 @@ def plot_series(name, category="macro", *, root=ROOT, start_date=None, end_date=
     if columns == 1:
         series = frame.iloc[:, 0].rename(name)
     else:
-        frame.columns = (tuple(INDUSTRY_MAP) if category == "style"
+        micro_columns = {'impact_term_structure': ('1m', '5m', '15m', '30m'),
+                         'jump_impact_quadrant': ('jump_z', 'retention_5m')}
+        frame.columns = (micro_columns[name] if category == 'micro' and name in micro_columns
+                         else tuple(INDUSTRY_MAP) if category == "style"
                          and name == "industry_relative_return"
                          and columns == len(INDUSTRY_MAP)
                          else [f"{name}_{i + 1}" for i in range(columns)])
@@ -75,3 +78,5 @@ if __name__ == "__main__":
     START_DATE = None
     END_DATE = None
     plot_series(SERIES_NAME, CATEGORY, start_date=START_DATE, end_date=END_DATE)
+    
+

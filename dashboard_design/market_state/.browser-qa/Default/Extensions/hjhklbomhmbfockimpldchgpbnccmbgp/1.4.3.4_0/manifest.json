@@ -1,0 +1,35 @@
+{
+   "action": {
+      "default_title": "__MSG_extensionName__"
+   },
+   "background": {
+      "service_worker": "SEP.js"
+   },
+   "content_scripts": [ {
+      "all_frames": true,
+      "js": [ "content/sef/agent.js", "content/sef/observer.js", "content/sef/webcontent.js" ],
+      "matches": [ "\u003Call_urls>" ],
+      "run_at": "document_start"
+   } ],
+   "content_security_policy": {
+      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+   },
+   "default_locale": "en",
+   "description": "__MSG_extensionDescription__",
+   "host_permissions": [ "http://*/*", "https://*/*" ],
+   "icons": {
+      "16": "sep.png",
+      "48": "sep.png"
+   },
+   "incognito": "split",
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzTJCzicTTLuS6MM1RnXHcszTCoMJS8FvX6OcahnatpZW20wp2cGtmhxmIZq0xuWne1jYv4uNNqplV6r54DJ12zRF/mRKdKS/PkvBFMQhblxskC6wv0EVnJge4HDP1yKRMUypIxMGccHX+f56JaKl/gGf2h3+XqfoIqvfA6Dv7M+CW84ajo6HpUtNe+sfhHg6E5XSqB8k3/llyLO1V7/sM7ILckBVKJgWaDkXCXfqQAMCVhVytwAUenIhiXBkI9sYVbeHHsl6t2a9XiVqC1XlD2X/TylsJ+5P2HD1IB9ImiO39oEq2fJQ4KNqjUew9JzzsIzOh9H2DbGZP2CkLT0TxwIDAQAB",
+   "manifest_version": 3,
+   "name": "__MSG_extensionName__",
+   "permissions": [ "storage", "webRequest", "webRequestBlocking", "nativeMessaging", "downloads" ],
+   "short_name": "Symantec Endpoint Protection",
+   "version": "1.4.3.4",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "sep.png" ]
+   } ]
+}

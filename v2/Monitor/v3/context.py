@@ -70,11 +70,11 @@ class MonitorContext:
 
     def get_weight(self, domain, name, end, base=None):
         """返回域内权重；指数用成分权重，其余域用流通市值。"""
-        base = self.read("local", "d_essentials/circ_mv", 0, end, kind="matrix")
         if domain == "index":
             weight = self.read("local", f"index/weight/{name}_weight", 0, end, kind="matrix")
             return weight
-        elif domain == "industry":
+        base = self.read("local", "d_essentials/circ_mv", 0, end, kind="matrix")
+        if domain == "industry":
             mask = self.read("local", "industry/industry", 0, end, kind="matrix")
             valid = (mask == INDUSTRY_MAP[name]) & np.isfinite(base) & (base > 0)
             weight = np.where(valid, base, np.nan)
@@ -232,9 +232,54 @@ class MonitorContext:
                 self._aligned_snapshot_cache.popitem(last=False)
         return self._aligned_snapshot_cache[key]
 
-    def l2_path(self, date, exchange, suffix):
-        """返回逐笔委托/成交等加工后的L2文件路径。"""
-        return (self.snapshot_root / "proc" / pd.Timestamp(date).strftime("%Y%m%d") / f"{exchange}{suffix}.pq")
+    def l2_table(self, date, suffix, *, columns=None, lazy=False, exchanges=('sh', 'sz'),
+                 securities=None):
+        """合并沪深加工L2表，仅保留连续竞价；无文件时返回None。
+        SecurityID统一为六位字符串，TransactTime统一为pl.Time，Exchange保留来源。
+        上午[09:30,11:30]，下午[13:00,14:57)，不排序、不改变原始事件顺序。
+        lazy=True返回查询计划，供大逐笔表先聚合/关联再流式执行。
+        """
+        from datetime import time
+        import polars as pl
+
+        folder = self.snapshot_root / 'proc' / pd.Timestamp(date).strftime('%Y%m%d')
+        tables = []
+        for exchange in exchanges:
+            path = folder / f'{exchange}{suffix}.pq'
+            if not path.exists():
+                continue
+            frame = pl.scan_parquet(path)
+            if columns is not None:
+                frame = frame.select(columns)
+            stamp = pl.col('TransactTime')
+            schema = frame.collect_schema()
+            if securities is not None and schema['SecurityID'].is_integer():
+                frame = frame.filter(pl.col('SecurityID').is_in([int(code) for code in securities]))
+            dtype = schema['TransactTime']
+            if dtype == pl.Time:
+                clock = stamp
+            elif dtype.base_type() == pl.Datetime:
+                clock = stamp.dt.time()
+            else:
+                clock = stamp.cast(pl.String).str.extract(
+                    r'(\d{2}:\d{2}:\d{2}(?:\.\d+)?)', 1).str.to_time(strict=False)
+            code = pl.col('SecurityID').cast(pl.String)
+            if not schema['SecurityID'].is_integer():
+                code = code.str.strip_chars().str.extract(r'^(\d{1,6})', 1)
+            frame = frame.with_columns(
+                code.str.zfill(6).alias('SecurityID'),
+                clock.alias('TransactTime'),
+                pl.lit(exchange).alias('Exchange'))
+            if securities is not None and not schema['SecurityID'].is_integer():
+                frame = frame.filter(pl.col('SecurityID').is_in(securities))
+            stamp = pl.col('TransactTime')
+            tables.append(frame.filter(
+                ((stamp >= time(9, 30)) & (stamp <= time(11, 30)))
+                | ((stamp >= time(13)) & (stamp < time(14, 57)))))
+        if not tables:
+            return None
+        table = pl.concat(tables, how='diagonal_relaxed')
+        return table if lazy else table.collect(engine='streaming')
 
 
 Context = MonitorContext

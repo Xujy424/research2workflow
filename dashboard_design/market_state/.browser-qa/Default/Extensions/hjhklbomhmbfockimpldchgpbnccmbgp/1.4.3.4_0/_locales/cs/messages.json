@@ -1,0 +1,18 @@
+{
+   "extensionDescription": {
+      "description": "Popis rozšíření prohlížeče.",
+      "message": "Zabezpečení prohlížeče od divize Symantec Endpoint Security společnosti Broadcom."
+   },
+   "extensionName": {
+      "description": "Název rozšíření prohlížeče.",
+      "message": "Symantec Endpoint Protection"
+   },
+   "notificationContent1": {
+      "description": "Text oznámení, který se zobrazí v klientovi aplikace Symantec Endpoint Protection.",
+      "message": "Aplikace Symantec Endpoint Protection zablokovala tento web:"
+   },
+   "notificationTitle": {
+      "description": "Nadpis stránky s oznámením.",
+      "message": "Škodlivý web blokován!"
+   }
+}
