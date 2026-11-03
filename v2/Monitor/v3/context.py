@@ -26,7 +26,7 @@ class MonitorContext:
     """提供本地 row/matrix 与 EDB/WSD 序列读取，不处理指标计算。"""
 
     def __init__(self, root=ROOT, data=None, *, edb_reader=None, wsd_reader=None,
-                 client_factory=None, snapshot_root=None,
+                 client_factory=None, jy_factory=None, snapshot_root=None,
                  snapshot_pattern="proc/{date}/{exchange}_shot_1m.pq"):
         self._owns_data = data is None
         self.data = DataPool(root, asset="stock") if data is None else data
@@ -35,6 +35,8 @@ class MonitorContext:
         self.edb_reader, self.wsd_reader = edb_reader, wsd_reader
         self._client_factory = client_factory
         self._client = None
+        self._jy_factory = jy_factory
+        self._jy_connection = None
         self._edb_cache = {}
         self._wsd_cache = {}
         self.snapshot_root = Path(snapshot_root or (Path(self.data.asset_root) / "l2"))
@@ -43,9 +45,11 @@ class MonitorContext:
         self._aligned_snapshot_cache = OrderedDict()
         self._feature_cache = OrderedDict()
 
-    def read(self, source, key, start, end=None, *, kind="series", options=None):
-        """统一读取本地矩阵或 EDB/WSD 日期序列。local 区间使用交易日位置。"""
+    def read(self, source, key, start=None, end=None, *, kind="series", options=None):
+        """读取本地/EDB/WSD数据；jy的key为SQL、options为绑定参数，返回DataFrame。"""
         source, kind = source.lower(), kind.lower()
+        if source == 'jy':
+            return self.jy(key, params=options)
         if source == "local":
             if kind == "series" and str(key).startswith("option/"):
                 path = self.data.root / f"{key}.bin"
@@ -182,6 +186,25 @@ class MonitorContext:
             self._wsd_cache.pop(next(iter(self._wsd_cache)))
         return values.copy()
 
+    def jy(self, sql, params=None):
+        """执行聚源参数化查询并返回DataFrame；按需建立、复用本context的连接。
+
+        例如jy('SELECT TOP 10 * FROM MF_NetValue WHERE InnerCode=%s', (code,))。
+        字段与日期口径由调用者在SQL中指定，不自动补齐或填充。
+        """
+        if self._jy_connection is None:
+            if self._jy_factory is not None:
+                self._jy_connection = self._jy_factory()
+            else:
+                import pymssql
+                from v2.UpdateData.config import JY_CONFIG
+                self._jy_connection = pymssql.connect(
+                    **JY_CONFIG, login_timeout=5, timeout=30)
+        with self._jy_connection.cursor() as cursor:
+            cursor.execute(sql, params) if params is not None else cursor.execute(sql)
+            columns = [column[0] for column in cursor.description]
+            return pd.DataFrame.from_records(cursor.fetchall(), columns=columns)
+
     def close(self):
         """释放本上下文创建的本地数据池和缓存。"""
         self._edb_cache.clear()
@@ -189,6 +212,9 @@ class MonitorContext:
         self._snapshot_cache.clear()
         self._aligned_snapshot_cache.clear()
         self._feature_cache.clear()
+        if self._jy_connection is not None:
+            self._jy_connection.close()
+            self._jy_connection = None
         if self._owns_data:
             self.data.close()
 
