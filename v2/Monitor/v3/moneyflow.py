@@ -226,10 +226,145 @@ def equity_fund_new_issue_scale(context, date, domain='market', name='all', *,
     return daily.rolling(period, min_periods=period).sum().rename('权益基金新发规模')
 
 
+def fund_holdings_similarity(context, date, domain='market', name='all', *,
+                              fund_type_codes=(1101, 1103)):
+    """以持仓占净值比例估算权益基金每日重仓股加权Jaccard相似度。
+
+    报告按InfoPublDate生效；报告间持仓用股票pct和基金UnitNV收益漂移估算。
+    InvestType=1取综合投资；以基金InnerCode为样本单位，不合并关联份额。
+    """
+    end = context.get_position(date)
+    dates = context.dates[:end + 1]
+    ticks = pd.Index(context.ticks)
+    result = pd.Series(np.nan, index=dates, name='基金重仓股相似度')
+    codes = tuple(int(code) for code in fund_type_codes)
+    if not codes:
+        return result
+    placeholders = ','.join(['%s'] * len(codes))
+    params = (dates[-1].to_pydatetime(), *codes)
+    holdings = context.jy(f"""
+        SELECT p.InnerCode, p.ReportDate, p.InfoPublDate, s.SecuCode AS StockCode,
+               p.RatioInNV
+        FROM MF_StockPortfolioDetail p
+        JOIN MF_FundArchives a ON a.InnerCode=p.InnerCode
+        JOIN SecuMain s ON s.InnerCode=p.StockInnerCode
+        WHERE p.InfoPublDate<=%s AND p.InvestType=1
+          AND a.FundTypeCode IN ({placeholders})
+          AND s.SecuMarket IN (83,90) AND s.SecuCategory=1
+        """, params)
+    if holdings.empty:
+        return result
+
+    holdings['InfoPublDate'] = pd.to_datetime(holdings['InfoPublDate']).dt.normalize()
+    holdings['ReportDate'] = pd.to_datetime(holdings['ReportDate']).dt.normalize()
+    available = dates.searchsorted(holdings['InfoPublDate'], side='left')
+    holdings = holdings.loc[available < len(dates)].copy()
+    holdings['available'] = available[available < len(dates)]
+    holdings['report_pos'] = np.maximum(
+        dates.searchsorted(holdings['ReportDate'], side='right') - 1, 0)
+    holdings['stock_pos'] = ticks.get_indexer(holdings['StockCode'].astype(str).str.zfill(6))
+    holdings['weight'] = pd.to_numeric(holdings['RatioInNV'], errors='coerce')
+    holdings = holdings.loc[(holdings['stock_pos'] >= 0) & np.isfinite(holdings['weight'])
+                            & (holdings['weight'] > 0)]
+    if holdings.empty:
+        return result
+
+    nav = context.jy(f"""
+        SELECT n.InnerCode, n.EndDate, n.InfoPublDate, n.UnitNV
+        FROM MF_NetValue n
+        JOIN MF_FundArchives a ON a.InnerCode=n.InnerCode
+        WHERE n.InfoPublDate<=%s AND a.FundTypeCode IN ({placeholders})
+        """, params)
+    if nav.empty:
+        return result
+    nav['EndDate'] = pd.to_datetime(nav['EndDate']).dt.normalize()
+    nav['InfoPublDate'] = pd.to_datetime(nav['InfoPublDate']).dt.normalize()
+    nav = nav.loc[nav['InnerCode'].isin(holdings['InnerCode'])].copy()
+    nav['available'] = dates.searchsorted(nav['InfoPublDate'], side='left')
+    nav = nav.loc[nav['available'] < len(dates)].copy()
+    nav['end_pos'] = np.maximum(dates.searchsorted(nav['EndDate'], side='right') - 1, 0)
+    nav['UnitNV'] = pd.to_numeric(nav['UnitNV'], errors='coerce')
+    nav = nav.loc[np.isfinite(nav['UnitNV']) & (nav['UnitNV'] > 0)]
+    nav.sort_values(['InnerCode', 'EndDate', 'InfoPublDate'], kind='stable', inplace=True)
+    nav.drop_duplicates(['InnerCode', 'EndDate'], keep='first', inplace=True)
+
+    events = {}
+    for (available_pos, fund), rows in holdings.groupby(['available', 'InnerCode'], sort=False):
+        report_date = rows['ReportDate'].max()
+        rows = rows.loc[rows['ReportDate'].eq(report_date)]
+        rows = rows.groupby('stock_pos', sort=False)['weight'].sum()
+        report_pos = int(dates.searchsorted(report_date, side='right') - 1)
+        events.setdefault(int(available_pos), []).append(
+            (fund, max(report_pos, 0), rows.index.to_numpy(dtype=int), rows.to_numpy(dtype=float)))
+    nav_events = {}
+    for (available_pos, fund), rows in nav.groupby(['available', 'InnerCode'], sort=False):
+        row = rows.loc[rows['EndDate'].idxmax()]
+        nav_events.setdefault(int(available_pos), []).append(
+            (fund, int(row['end_pos']), float(row['UnitNV'])))
+
+    returns = np.nan_to_num(
+        context.read('local', 'd_essentials/pct', 0, end, kind='matrix') / 100,
+        nan=0.0)
+    price_index = np.vstack((np.ones((1, returns.shape[1])), np.cumprod(1 + returns, axis=0)))
+    active, latest_report, current_nav, latest_nav_end, nav_history = {}, {}, {}, {}, {}
+
+    def mean_similarity(portfolios):
+        funds = [(fund, stock, weight) for fund, (stock, weight) in portfolios.items()
+                 if len(stock) and np.isfinite(weight).all() and weight.sum() > 0]
+        count = len(funds)
+        if count < 2:
+            return np.nan
+        totals = {fund: weight.sum() for fund, _, weight in funds}
+        holders = {}
+        for fund, stocks, weights in funds:
+            for stock, weight in zip(stocks, weights):
+                holders.setdefault(stock, []).append((fund, weight))
+        overlap = {}
+        for stock_holders in holders.values():
+            for left in range(len(stock_holders) - 1):
+                fund_i, weight_i = stock_holders[left]
+                for right in range(left + 1, len(stock_holders)):
+                    fund_j, weight_j = stock_holders[right]
+                    key = (fund_i, fund_j)
+                    overlap[key] = overlap.get(key, 0.0) + min(weight_i, weight_j)
+        score = sum(value / (totals[i] + totals[j] - value)
+                    for (i, j), value in overlap.items())
+        return score / (count * (count - 1) / 2)
+
+    for i in range(len(dates)):
+        nav_return = {}
+        for fund, report_pos, unit_nav in nav_events.get(i, ()):
+            if report_pos < latest_nav_end.get(fund, -1):
+                continue
+            previous = current_nav.get(fund)
+            if previous is not None:
+                nav_return[fund] = unit_nav / previous - 1
+            current_nav[fund] = unit_nav
+            latest_nav_end[fund] = report_pos
+            nav_history.setdefault(fund, []).append((report_pos, unit_nav))
+
+        for fund, (stocks, weight) in active.items():
+            weight *= (1 + returns[i, stocks]) / (1 + nav_return.get(fund, 0.0))
+            active[fund] = (stocks, weight)
+
+        for fund, report_pos, stocks, weight in events.get(i, ()):
+            if report_pos < latest_report.get(fund, -1):
+                continue
+            base_nav = next((value for pos, value in reversed(nav_history.get(fund, ()))
+                             if pos <= report_pos), None)
+            nav_factor = current_nav.get(fund, base_nav) / base_nav if base_nav else 1.0
+            price_factor = price_index[i + 1, stocks] / price_index[report_pos + 1, stocks]
+            active[fund] = (stocks, weight * price_factor / nav_factor)
+            latest_report[fund] = report_pos
+        result.iloc[i] = mean_similarity(active)
+    return result
+
+
 MONEYFLOW_INDICATORS = {
     function.__name__: function for function in (
         amount_change, top_share, turnover, active_buy_ratio, balance_change,
         category_share, etf_net_subscription_ratio, equity_fund_new_issue_scale,
+        fund_holdings_similarity,
     )
 }
 
