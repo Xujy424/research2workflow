@@ -6,6 +6,7 @@ import sys
 import numpy as np
 import pandas as pd
 import polars as pl
+from tqdm import tqdm
 
 if __package__:
     from .context import MonitorContext
@@ -430,7 +431,7 @@ def fund_holdings_similarity(
 
     # 7. 每块展开20个交易日，批量漂移持仓并按日计算横截面相似度。
     # 保留分块循环控制内存；无逐日、逐基金、逐报告的Python循环。
-    for start in range(0, T, 20):
+    for start in tqdm(range(0, T, 20)):
         stop = min(start + 20, T)
         block = (table.filter((pl.col('day') < stop) & (pl.col('stop') > start))
             .with_columns(pl.int_ranges(pl.max_horizontal('day', pl.lit(start)),
