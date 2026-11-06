@@ -433,10 +433,16 @@ def fund_holdings_similarity(
     # 保留分块循环控制内存；无逐日、逐基金、逐报告的Python循环。
     for start in tqdm(range(0, T, 20)):
         stop = min(start + 20, T)
-        block = (table.filter((pl.col('day') < stop) & (pl.col('stop') > start))
-            .with_columns(pl.int_ranges(pl.max_horizontal('day', pl.lit(start)),
-                                        pl.min_horizontal('stop', pl.lit(stop))).alias('day'))
-            .explode('day'))
+        block = (
+            table.filter((pl.col('day') < stop) & (pl.col('stop') > start))
+            .with_columns(
+                pl.int_ranges(
+                    pl.max_horizontal('day', pl.lit(start)),
+                    pl.min_horizontal('stop', pl.lit(stop))
+                ).alias('day')
+            )
+            .explode('day')
+        )
         if block.is_empty():
             continue
         day, fund, stock = (block[col].to_numpy().astype(int) for col in ('day', 'fund', 'stock'))
