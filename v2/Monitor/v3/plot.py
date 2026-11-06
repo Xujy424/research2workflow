@@ -77,6 +77,11 @@ if __name__ == "__main__":
     SERIES_NAME = "pe_level"
     START_DATE = None
     END_DATE = None
-    plot_series(SERIES_NAME, CATEGORY, start_date=START_DATE, end_date=END_DATE)
+    pe_level = plot_series(SERIES_NAME, CATEGORY, start_date=START_DATE, end_date=END_DATE)
+
+    pb_level = plot_series('pb_level', CATEGORY, start_date=START_DATE, end_date=END_DATE)
+
+    pd.DataFrame({'pe_level': pe_level/pe_level[0], 'pb_level': pb_level/pb_level[0]}).plot()
+    plt.show()
     
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
+import polars as pl
 
 if __package__:
     from .context import MonitorContext
@@ -126,7 +127,9 @@ def etf_net_subscription_ratio(context, date, domain='market', name='all', *,
     净申赎份额只在披露对应日计入，不向后填充；分子分母使用有效ETF样本。
     market默认全体境内股票ETF；其他域须传入明确的ETF InnerCode列表。
     """
-    if domain != 'market' and fund_codes is None:
+    if fund_codes is not None:
+        fund_codes = tuple(dict.fromkeys(int(code) for code in fund_codes))
+    if domain != 'market' and not fund_codes:
         raise ValueError('ETF分组尚无跟踪指数映射，请提供fund_codes（ETF InnerCode）')
     if period < 1:
         raise ValueError('period须为正整数')
@@ -139,7 +142,8 @@ def etf_net_subscription_ratio(context, date, domain='market', name='all', *,
         condition += ' AND a.InnerCode IN (' + ','.join(['%s'] * len(fund_codes)) + ')'
         params.extend(int(code) for code in fund_codes)
     shares = context.jy(f"""
-        SELECT s.InnerCode, s.EndDate, s.InfoPublDate, s.FloatShares, s.SharesChange
+        SELECT s.InnerCode, s.EndDate, s.InfoPublDate, s.FloatShares,
+               a.LastOperationDate
         FROM MF_SharesChange s
         JOIN MF_FundArchives a ON a.InnerCode=s.InnerCode
         WHERE s.StatPeriod='996' AND s.EndDate BETWEEN %s AND %s AND {condition}
@@ -159,25 +163,39 @@ def etf_net_subscription_ratio(context, date, domain='market', name='all', *,
         frame.sort_values(['InnerCode', 'EndDate', 'InfoPublDate'], kind='stable', inplace=True)
         frame.drop_duplicates(['InnerCode', 'EndDate'], keep='first', inplace=True)
     codes = sorted(set(shares['InnerCode']) & set(nav['InnerCode']))
+    last_operation = (shares[['InnerCode', 'LastOperationDate']]
+        .drop_duplicates('InnerCode').set_index('InnerCode')['LastOperationDate']
+        .reindex(codes))
+    last_operation = pd.to_datetime(last_operation, errors='coerce').dt.normalize()
+    operation_pos = np.full(len(codes), -1, dtype=np.int64)
+    known_operation = last_operation.notna().to_numpy()
+    operation_pos[known_operation] = dates.searchsorted(last_operation[known_operation], side='right') - 1   # operation_pos[i] 是第 i 只基金的最后运作日对应的交易日索引
+    nav_available = dates.searchsorted(nav['InfoPublDate'], side='left')
+    nav_available = pd.Series(nav_available, index=nav['InnerCode'])
+    last_seen_pos = nav_available[nav_available < len(dates)].groupby(level=0).max()
+    last_seen_pos = last_seen_pos.reindex(codes).fillna(-1).to_numpy(dtype=np.int64)
+    last_pos = np.where(known_operation, operation_pos, last_seen_pos)
+    alive = np.arange(len(dates))[:, None] <= last_pos[None, :]
 
     def daily_matrix(frame, fields):
         frame = frame.loc[frame['InnerCode'].isin(codes)].copy()
         position = dates.searchsorted(frame['InfoPublDate'], side='left')
         frame = frame.loc[position < len(dates)].copy()
         frame['date'] = dates[position[position < len(dates)]].to_numpy()
-        pivot = frame.pivot_table(index='date', columns='InnerCode', values=fields,
-                                  aggfunc='last')
-        return {field: pivot[field].reindex(index=dates, columns=codes)
-                for field in fields}
+        return {
+            field: frame.pivot_table(index='date', columns='InnerCode', values=field, aggfunc='last').reindex(index=dates, columns=codes)
+            for field in fields
+        }
 
-    shares_daily = daily_matrix(shares, ['FloatShares', 'SharesChange'])
+    shares_daily = daily_matrix(shares, ['FloatShares'])
     nav_daily = daily_matrix(nav, ['UnitNV'])
-    s = shares_daily['FloatShares'].ffill()
-    shares_change = shares_daily['SharesChange']
-    nv = nav_daily['UnitNV'].ffill()
-    s = s.astype(float).where(np.isfinite(s) & (s >= 0))
-    shares_change = shares_change.astype(float)
-    nv = nv.astype(float).where(np.isfinite(nv) & (nv > 0))
+    float_shares = shares_daily['FloatShares'].apply(pd.to_numeric, errors='coerce')
+    float_shares = float_shares.where(np.isfinite(float_shares) & (float_shares >= 0))
+    shares_state = float_shares.ffill().where(alive)
+    shares_change = shares_state.diff().where(float_shares.notna())
+    s = shares_state
+    nv = nav_daily['UnitNV'].apply(pd.to_numeric, errors='coerce').ffill().where(alive)
+    nv = nv.where(np.isfinite(nv) & (nv > 0))
     flow = shares_change * nv
     flow = flow.rolling(period, min_periods=period).sum()
     base = s.shift(period) * nv.shift(period)
@@ -226,137 +244,223 @@ def equity_fund_new_issue_scale(context, date, domain='market', name='all', *,
     return daily.rolling(period, min_periods=period).sum().rename('权益基金新发规模')
 
 
-def fund_holdings_similarity(context, date, domain='market', name='all', *,
-                              fund_type_codes=(1101, 1103)):
-    """以持仓占净值比例估算权益基金每日重仓股加权Jaccard相似度。
-
-    报告按InfoPublDate生效；报告间持仓用股票pct和基金UnitNV收益漂移估算。
-    InvestType=1取综合投资；以基金InnerCode为样本单位，不合并关联份额。
+def fund_holdings_similarity(
+    context, date, domain='market', name='all', *,
+    fund_type_codes=(1101, 1103)
+):
+    """已披露A股持仓的基金两两加权Jaccard均值（日频）。
+    持仓与净值分别按照披露日生效，并独立向前填充。
+    持仓报告整体替换；净值更新独立进行。
+    持仓权重按股票收益和最新已披露净值漂移，不归一化。
+    存续截止日后不再参与计算。
     """
     end = context.get_position(date)
-    dates = context.dates[:end + 1]
-    ticks = pd.Index(context.ticks)
+    dates = pd.DatetimeIndex(context.dates[:end + 1]).normalize()
+    T = len(dates)
     result = pd.Series(np.nan, index=dates, name='基金重仓股相似度')
-    codes = tuple(int(code) for code in fund_type_codes)
+
+    codes = tuple(map(int, fund_type_codes))
     if not codes:
         return result
+
     placeholders = ','.join(['%s'] * len(codes))
     params = (dates[-1].to_pydatetime(), *codes)
-    holdings = context.jy(f"""
-        SELECT p.InnerCode, p.ReportDate, p.InfoPublDate, s.SecuCode AS StockCode,
-               p.RatioInNV
-        FROM MF_StockPortfolioDetail p
-        JOIN MF_FundArchives a ON a.InnerCode=p.InnerCode
-        JOIN SecuMain s ON s.InnerCode=p.StockInnerCode
-        WHERE p.InfoPublDate<=%s AND p.InvestType=1
-          AND a.FundTypeCode IN ({placeholders})
-          AND s.SecuMarket IN (83,90) AND s.SecuCategory=1
-        """, params)
-    if holdings.empty:
-        return result
 
-    holdings['InfoPublDate'] = pd.to_datetime(holdings['InfoPublDate']).dt.normalize()
-    holdings['ReportDate'] = pd.to_datetime(holdings['ReportDate']).dt.normalize()
-    available = dates.searchsorted(holdings['InfoPublDate'], side='left')
-    holdings = holdings.loc[available < len(dates)].copy()
-    holdings['available'] = available[available < len(dates)]
-    holdings['report_pos'] = np.maximum(
-        dates.searchsorted(holdings['ReportDate'], side='right') - 1, 0)
-    holdings['stock_pos'] = ticks.get_indexer(holdings['StockCode'].astype(str).str.zfill(6))
-    holdings['weight'] = pd.to_numeric(holdings['RatioInNV'], errors='coerce')
-    holdings = holdings.loc[(holdings['stock_pos'] >= 0) & np.isfinite(holdings['weight'])
-                            & (holdings['weight'] > 0)]
-    if holdings.empty:
-        return result
+    # ==========================================================
+    # 1. 原始数据：不进行无意义的唯一键去重
+    # ==========================================================
+    holdings = context.jy(f"""
+        SELECT
+            p.InnerCode,
+            p.ReportDate,
+            p.InfoPublDate,
+            s.SecuCode AS StockCode,
+            p.RatioInNV,
+            a.LastOperationDate
+        FROM MF_StockPortfolioDetail p
+        JOIN MF_FundArchives a
+            ON a.InnerCode = p.InnerCode
+        JOIN SecuMain s
+            ON s.InnerCode = p.StockInnerCode
+        WHERE p.InfoPublDate <= %s
+          AND p.InvestType = 1
+          AND a.FundTypeCode IN ({placeholders})
+          AND s.SecuMarket IN (83, 90)
+          AND s.SecuCategory = 1
+    """, params)
 
     nav = context.jy(f"""
-        SELECT n.InnerCode, n.EndDate, n.InfoPublDate, n.UnitNV
+        SELECT
+            n.InnerCode,
+            n.EndDate,
+            n.InfoPublDate,
+            n.UnitNV
         FROM MF_NetValue n
-        JOIN MF_FundArchives a ON a.InnerCode=n.InnerCode
-        WHERE n.InfoPublDate<=%s AND a.FundTypeCode IN ({placeholders})
-        """, params)
+        JOIN MF_FundArchives a
+            ON a.InnerCode = n.InnerCode
+        WHERE n.InfoPublDate <= %s
+          AND a.FundTypeCode IN ({placeholders})
+    """, params)
+
+    if holdings.empty or nav.empty:
+        return result
+
+    for frame, report_col in ((holdings, 'ReportDate'), (nav, 'EndDate')):
+        frame[report_col] = pd.to_datetime(frame[report_col]).dt.normalize()
+        frame['InfoPublDate'] = pd.to_datetime(frame['InfoPublDate']).dt.normalize()
+    nav['UnitNV'] = pd.to_numeric(nav['UnitNV'], errors='coerce')
+    nav = nav.loc[np.isfinite(nav['UnitNV']) & (nav['UnitNV'] > 0)].copy()
     if nav.empty:
         return result
-    nav['EndDate'] = pd.to_datetime(nav['EndDate']).dt.normalize()
-    nav['InfoPublDate'] = pd.to_datetime(nav['InfoPublDate']).dt.normalize()
-    nav = nav.loc[nav['InnerCode'].isin(holdings['InnerCode'])].copy()
-    nav['available'] = dates.searchsorted(nav['InfoPublDate'], side='left')
-    nav = nav.loc[nav['available'] < len(dates)].copy()
-    nav['end_pos'] = np.maximum(dates.searchsorted(nav['EndDate'], side='right') - 1, 0)
-    nav['UnitNV'] = pd.to_numeric(nav['UnitNV'], errors='coerce')
-    nav = nav.loc[np.isfinite(nav['UnitNV']) & (nav['UnitNV'] > 0)]
-    nav.sort_values(['InnerCode', 'EndDate', 'InfoPublDate'], kind='stable', inplace=True)
-    nav.drop_duplicates(['InnerCode', 'EndDate'], keep='first', inplace=True)
 
-    events = {}
-    for (available_pos, fund), rows in holdings.groupby(['available', 'InnerCode'], sort=False):
-        report_date = rows['ReportDate'].max()
-        rows = rows.loc[rows['ReportDate'].eq(report_date)]
-        rows = rows.groupby('stock_pos', sort=False)['weight'].sum()
-        report_pos = int(dates.searchsorted(report_date, side='right') - 1)
-        events.setdefault(int(available_pos), []).append(
-            (fund, max(report_pos, 0), rows.index.to_numpy(dtype=int), rows.to_numpy(dtype=float)))
-    nav_events = {}
-    for (available_pos, fund), rows in nav.groupby(['available', 'InnerCode'], sort=False):
-        row = rows.loc[rows['EndDate'].idxmax()]
-        nav_events.setdefault(int(available_pos), []).append(
-            (fund, int(row['end_pos']), float(row['UnitNV'])))
+    # ==========================================================
+    # 2. 基金、股票映射与存续边界
+    # ==========================================================
+    funds = pd.Index(holdings['InnerCode'].unique())
+    F = len(funds)
 
-    returns = np.nan_to_num(
-        context.read('local', 'd_essentials/pct', 0, end, kind='matrix') / 100,
-        nan=0.0)
-    price_index = np.vstack((np.ones((1, returns.shape[1])), np.cumprod(1 + returns, axis=0)))
-    active, latest_report, current_nav, latest_nav_end, nav_history = {}, {}, {}, {}, {}
+    holdings['fund'] = funds.get_indexer(holdings['InnerCode'])
+    nav = nav.loc[nav['InnerCode'].isin(funds)].copy()
+    nav['fund'] = funds.get_indexer(nav['InnerCode'])
 
-    def mean_similarity(portfolios):
-        funds = [(fund, stock, weight) for fund, (stock, weight) in portfolios.items()
-                 if len(stock) and np.isfinite(weight).all() and weight.sum() > 0]
-        count = len(funds)
-        if count < 2:
-            return np.nan
-        totals = {fund: weight.sum() for fund, _, weight in funds}
-        holders = {}
-        for fund, stocks, weights in funds:
-            for stock, weight in zip(stocks, weights):
-                holders.setdefault(stock, []).append((fund, weight))
-        overlap = {}
-        for stock_holders in holders.values():
-            for left in range(len(stock_holders) - 1):
-                fund_i, weight_i = stock_holders[left]
-                for right in range(left + 1, len(stock_holders)):
-                    fund_j, weight_j = stock_holders[right]
-                    key = (fund_i, fund_j)
-                    overlap[key] = overlap.get(key, 0.0) + min(weight_i, weight_j)
-        score = sum(value / (totals[i] + totals[j] - value)
-                    for (i, j), value in overlap.items())
-        return score / (count * (count - 1) / 2)
+    tick_index = pd.Index(pd.Series(context.ticks).astype(str).str.zfill(6))
+    holdings['stock'] = tick_index.get_indexer(holdings['StockCode'].astype(str).str.zfill(6))
+    holdings['weight'] = pd.to_numeric(holdings['RatioInNV'], errors='coerce')
+    holdings = holdings.loc[(holdings['stock'] >= 0) & np.isfinite(holdings['weight']) & (holdings['weight'] > 0)].copy()
+    if holdings.empty:
+        return result
 
-    for i in range(len(dates)):
-        nav_return = {}
-        for fund, report_pos, unit_nav in nav_events.get(i, ()):
-            if report_pos < latest_nav_end.get(fund, -1):
-                continue
-            previous = current_nav.get(fund)
-            if previous is not None:
-                nav_return[fund] = unit_nav / previous - 1
-            current_nav[fund] = unit_nav
-            latest_nav_end[fund] = report_pos
-            nav_history.setdefault(fund, []).append((report_pos, unit_nav))
+    # 不存在截止日的基金默认持续至当前计算日。
+    last_operation = pd.to_datetime(
+        holdings.groupby('fund')['LastOperationDate'].first()
+        .reindex(range(F)),
+        errors='coerce'
+    ).dt.normalize()
+    last_pos = np.full(F, T - 1, dtype=int)
+    known = last_operation.notna().to_numpy()
+    last_pos[known] = dates.searchsorted(last_operation.loc[known], side='right') - 1
 
-        for fund, (stocks, weight) in active.items():
-            weight *= (1 + returns[i, stocks]) / (1 + nav_return.get(fund, 0.0))
-            active[fund] = (stocks, weight)
+    # ==========================================================
+    # 3. 净值事件：映射到有效交易日
+    # ==========================================================
+    nav['day'] = dates.searchsorted(nav[['EndDate', 'InfoPublDate']].max(axis=1),side='left')
+    nav = nav.loc[(nav['day'] < T) & (nav['day'] >= 0)].copy()
+    # 同一交易日同一基金只采用最新报告期的净值。
+    # 这里是事件冲突处理，不是原始记录去重。
+    nav = nav.sort_values(['fund', 'day', 'EndDate', 'InfoPublDate']).drop_duplicates(['fund', 'day'], keep='last')
+    # 防止迟到的旧报告期净值覆盖新报告期净值。
+    nav = nav.loc[nav['EndDate'].eq(nav.groupby('fund')['EndDate'].cummax())].copy()
 
-        for fund, report_pos, stocks, weight in events.get(i, ()):
-            if report_pos < latest_report.get(fund, -1):
-                continue
-            base_nav = next((value for pos, value in reversed(nav_history.get(fund, ()))
-                             if pos <= report_pos), None)
-            nav_factor = current_nav.get(fund, base_nav) / base_nav if base_nav else 1.0
-            price_factor = price_index[i + 1, stocks] / price_index[report_pos + 1, stocks]
-            active[fund] = (stocks, weight * price_factor / nav_factor)
-            latest_report[fund] = report_pos
-        result.iloc[i] = mean_similarity(active)
+    # 直接构造“交易日×基金”矩阵，列内ffill替代逐日更新净值字典。
+    nav_daily = (nav.pivot(index='day', columns='fund', values='UnitNV').reindex(index=range(T), columns=range(F)).ffill().to_numpy())
+    nav_daily[np.arange(T)[:, None] > last_pos[None, :]] = np.nan
+
+    # ==========================================================
+    # 4. 报告期基准净值：以首次披露版本匹配
+    # ==========================================================
+    # 此处仅为每个报告期选择一个基准净值，
+    # 不是对原始nav表做全局去重。
+    base_nav = (
+        nav.sort_values(['InfoPublDate', 'EndDate'])
+        .drop_duplicates(['fund', 'EndDate'], keep='first')
+        [['fund', 'EndDate', 'InfoPublDate', 'UnitNV']]
+        .rename(columns={
+            'EndDate': 'ReportDate',
+            'InfoPublDate': 'NavPublDate',
+            'UnitNV': 'base_nav'
+        })
+    )
+
+    # 每个基金、报告期、披露日是一份持仓报告事件。
+    report_keys = ['fund', 'ReportDate', 'InfoPublDate']
+    reports = (
+        holdings.groupby(report_keys, as_index=False)
+        .size()
+        .drop(columns='size')
+        .merge(
+            base_nav,
+            on=['fund', 'ReportDate'],
+            how='inner'
+        )
+    )
+
+    # 持仓和报告期净值均可获得后才生效。
+    effective_date = reports[['ReportDate', 'InfoPublDate', 'NavPublDate']].max(axis=1)
+    reports['day'] = dates.searchsorted(effective_date, side='left')
+    reports['report_pos'] = (dates.searchsorted(reports['ReportDate'], side='right') - 1)
+    reports = reports.loc[(reports['day'] < T) & (reports['report_pos'] >= 0)].copy()
+    if reports.empty:
+        return result
+
+    # ==========================================================
+    # 5. 股票累计收益指数
+    # ==========================================================
+    returns = context.read('local', 'd_essentials/pct', 0, end, kind='matrix')
+    returns = np.nan_to_num(np.asarray(returns, dtype=float) / 100, nan=0.0, posinf=0.0, neginf=0.0)
+    price = np.cumprod(1 + returns, axis=0)
+
+    # ==========================================================
+    # 6. 预计算每次披露报告的持仓系数
+    # ==========================================================
+    # w(t) = coefficient * price(t) / nav_available(t)
+    # coefficient = report_weight * base_nav / price(report_pos)
+
+    # 关联报告参数后一次性计算所有持仓系数，避免逐份报告切表。
+    reports = reports.sort_values(['fund', 'day', 'ReportDate', 'InfoPublDate']).copy()
+    reports['event'] = np.arange(len(reports))
+    positions = holdings.merge(reports, on=report_keys, how='inner')
+    report_price = price[positions['report_pos'].to_numpy(), positions['stock'].to_numpy()]
+    positions['coefficient'] = positions['weight'].to_numpy() * positions['base_nav'].to_numpy() / report_price
+    positions['valid'] = (np.isfinite(report_price) & (report_price > 0) &
+                          np.isfinite(positions['coefficient']))
+    valid_events = positions.groupby('event')['valid'].all()
+    reports = reports.loc[reports['event'].isin(valid_events.index[valid_events])]
+
+    # 每日每只基金采用最新报告；迟到的旧报告不能覆盖新报告。
+    reports = reports.drop_duplicates(['fund', 'day'], keep='last')
+    reports = reports.loc[reports['ReportDate'].eq(reports.groupby('fund')['ReportDate'].cummax())].copy()
+    # [day, stop)等价于在下一报告或存续截止日之前fill整份报告。
+    reports['stop'] = np.minimum(
+        reports.groupby('fund')['day'].shift(-1).fillna(T).to_numpy(dtype=int),
+        last_pos[reports['fund'].to_numpy()] + 1)
+    intervals = pl.from_pandas(reports.loc[reports['day'] < reports['stop'], ['event', 'day', 'stop']])
+    table = (pl.from_pandas(positions[['event', 'fund', 'stock', 'coefficient']])
+        .join(intervals, on='event')
+        .group_by(['fund', 'stock', 'day', 'stop']).agg(pl.col('coefficient').sum()))
+
+    # 7. 每块展开20个交易日，批量漂移持仓并按日计算横截面相似度。
+    # 保留分块循环控制内存；无逐日、逐基金、逐报告的Python循环。
+    for start in range(0, T, 20):
+        stop = min(start + 20, T)
+        block = (table.filter((pl.col('day') < stop) & (pl.col('stop') > start))
+            .with_columns(pl.int_ranges(pl.max_horizontal('day', pl.lit(start)),
+                                        pl.min_horizontal('stop', pl.lit(stop))).alias('day'))
+            .explode('day'))
+        if block.is_empty():
+            continue
+        day, fund, stock = (block[col].to_numpy().astype(int) for col in ('day', 'fund', 'stock'))
+        weight = block['coefficient'].to_numpy() * price[day, stock] / nav_daily[day, fund]
+        rows = (block.select('day', 'fund', 'stock').with_columns(pl.Series('weight', weight))
+            .filter((pl.col('weight').is_finite() & (pl.col('weight') >= 0)).all().over(['day', 'fund'])))
+        # 整只基金的保留持仓都有效且总权重大于0，才参与当日比较。
+        totals = (rows.group_by(['day', 'fund']).agg(pl.col('weight').sum().alias('total'))
+            .filter(pl.col('total') > 0))
+        rows = rows.join(totals, on=['day', 'fund'])
+        counts = totals.group_by('day').agg(pl.len().alias('count'))
+        # 只关联同日共同持仓，fund<fund_j排除自身和反向重复基金对。
+        scores = (rows.lazy().join(rows.lazy(), on=['day', 'stock'], suffix='_j')
+            .filter(pl.col('fund') < pl.col('fund_j'))
+            .group_by(['day', 'fund', 'fund_j'])
+            .agg(pl.min_horizontal('weight', 'weight_j').sum().alias('overlap'),
+                 pl.col('total').first(), pl.col('total_j').first())
+            .with_columns((pl.col('overlap') /
+                (pl.col('total') + pl.col('total_j') - pl.col('overlap'))).alias('similarity'))
+            .group_by('day').agg(pl.col('similarity').sum()).collect(engine='streaming'))
+        # 无共同股票的基金对贡献0；不足两只基金的日期保留NaN。
+        daily = counts.join(scores, on='day', how='left').filter(pl.col('count') >= 2)
+        n = daily['count'].to_numpy().astype(float)
+        result.iloc[daily['day'].to_numpy()] = daily['similarity'].fill_null(0).to_numpy() / (n * (n - 1) / 2)
+
     return result
 
 
@@ -390,15 +494,15 @@ def update_moneyflow(root=ROOT, domain='index', name='hs300', indicators=None, *
         outputs = {}
         for indicator in selected:
             params = dict((indicator_params or {}).get(indicator, {}))
-            if indicator == 'etf_net_subscription_ratio' and domain != 'market' and params.get('fund_codes') is None:
-                print(f'[SKIP] {indicator}: 分组需提供fund_codes', flush=True)
-                continue
             sizes = ((params['size'],) if 'size' in params else ('large', 'medium', 'small')) if indicator == 'category_share' else (None,)
             for size in sizes:
                 if size is not None:
                     params['size'] = size
-                values = MONEYFLOW_INDICATORS[indicator](context, end, domain, name,
-                    **params).reindex(context.dates)
+                calc_domain, calc_name = domain, name
+                if indicator == 'etf_net_subscription_ratio' and not params.get('fund_codes'):
+                    calc_domain, calc_name = 'market', 'all'
+                values = MONEYFLOW_INDICATORS[indicator](context, end, calc_domain,
+                    calc_name, **params).reindex(context.dates)
                 output_name = f'{size}_trade_share' if size is not None else indicator
                 path = output_root / f'{output_name}.bin'
                 array = ensure_memmap(path, (len(axis_dates), 1), dtype=np.float32)
@@ -419,7 +523,7 @@ __all__ = [*MONEYFLOW_INDICATORS, 'MONEYFLOW_INDICATORS', 'update_moneyflow']
 
 
 if __name__ == '__main__':
-    DOMAIN = 'index'
-    NAME = 'hs300'
+    DOMAIN = 'market'
+    NAME = 'all'
     INDICATORS = None
     update_moneyflow(root=ROOT, domain=DOMAIN, name=NAME, indicators=INDICATORS)
