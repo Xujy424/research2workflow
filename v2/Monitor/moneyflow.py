@@ -156,6 +156,22 @@ def etf_net_subscription_ratio(context, date, domain='market', name='all', *,
         JOIN MF_FundArchives a ON a.InnerCode=n.InnerCode
         WHERE n.EndDate BETWEEN %s AND %s AND {condition}
         """, tuple(params))
+    split_filter = ''
+    split_params = [dates[-1].to_pydatetime(), dates[0].to_pydatetime(),
+                    dates[-1].to_pydatetime()]
+    if fund_codes:
+        split_filter = 'AND a.InnerCode IN (' + ','.join(['%s'] * len(fund_codes)) + ')'
+        split_params.extend(fund_codes)
+    splits = context.jy(f"""
+        SELECT s.InnerCode, s.InfoPublDate, s.SplitDay, s.ActualSplitDay,
+               s.SplitDayEX, s.SplitRatio, s.SharesAfter
+        FROM MF_SharesSplit s
+        JOIN MF_FundArchives a ON a.InnerCode=s.InnerCode
+        WHERE s.InfoPublDate<=%s AND a.Type=4 AND a.FundNature=1
+          AND a.FundTypeCode=1101
+          AND COALESCE(s.SplitDayEX,s.ActualSplitDay,s.SplitDay) BETWEEN %s AND %s
+          {split_filter}
+        """, tuple(split_params))
     if shares.empty or nav.empty:
         return result
     for frame in (shares, nav):
@@ -195,6 +211,41 @@ def etf_net_subscription_ratio(context, date, domain='market', name='all', *,
     float_shares = float_shares.where(np.isfinite(float_shares) & (float_shares >= 0))
     shares_state = float_shares.ffill().where(alive)
     shares_change = shares_state.diff().where(float_shares.notna())
+    if not splits.empty:
+        # 拆分比例只在信息已披露、且拆后份额首次出现在日频数据时生效。
+        for column in ('InfoPublDate', 'SplitDay', 'ActualSplitDay', 'SplitDayEX'):
+            splits[column] = pd.to_datetime(splits[column], errors='coerce').dt.normalize()
+        splits['SplitRatio'] = pd.to_numeric(splits['SplitRatio'], errors='coerce')
+        splits['SharesAfter'] = pd.to_numeric(splits['SharesAfter'], errors='coerce')
+        splits['action_date'] = splits['SplitDayEX'].fillna(
+            splits['ActualSplitDay']).fillna(splits['SplitDay'])
+        splits = splits.loc[
+            np.isfinite(splits['SplitRatio']) & (splits['SplitRatio'] > 0)
+            & np.isfinite(splits['SharesAfter']) & (splits['SharesAfter'] > 0)
+            & splits['action_date'].notna()
+        ].copy()
+        ratio = np.ones((len(dates), len(codes)), dtype=float)
+        code_pos = {code: i for i, code in enumerate(codes)}
+        share_events = shares[['InnerCode', 'InfoPublDate', 'FloatShares']].copy()
+        share_events['FloatShares'] = pd.to_numeric(share_events['FloatShares'], errors='coerce')
+        share_events['day'] = dates.searchsorted(share_events['InfoPublDate'], side='left')
+        share_events = share_events.loc[share_events['day'] < len(dates)]
+        by_fund = {fund: frame.sort_values('day') for fund, frame in share_events.groupby('InnerCode')}
+        for split in splits.itertuples(index=False):
+            fund = split.InnerCode
+            observations = by_fund.get(fund)
+            if observations is None or fund not in code_pos:
+                continue
+            first_day = max(dates.searchsorted(split.InfoPublDate, side='left'),
+                            dates.searchsorted(split.action_date, side='left'))
+            observed = observations.loc[observations['day'] >= first_day]
+            matched = observed.loc[np.isclose(
+                observed['FloatShares'], split.SharesAfter, rtol=1e-6, atol=1.0)]
+            if not matched.empty:
+                split_day = int(matched.iloc[0]['day'])
+                ratio[split_day, code_pos[fund]] *= split.SplitRatio
+        # 把前一期份额换算到拆后单位，再计算真实份额差。
+        shares_change = (shares_state - shares_state.shift(1) * ratio).where(float_shares.notna())
     s = shares_state
     nv = nav_daily['UnitNV'].apply(pd.to_numeric, errors='coerce').ffill().where(alive)
     nv = nv.where(np.isfinite(nv) & (nv > 0))
