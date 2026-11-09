@@ -190,9 +190,9 @@ if __name__ == '__main__':
     import pymssql
 
     date = '2024-06-14'
-    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
-    root = Path('D:/data')
+    dates = np.load('Z:/data/axis/dates.npy',allow_pickle=True)
+    ticks = np.load('Z:/data/axis/stock_ticks.npy', allow_pickle=False)
+    root = Path('Z:/data')
 
 
     JY_CONFIG = {
