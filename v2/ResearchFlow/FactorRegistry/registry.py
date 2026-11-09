@@ -11,6 +11,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from ..matrix_store import MatrixStore
+from v2.UpdateData.config import ROOT
 
 
 class FactorStatus(str, Enum):
@@ -114,7 +115,7 @@ class FactorMonitorRecord:
 class FactorRegistry:
     """Persistent JSON registry for factor versions, decisions and monitoring."""
 
-    def __init__(self, path: str | Path = "D:/data/factorpool/registry.json") -> None:
+    def __init__(self, path: str | Path = ROOT / "factorpool" / "registry.json") -> None:
         self.path = Path(path)
         self._records: dict[tuple[str, str], FactorMetadata] = {}
         self._status_log: list[FactorLifecycleEvent] = []
@@ -265,7 +266,7 @@ class FactorRegistry:
         default_family: str = "unknown",
         version: str = "v1",
     ) -> list[FactorMetadata]:
-        store = store or MatrixStore(self.path.parents[1] if self.path.parent.name == "factorpool" else "D:/data")
+        store = store or MatrixStore(self.path.parents[1] if self.path.parent.name == "factorpool" else ROOT)
         axis = store.load_axis()
         folder = store.root / "factorpool"
         discovered: list[FactorMetadata] = []

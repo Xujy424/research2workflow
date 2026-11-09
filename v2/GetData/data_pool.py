@@ -11,7 +11,8 @@ import pandas as pd
 try:
     from ..UpdateData.config import ROOT
 except ImportError:
-    ROOT = Path("/data/shanghai/xujiayi/workflow/data")
+    import os
+    ROOT = Path("Z:/") if os.name == "nt" else Path("/data/shanghai/xujiayi/workflow/data")
 
 
 MIDDLE_BY_FOLDER = {

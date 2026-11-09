@@ -9,6 +9,8 @@ from typing import Literal, Sequence
 import numpy as np
 import numpy.typing as npt
 
+from v2.UpdateData.config import ROOT
+
 
 MemmapMode = Literal["r", "r+", "w+", "c"]
 AxisSelector = object | Sequence[object] | None
@@ -27,7 +29,7 @@ class MatrixAxis:
 class MatrixStore:
     """Memmap-based reader/writer for daily ``T x N`` matrices."""
 
-    def __init__(self, root: str | Path = "D:/data", *, dtype: npt.DTypeLike = "float64") -> None:
+    def __init__(self, root: str | Path = ROOT, *, dtype: npt.DTypeLike = "float64") -> None:
         self.root = Path(root)
         self.default_dtype = np.dtype(dtype)
 
@@ -201,6 +203,8 @@ class MatrixStore:
     def _load_axis(self, stem: str) -> npt.NDArray[np.generic]:
         axis_dir = self.root / "axis"
         candidates = (axis_dir / f"{stem}.npy", axis_dir / f"{stem}s.npy")
+        if stem == "tick":
+            candidates = (axis_dir / "stock_ticks.npy", *candidates)
         for path in candidates:
             if path.exists():
                 return np.load(path, allow_pickle=True)

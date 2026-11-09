@@ -101,7 +101,7 @@ def category_share(context, date, domain, name, size='large'):
     """size取large/medium/small；分类买卖金额/域内成交额，两侧全缺保留缺失。"""
     end = context.get_position(date)
     dates = context.dates[:end + 1]
-    field = {'large': 'lg', 'medium': 'mid', 'small': 'sm'}[size]
+    field = {'large': 'lg', 'extra_large': 'elg', 'medium': 'mid', 'small': 'sm'}[size]
     buy = context.read('local', f'd_moneyflow/buy_{field}_amount', 0, end, kind='matrix')
     sell = context.read('local', f'd_moneyflow/sell_{field}_amount', 0, end, kind='matrix')
     category = np.where(np.isfinite(buy) | np.isfinite(sell),
@@ -584,7 +584,8 @@ def update_moneyflow(root=ROOT, domain='index', name='hs300', indicators=None, *
         outputs = {}
         for indicator in selected:
             params = dict((indicator_params or {}).get(indicator, {}))
-            sizes = ((params['size'],) if 'size' in params else ('large', 'medium', 'small')) if indicator == 'category_share' else (None,)
+            sizes = ((params['size'],) if 'size' in params else
+                     ('large', 'extra_large', 'medium', 'small')) if indicator == 'category_share' else (None,)
             for size in sizes:
                 if size is not None:
                     params['size'] = size

@@ -9,6 +9,7 @@ from sklearn.preprocessing import PowerTransformer, RobustScaler
 from scipy.stats import rankdata
 import bottleneck as bn
 from abc import ABC, abstractmethod
+from v2.GetData.data_pool import DataPool
 
 
 
@@ -31,28 +32,55 @@ class Loader:
     # 中文说明：`__init__`：初始化对象及其运行依赖。
     def __init__(self, root):
         self.root = Path(root)
-        self.dates = np.load(self.root/'axis'/'dates.npy', allow_pickle=True)     
-        self.ticks = np.load(self.root/'axis'/'ticks.npy', allow_pickle=True) 
+        self.data = DataPool(self.root, asset='stock')
+        self.dates = self.data.axis.trade_dates
+        self.ticks = self.data.axis.ticks
         self.T = len(self.dates)
         self.N = len(self.ticks)
 
+    def load_matrix(self, field, stock_positions=None):
+        """读取共享数据根目录下 stock 资产的有效轴区间。"""
+        try:
+            matrix = self.data.load(field)[:self.T, :self.N]
+        except ValueError:
+            # 标签矩阵创建时使用了较小的预留轴；有效日期和股票仍与当前轴同序。
+            if not field.startswith('model_input/labels/'):
+                raise
+            path = self.root / 'stock' / f'{field}.bin'
+            itemsize = np.dtype(np.float32).itemsize
+            if path.stat().st_size % itemsize:
+                raise
+            elements = path.stat().st_size // itemsize
+            full_dates = len(self.data.axis.full_dates)
+            full_ticks = len(self.data.axis.full_ticks)
+            shapes = [
+                (elements // n, n)
+                for n in range(self.N, full_ticks + 1)
+                if elements % n == 0
+                and self.T <= elements // n <= full_dates
+            ]
+            if len(shapes) != 1:
+                raise ValueError(f'无法从当前轴推断标签矩阵形状: {path}')
+            rows, cols = shapes[0]
+            matrix = np.memmap(path, dtype=np.float32, mode='r', shape=(rows, cols))
+            matrix = matrix[:self.T, :self.N]
+        return matrix if stock_positions is None else matrix[:, stock_positions]
+
     # 中文说明：`load_barras`：读取并规范化外部数据。
-    def load_barras(self) -> Dict[str, np.ndarray]:
+    def load_barras(self, stock_positions=None) -> Dict[str, np.ndarray]:
         feats = {}
         for name in ['beta','btop','size','nonlinear_size','momentom','residual_vol','liquidity','leverage','growth1','earnings_yield']:
-            file_path = self.root/"barra"/f"{name}.bin"
-            feats[name] = np.memmap(file_path, shape=(self.T, self.N), dtype=float, mode='r')  # 大文件用内存映射
+            feats[name] = self.load_matrix(f'barra/{name}', stock_positions)
         return feats
 
     # 中文说明：`load_masks`：读取并规范化外部数据。
-    def load_masks(self) -> Dict[str, np.ndarray]:
+    def load_masks(self, stock_positions=None) -> Dict[str, np.ndarray]:
         masks = {}
-        for name in ['industry','sector','tradable','hs300_mask','zz500_mask','a500_mask','zz1000_mask','zz2000_mask']:
-            file_path = self.root/"mask"/f"{name}.bin"
-            if name in ['industry','sector']:
-                masks[name] = np.memmap(file_path, shape=(self.T, self.N), dtype=float, mode='r')
-            else:
-                masks[name] = np.memmap(file_path, shape=(self.T, self.N), dtype=bool, mode='r')  # 大文件用内存映射
+        for name in ['industry','sector']:
+            masks[name] = self.load_matrix(f'industry/{name}', stock_positions)
+        masks['tradable'] = self.load_matrix('basic/tradable', stock_positions)
+        for name in ['hs300_mask','zz500_mask','a500_mask','zz1000_mask','zz2000_mask']:
+            masks[name] = self.load_matrix(f'index/mask/{name}', stock_positions)
         return masks
     
     # 中文说明：`load_factorpool`：读取并规范化外部数据。
@@ -70,8 +98,8 @@ class Loader:
     def load_daily_feats(self) -> Dict[str, np.ndarray]:
         features = {}
         for feat_name in ["open_adj", "close_adj", "high_adj", "low_adj", "volume_adj", "amount", "turnover", 'logmv']:
-            file_path = self.data_dir/"d_field"/f"{feat_name}.bin"
-            features[feat_name] = np.memmap(file_path, shape=(self.T, self.N), dtype=float)  # 大文件用内存映射
+            field = {'logmv': 'd_essentials/circ_mv'}.get(feat_name, f'd_essentials/{feat_name}')
+            features[feat_name] = self.load_matrix(field)
         return features
 
 

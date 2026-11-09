@@ -188,11 +188,12 @@ def update_index(date, dates, ticks, conn, root):
 if __name__ == '__main__':
     from pathlib import Path
     import pymssql
+    from v2.UpdateData.config import ROOT
 
     date = '2024-06-14'
-    dates = np.load('Z:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('Z:/data/axis/stock_ticks.npy', allow_pickle=False)
-    root = Path('Z:/data')
+    dates = np.load(ROOT / 'axis' / 'dates.npy', allow_pickle=True)
+    ticks = np.load(ROOT / 'axis' / 'stock_ticks.npy', allow_pickle=False)
+    root = ROOT
 
 
     JY_CONFIG = {

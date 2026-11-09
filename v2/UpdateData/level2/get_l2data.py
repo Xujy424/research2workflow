@@ -99,8 +99,9 @@ if __name__ == "__main__":
     import numpy as np
     import pandas as pd
     import bisect
+    from v2.UpdateData.config import ROOT
 
-    dates = np.load("/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    dates = np.load(ROOT / "axis" / "dates.npy", allow_pickle=True)
     dates = [d for d in dates if not np.isnat(d)]
     start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-07-24')), bisect.bisect_right(dates, pd.to_datetime('2026-09-30'))
     for date in dates[start_dt:end_dt]:

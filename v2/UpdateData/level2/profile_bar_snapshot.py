@@ -265,7 +265,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Profile L2 bar snapshot generation without full-market load"
     )
-    parser.add_argument("--root", default="/data/xujiayi/xjy/l2")
+    from v2.UpdateData.config import L2DATA_PATH
+    parser.add_argument("--root", default=str(L2DATA_PATH))
     parser.add_argument("--date", default="20260624")
     parser.add_argument("--exchange", choices=("sh", "sz"), default="sz")
     parser.add_argument("--interval", default="1m")

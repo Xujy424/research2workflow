@@ -850,10 +850,11 @@ if __name__ == "__main__":
     import pandas as pd
     import bisect
     from tqdm import tqdm
+    from v2.UpdateData.config import ROOT, L2DATA_PATH
 
-    root = Path('/data/shanghai/xujiayi/workflow/data/stock/l2')
+    root = L2DATA_PATH
     
-    dates = np.load("/data/shanghai/xujiayi/workflow/data/axis/dates.npy", allow_pickle=True)
+    dates = np.load(ROOT / "axis" / "dates.npy", allow_pickle=True)
     dates = [d for d in dates if not np.isnat(d)]
     start_dt, end_dt = bisect.bisect_left(dates, pd.to_datetime('2026-01-30')), bisect.bisect_right(dates, pd.to_datetime('2026-09-30'))
 

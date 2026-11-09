@@ -13,9 +13,7 @@ CIFTABLE_PATTERNS = {
     "shshot": "MarketData",
 }
 
-L2DATA_PATH = Path(
-    "/data/shanghai/xujiayi/workflow/data/stock/l2"  #"Z:/stock/l2"
-)
+from v2.UpdateData.config import L2DATA_PATH
 
 INPUT_DIR = L2DATA_PATH / "raw1"
 OUTPUT_DIR = L2DATA_PATH / "raw"

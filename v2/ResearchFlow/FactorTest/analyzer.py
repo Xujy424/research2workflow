@@ -14,10 +14,12 @@ from statsmodels.tsa.stattools import adfuller
 from scipy.linalg import solve_triangular
 from joblib import Parallel, delayed
 import os
+import warnings
 os.environ["CUDA_VISIBLE_DEVICES"] = "6,7"
 
 from .utils import Loader, Calculator, Processor
 from .metrics import *
+from v2.UpdateData.config import ROOT
 
 
 DEFAULT_FIGSIZE = (8, 5)
@@ -28,7 +30,7 @@ plt.rcParams['axes.unicode_minus']=False
 # 中文说明：定义 `FactorAnalyzer`，封装本模块对应的数据、配置与行为。
 class FactorAnalyzer:
 
-    root = Path("D:/data")
+    root = ROOT
     loader = Loader(root)
 
     direct_variables = [
@@ -84,20 +86,48 @@ class FactorAnalyzer:
         self.dates = self.alpha_df.index[date_mask]
         self.dates_idx = np.searchsorted(self.loader.dates, self.dates)
 
-        self.ticks = self.alpha_df.columns
+        # 因子文件可能只覆盖股票轴的子集；所有底层矩阵按代码映射到因子列顺序。
+        stock_codes = pd.Index(self.loader.ticks.astype(str))
+        factor_codes = pd.Index([
+            str(code).strip().split('.')[0].zfill(6)
+            for code in self.alpha_df.columns
+        ])
+        if factor_codes.has_duplicates:
+            raise ValueError('因子股票代码标准化后出现重复列')
+        self.stock_positions = stock_codes.get_indexer(factor_codes)
+        available = self.stock_positions >= 0
+        if not available.all():
+            self.missing_factor_ticks = factor_codes[~available].tolist()
+            warnings.warn(
+                f"因子中有 {len(self.missing_factor_ticks)} 只股票不在当前 stock_ticks 轴，"
+                f"已从回测样本剔除，例如：{self.missing_factor_ticks[:10]}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self.alpha_df = self.alpha_df.iloc[:, available].copy()
+            factor_codes = factor_codes[available]
+            self.stock_positions = self.stock_positions[available]
+        else:
+            self.missing_factor_ticks = []
+        if not len(factor_codes):
+            raise ValueError('因子列与当前 stock_ticks 轴没有可匹配的股票')
+        self.ticks = factor_codes
+        self.alpha_df.columns = factor_codes
         
         self.alpha_df = self.alpha_df.loc[self.dates]
         self.alpha_arr = self.alpha_df.values
-        self.label_arr = np.memmap(self.root/'label'/'Y.1D.bin', shape=(self.loader.T, self.loader.N), dtype=float, mode='r')[self.dates_idx]
-        self.mv_arr = np.memmap(self.root/'d_field'/'mv.bin', shape=(self.loader.T, self.loader.N), dtype=float, mode='r')[self.dates_idx]
+        self.label_arr = self.loader.load_matrix(
+            'model_input/labels/Y.1D', self.stock_positions)[self.dates_idx]
+        self.mv_arr = self.loader.load_matrix(
+            'd_essentials/circ_mv', self.stock_positions)[self.dates_idx]
 
-        masks = self.loader.load_masks()
+        masks = self.loader.load_masks(self.stock_positions)
         self.ind_code_arr = masks['industry'][self.dates_idx]
         self.sec_code_arr = masks['sector'][self.dates_idx]
         self.tradable = masks['tradable'][self.dates_idx]
         self.pool_mask = masks[self._universe_key][self.dates_idx]
 
-        barras = self.loader.load_barras()
+        barras = self.loader.load_barras(self.stock_positions)
         self.barras_arr = np.stack(list(barras.values()),axis=-1)[self.dates_idx]
         
         indirect_vals = self.calc_basic_df(self.alpha_df, self.label_arr, self.dates)
@@ -138,7 +168,7 @@ class FactorAnalyzer:
 
         self.info_table['universe'] = pool_name if pool_name else self.universe
         universe_key = self.info_table['universe'] +'_mask' if self.info_table['universe']!='universe' else 'tradable'
-        pool_mask = self.loader.load_masks()[universe_key][self.cache['dates_idx']]
+        pool_mask = self.loader.load_masks(self.stock_positions)[universe_key][self.cache['dates_idx']]
         self.cache['pool_mask'] = pool_mask
         
         self.cache['alpha_df'] = self.cache['alpha_df'].loc[start_date:end_date].where(pool_mask, np.nan)
@@ -994,7 +1024,7 @@ class FactorAnalyzer:
         vol_regime = pd.Series("低波动", index=dates)
         vol_regime[vol > vol.median()] = "高波动"
 
-        mask_data = self.loader.load_masks()
+        mask_data = self.loader.load_masks(self.stock_positions)
         pool_masks = {
             name: mask_data[key][self.cache['dates_idx']].astype(bool)
             for name, key in self.pool_regime_specs
@@ -1161,9 +1191,11 @@ class FactorAnalyzer:
         pool_mask = self.pool_mask[date_idx1+1]
 
         date_idx2 = np.searchsorted(self.loader.dates, dates)
-        next_open = np.memmap(self.root/'d_field/open.bin', shape=(self.loader.T, self.loader.N), mode='r', dtype=float)[date_idx2+1]
+        next_open = self.loader.load_matrix(
+            'd_essentials/open', self.stock_positions)[date_idx2+1]
         next_open = np.where(pool_mask, next_open, np.nan)
-        next_amount = np.memmap(self.root/'d_field/amount.bin', shape=(self.loader.T, self.loader.N), mode='r', dtype=float)[date_idx2+1]
+        next_amount = self.loader.load_matrix(
+            'd_essentials/amount', self.stock_positions)[date_idx2+1]
         next_amount = np.where(pool_mask, next_amount, np.nan)
 
         n_days, n_stocks = hold_df.shape

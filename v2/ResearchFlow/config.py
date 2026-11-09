@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from v2.UpdateData.config import ROOT
+
 
 class PortfolioRoute(str, Enum):
     SLEEVE = "sleeve"
@@ -113,9 +115,9 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class ResearchFlowV2Config:
-    data_root: str = "D:/data"
+    data_root: str = str(ROOT)
     route: PortfolioRoute = PortfolioRoute.UNIFIED_ALPHA
-    registry_path: str = "D:/data/factorpool/registry.json"
+    registry_path: str = str(ROOT / "factorpool" / "registry.json")
     label_category: str = "label"
     label_field: str = "Y.1D"
     tradable_category: str = "mask"

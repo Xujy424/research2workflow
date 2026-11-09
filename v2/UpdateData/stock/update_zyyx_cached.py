@@ -727,9 +727,10 @@ if __name__=="__main__":
 
     cfg = AnalystFactorConfig()
 
-    ticks = np.load(r"/data/xujiayi/xjy/axis/stock_ticks.npy", allow_pickle=False)
+    from v2.UpdateData.config import ROOT
+    ticks = np.load(ROOT / "axis" / "stock_ticks.npy", allow_pickle=False)
     valid_ticks = [t for t in ticks if t!='']
-    dates = np.load(r"/data/xujiayi/xjy/axis/dates.npy", allow_pickle=True)
+    dates = np.load(ROOT / "axis" / "dates.npy", allow_pickle=True)
     # date = '2024-06-30'
     
 
@@ -753,7 +754,7 @@ if __name__=="__main__":
         print(correct_con_np)
 
         dt = np.searchsorted(dates,pd.to_datetime(date))
-        raw_pct = np.memmap(r"/data/xujiayi/xjy/d_field/pct.bin",dtype=float,mode='r',shape=(len(dates),len(ticks)))
+        raw_pct = np.memmap(ROOT / "d_field" / "pct.bin",dtype=float,mode='r',shape=(len(dates),len(ticks)))
         pct = raw_pct.copy()
         pct[:-2] = pct[2:]
         pct[-2:] = np.nan
@@ -763,7 +764,7 @@ if __name__=="__main__":
             "pct":pct
         })
 
-        mv = np.memmap(r"/data/xujiayi/xjy/d_field/mv.bin",dtype=float,mode='r',shape=(len(dates),len(ticks)))
+        mv = np.memmap(ROOT / "d_field" / "mv.bin",dtype=float,mode='r',shape=(len(dates),len(ticks)))
         mv = mv[dt]
         ind, _ = _daily_industry_codes(date, valid_ticks, jy_conn)   #为什么ind有大量的nan？
         beta = pl.DataFrame({

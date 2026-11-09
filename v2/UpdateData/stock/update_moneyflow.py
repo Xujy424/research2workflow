@@ -70,13 +70,14 @@ def update_d_moneyflow(root, dates, date, ticks, l2_root=None):
 
 
 if __name__ == '__main__':
+    from v2.UpdateData.config import ROOT, L2DATA_PATH
 
     date = '2026-09-30'
-    dates = np.load('/data/shanghai/xujiayi/workflow/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('/data/shanghai/xujiayi/workflow/data/axis/stock_ticks.npy', allow_pickle=False)
-    root = Path('/data/shanghai/xujiayi/workflow/data/stock')
+    dates = np.load(ROOT / 'axis' / 'dates.npy', allow_pickle=True)
+    ticks = np.load(ROOT / 'axis' / 'stock_ticks.npy', allow_pickle=False)
+    root = ROOT / 'stock'
 
-    update_d_moneyflow(root, dates, date, ticks)
+    update_d_moneyflow(root, dates, date, ticks, l2_root=L2DATA_PATH)
 
 
     # from tqdm import tqdm

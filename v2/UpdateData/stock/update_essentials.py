@@ -239,13 +239,14 @@ def update_m_essentials(date, dates, ticks, conn, root):
 
 
 if __name__ == '__main__':
+    from v2.UpdateData.config import ROOT
 
     date = '2024-06-14'
-    dates = np.load('D:/data/axis/dates.npy',allow_pickle=True)
-    ticks = np.load('D:/data/axis/stock_ticks.npy', allow_pickle=False)
+    dates = np.load(ROOT / 'axis' / 'dates.npy', allow_pickle=True)
+    ticks = np.load(ROOT / 'axis' / 'stock_ticks.npy', allow_pickle=False)
     jy_conn = get_jy_conn()
     str_conn = get_str_engine()
-    root = Path('D:/data')
+    root = ROOT
 
     # update_d_essentials(
     #     date, dates, ticks, jy_conn, root
