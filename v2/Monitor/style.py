@@ -8,15 +8,15 @@ import numpy as np
 import pandas as pd
 from scipy.stats import rankdata
 
-if __package__:
-    from .context import MonitorContext
-else:  # 支持直接从 IDE 运行本文件
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from v2.Monitor.v3.context import MonitorContext
+if not __package__:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "v2.Monitor"
 
+from .context import MonitorContext
 from v2.UpdateData.config import ROOT
-from v2.Monitor.v3.config import INDUSTRY_MAP, INDEX_MAP, STYLE_MASKS
-from v2.Monitor.v3.common import (
+from .config import INDUSTRY_MAP, INDEX_MAP, STYLE_MASKS
+from .common import (
     domain_returns, rolling_compound_return, weighted_series,
 )
 

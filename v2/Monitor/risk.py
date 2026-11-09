@@ -5,17 +5,14 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-if __package__:
-    from .context import MonitorContext
-else:
+if not __package__:
     import sys
-    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "v2.Monitor"
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from v2.Monitor.v3.context import MonitorContext
-
+from .context import MonitorContext
 from v2.UpdateData.config import ROOT
-from v2.Monitor.v3.common import domain_returns, rolling_compound_return
+from .common import domain_returns, rolling_compound_return
 
 RETURNS = "d_essentials/pct"
 CLOSE = "d_essentials/close"

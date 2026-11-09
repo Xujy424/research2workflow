@@ -9,17 +9,14 @@ import warnings
 import numpy as np
 import pandas as pd
 
-try:
-    from ...GetData import DataPool
-    from ...UpdateData.config import ROOT
-except ImportError:  # 支持直接从 IDE 运行本文件
+if not __package__:
     import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from v2.GetData import DataPool
-    from v2.UpdateData.config import ROOT
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "v2.Monitor"
 
-
-from v2.Monitor.v3.config import INDUSTRY_MAP
+from ..GetData import DataPool
+from ..UpdateData.config import ROOT
+from .config import INDUSTRY_MAP
 
 
 class MonitorContext:
@@ -142,7 +139,7 @@ class MonitorContext:
         if self._client is None:
             if self._client_factory is None:
                 try:
-                    from ...GetData.ZSFundRequestClient import RequestZSFundDateServer
+                    from ..GetData.ZSFundRequestClient import RequestZSFundDateServer
                 except ImportError:
                     from v2.GetData.ZSFundRequestClient import RequestZSFundDateServer
                 self._client = RequestZSFundDateServer()

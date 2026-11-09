@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 
 if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    __package__ = "v2.Monitor.v3"
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "v2.Monitor"
 
 from .context import MonitorContext
 

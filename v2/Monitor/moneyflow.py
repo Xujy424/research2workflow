@@ -8,13 +8,14 @@ import pandas as pd
 import polars as pl
 from tqdm import tqdm
 
-if __package__:
-    from .context import MonitorContext
-else:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from v2.Monitor.v3.context import MonitorContext
+if not __package__:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "v2.Monitor"
+
+from .context import MonitorContext
 from v2.UpdateData.config import ROOT
-from v2.Monitor.v3.common import weighted_series
+from .common import weighted_series
 
 
 def amount_change(context, date, domain, name, baseline=20, period=1):

@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 
 if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from v2.UpdateData.config import ROOT
-from v2.Monitor.v3.config import INDUSTRY_MAP
+from v2.Monitor.config import INDUSTRY_MAP
 
 
 def plot_series(name, category="macro", *, root=ROOT, start_date=None, end_date=None,

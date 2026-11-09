@@ -103,6 +103,29 @@ def _drift_weights(previous_weights, pct):
     return weights
 
 
+def get_init_pct(snapshot_date, date, ticks, conn):
+    """Return compounded percent returns over (snapshot_date, date]."""
+    start = _asof(snapshot_date).strftime("%Y-%m-%d")
+    end = _asof(date).strftime("%Y-%m-%d")
+    queries = []
+    for table in ("QT_StockPerformance", "LC_STIBPerformance"):
+        queries.append(f"""
+            select C.SecuCode as tick, A.TradingDay as trading_day,
+                   A.ChangePCT as pct
+            from {table} A
+            left join SecuMain C on A.InnerCode = C.InnerCode
+            where A.TradingDay > '{start}' and A.TradingDay <= '{end}'
+              and C.SecuMarket in (83,90) and C.SecuCategory = 1
+        """)
+    frame = pl.read_database(" union all ".join(queries), conn).to_pandas()
+    if frame.empty:
+        return np.zeros(len(ticks), dtype=float)
+    daily_pct = frame["pct"].to_numpy(dtype=float)
+    frame["factor"] = 1 + np.where(np.isfinite(daily_pct), daily_pct / 100, 0.0)
+    factors = frame.groupby("tick")["factor"].prod().reindex(ticks, fill_value=1.0)
+    return (factors.to_numpy(dtype=float) - 1) * 100
+
+
 def update_index(date, dates, ticks, conn, root):
     """Write daily weights from snapshots and price drift between snapshots."""
     date = _asof(date)
@@ -123,11 +146,18 @@ def update_index(date, dates, ticks, conn, root):
         raise ValueError(f"{pct_path} does not match the stock date/tick axis")
     pct = np.memmap(pct_path, dtype=np.float32, mode="r", shape=matrix_shape) if dt > 0 else None
     result = {}
+    init_pct = {}
 
     for index_code, name in INDEX_CODE_TO_NAME.items():
         snapshot, snapshot_date = _snapshot_weights(latest, index_code, valid_ticks)
-        if snapshot_date is None or snapshot_date == date or dt == 0:
+        if snapshot_date is None or snapshot_date == date:
             weight = snapshot
+        elif dt == 0:
+            if snapshot_date not in init_pct:
+                init_pct[snapshot_date] = get_init_pct(
+                    snapshot_date, date, valid_ticks, conn
+                )
+            weight = _drift_weights(snapshot, init_pct[snapshot_date])
         else:
             weight_path = Path(root) / "index" / "weight" / f"{name}_weight.bin"
             if weight_path.exists() and weight_path.stat().st_size == expected_size:

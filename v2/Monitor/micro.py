@@ -4,13 +4,14 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
-if __package__:
-    from .context import MonitorContext
-else:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from v2.Monitor.v3.context import MonitorContext
+if not __package__:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    __package__ = "v2.Monitor"
+
+from .context import MonitorContext
 from v2.UpdateData.config import ROOT
-from v2.Monitor.v3.common import (
+from .common import (
     weighted_series, bns_jump_variation, significant_jump_events,
     minute_log_returns, event_acd_intensity, rolling_zscore)
 

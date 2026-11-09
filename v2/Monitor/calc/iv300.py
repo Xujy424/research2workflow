@@ -23,7 +23,7 @@ from matplotlib.patches import Patch
 
 if not __package__:
     import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from v2.GetData import DataPool
 from v2.UpdateData.config import ROOT
