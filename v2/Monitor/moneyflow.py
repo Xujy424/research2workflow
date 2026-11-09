@@ -354,7 +354,12 @@ def fund_holdings_similarity(
     nav = nav.loc[nav['EndDate'].eq(nav.groupby('fund')['EndDate'].cummax())].copy()
 
     # 直接构造“交易日×基金”矩阵，列内ffill替代逐日更新净值字典。
-    nav_daily = (nav.pivot(index='day', columns='fund', values='UnitNV').reindex(index=range(T), columns=range(F)).ffill().to_numpy())
+    nav_daily = (
+        nav.pivot(index='day', columns='fund', values='UnitNV')
+        .reindex(index=range(T), columns=range(F))
+        .ffill()
+        .to_numpy(dtype=float, copy=True)
+    )
     nav_daily[np.arange(T)[:, None] > last_pos[None, :]] = np.nan
 
     # ==========================================================

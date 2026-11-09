@@ -73,15 +73,11 @@ def plot_series(name, category="macro", *, root=ROOT, start_date=None, end_date=
 
 if __name__ == "__main__":
     # 在 IDE 中修改类别（macro/risk 等）、指标函数名及日期范围。
-    CATEGORY = "style"
-    SERIES_NAME = "pe_level"
+    CATEGORY = "moneyflow"
+    SERIES_NAME = "etf_net_subscription_ratio"
     START_DATE = None
     END_DATE = None
-    pe_level = plot_series(SERIES_NAME, CATEGORY, start_date=START_DATE, end_date=END_DATE)
+    plot_series(SERIES_NAME, CATEGORY, start_date=START_DATE, end_date=END_DATE)
 
-    pb_level = plot_series('pb_level', CATEGORY, start_date=START_DATE, end_date=END_DATE)
-
-    pd.DataFrame({'pe_level': pe_level/pe_level[0], 'pb_level': pb_level/pb_level[0]}).plot()
-    plt.show()
     
 
