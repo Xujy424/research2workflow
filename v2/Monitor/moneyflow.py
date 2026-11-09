@@ -297,6 +297,44 @@ def equity_fund_new_issue_scale(context, date, domain='market', name='all', *,
     return daily.rolling(period, min_periods=period).sum().rename('权益基金新发规模')
 
 
+def _holdings_similarity(rows, memory_bytes=32 * 1024 * 1024):
+    """Exact mean weighted Jaccard, with bounded fund-pair work arrays.
+
+    rows contains unique (fund, stock) nonnegative, finite weights.
+    Accumulate sum_s min(w_is, w_js) via stock posting lists, avoiding
+    a materialized holdings self-join. Disjoint pairs contribute zero.
+    """
+    fund, codes = np.unique(rows['fund'].to_numpy(), return_inverse=True)
+    n = len(fund)
+    if n < 2:
+        return np.nan
+    weights = rows['weight'].to_numpy()
+    totals = np.bincount(codes, weights=weights, minlength=n)
+    stock = rows['stock'].to_numpy()
+    order = np.argsort(stock, kind='stable')
+    groups = np.split(order, np.flatnonzero(np.diff(stock[order])) + 1)
+    postings = [(codes[g], weights[g]) for g in groups]
+    # Reserve room for overlap, denominator, and temporary indexing arrays.
+    block_size = max(1, min(256, memory_bytes // (32 * n)))
+    score = 0.0
+    for start in range(0, n, block_size):
+        stop = min(start + block_size, n)
+        overlap = np.zeros((stop - start, n - start), dtype=float)
+        for ids, values in postings:
+            left = (ids >= start) & (ids < stop)
+            if not left.any():
+                continue
+            right = ids >= start
+            overlap[np.ix_(ids[left] - start, ids[right] - start)] += np.minimum(
+                values[left, None], values[None, right]
+            )
+        denominator = totals[start:stop, None] + totals[None, start:] - overlap
+        overlap /= denominator
+        for i in range(stop - start):
+            score += overlap[i, i + 1:].sum()
+    return score / (n * (n - 1) / 2)
+
+
 def fund_holdings_similarity(
     context, date, domain='market', name='all', *,
     fund_type_codes=(1101, 1103)
@@ -486,10 +524,11 @@ def fund_holdings_similarity(
         .join(intervals, on='event')
         .group_by(['fund', 'stock', 'day', 'stop']).agg(pl.col('coefficient').sum()))
 
-    # 7. 每块展开20个交易日，批量漂移持仓并按日计算横截面相似度。
-    # 保留分块循环控制内存；无逐日、逐基金、逐报告的Python循环。
-    for start in tqdm(range(0, T, 20)):
-        stop = min(start + 20, T)
+    # 7. Process one trading day at a time; bound pairwise overlap memory.
+    progress = tqdm(range(T), desc='fund holdings similarity')
+    for start in progress:
+        progress.set_postfix_str(str(dates[start].date()), refresh=False)
+        stop = start + 1
         block = (
             table.filter((pl.col('day') < stop) & (pl.col('stop') > start))
             .with_columns(
@@ -510,20 +549,7 @@ def fund_holdings_similarity(
         totals = (rows.group_by(['day', 'fund']).agg(pl.col('weight').sum().alias('total'))
             .filter(pl.col('total') > 0))
         rows = rows.join(totals, on=['day', 'fund'])
-        counts = totals.group_by('day').agg(pl.len().alias('count'))
-        # 只关联同日共同持仓，fund<fund_j排除自身和反向重复基金对。
-        scores = (rows.lazy().join(rows.lazy(), on=['day', 'stock'], suffix='_j')
-            .filter(pl.col('fund') < pl.col('fund_j'))
-            .group_by(['day', 'fund', 'fund_j'])
-            .agg(pl.min_horizontal('weight', 'weight_j').sum().alias('overlap'),
-                 pl.col('total').first(), pl.col('total_j').first())
-            .with_columns((pl.col('overlap') /
-                (pl.col('total') + pl.col('total_j') - pl.col('overlap'))).alias('similarity'))
-            .group_by('day').agg(pl.col('similarity').sum()).collect(engine='streaming'))
-        # 无共同股票的基金对贡献0；不足两只基金的日期保留NaN。
-        daily = counts.join(scores, on='day', how='left').filter(pl.col('count') >= 2)
-        n = daily['count'].to_numpy().astype(float)
-        result.iloc[daily['day'].to_numpy()] = daily['similarity'].fill_null(0).to_numpy() / (n * (n - 1) / 2)
+        result.iloc[start] = _holdings_similarity(rows)
 
     return result
 
