@@ -74,10 +74,9 @@ def plot_series(name, category="macro", *, root=ROOT, start_date=None, end_date=
 if __name__ == "__main__":
     # 在 IDE 中修改类别（macro/risk 等）、指标函数名及日期范围。
     CATEGORY = "moneyflow"
-    SERIES_NAME = "large_trade_share"
+    SERIES_NAME = "extra_large_trade_share"
     START_DATE = '2024-01-01'
     END_DATE = None
     plot_series(SERIES_NAME, CATEGORY, start_date=START_DATE, end_date=END_DATE)
-
     
 
