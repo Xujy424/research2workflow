@@ -5,12 +5,7 @@ from .smart_money import SmartMoneyFactor as SmartMoneyV2Factor
 from .apm import APMFactor
 from .tgd import TGDFactor
 from .sm_sheepherd import SMSHFactor
-try:
-    from .mod_lg_flow import CNIRFactor
-except ModuleNotFoundError as exc:
-    if exc.name != f"{__name__}.mod_lg_flow":
-        raise
-    CNIRFactor = None
+from .cnir import CNIRFactor
 from .split_momentum import IntradayOvernightMomentumFactor
 from .active_trade import ACTPositiveFactor, ACTNegativeFactor
 from .extra_large_attention import ExtraLargeAttentionFactor

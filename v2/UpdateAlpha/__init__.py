@@ -72,12 +72,7 @@ from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
 from .pricevolume.apm import APMContext, APMFactor
 from .pricevolume.qua import QUAContext, QUAFactor, MTSFactor, MTEFactor
 from .pricevolume.sm_sheepherd import SMSHContext, SMSHFactor
-try:
-    from .pricevolume.mod_lg_flow import ModLargeFlowContext, CNIRFactor
-except ModuleNotFoundError as exc:
-    if exc.name != f"{__name__}.pricevolume.mod_lg_flow":
-        raise
-    ModLargeFlowContext = CNIRFactor = None
+from .pricevolume.cnir import ModLargeFlowContext, CNIRFactor
 from .pricevolume.split_momentum import (
     IntradayOvernightMomentumContext,
     IntradayOvernightMomentumFactor,
