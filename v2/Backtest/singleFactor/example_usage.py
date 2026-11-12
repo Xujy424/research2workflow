@@ -292,7 +292,7 @@ if __name__ == "__main__":
     START_DATE = "2021-01-01"
     END_DATE = "2026-09-27"
     UNIVERSE = None
-    FACTOR_NAME = "main_force_control"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
+    FACTOR_NAME = "smart_money"    # ("extra_large_attention", "main_force_control", "sentiment_instability", "vm_diff",)
     CALCULATE_FACTOR = False  # False reuses the existing factor matrix.
     FACTOR_CONTEXT_KWARGS = None  # e.g. {"config": {"lookback_days": 20}}
     SIGNAL_LAG = 2

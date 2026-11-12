@@ -1,0 +1,5 @@
+factor,horizon,mean_ic,mean_rank_ic,valid_dates
+large_active_moneyflow_strength,1,0.012242048762713318,0.004130028788875264,644
+large_active_moneyflow_strength,5,0.01909846976926817,0.012124054722025688,641
+large_active_moneyflow_strength,10,0.022788130670835963,0.016212160068528682,636
+large_active_moneyflow_strength,20,0.025065984835971184,0.019100497138492628,626

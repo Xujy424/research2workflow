@@ -459,7 +459,7 @@ if __name__ == "__main__":
         main()
         raise SystemExit(0)
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("large_active_moneyflow_strength",)  # large_moneyflow_strength，large_residual_moneyflow_strength
+    FACTORS = ("extra_large_attention",)  # main_force_control
     # CONTEXT_KWARGS = {
     #     "config": {"extreme_minutes": None},  # Example for tgd.
     # }

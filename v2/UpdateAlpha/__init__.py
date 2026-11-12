@@ -72,7 +72,7 @@ from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
 from .pricevolume.apm import APMContext, APMFactor
 from .pricevolume.qua import QUAContext, QUAFactor, MTSFactor, MTEFactor
 from .pricevolume.sm_sheepherd import SMSHContext, SMSHFactor
-from .pricevolume.mod_lg_flow import ModLargeFlowContext, CNIRFactor
+from .pricevolume.cnir import ModLargeFlowContext, CNIRFactor
 from .pricevolume.split_momentum import (
     IntradayOvernightMomentumContext,
     IntradayOvernightMomentumFactor,
