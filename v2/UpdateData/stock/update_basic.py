@@ -215,15 +215,11 @@ def update_tradable(date, dates, ticks, conn, root):
     isnew = update_isnew(date_str, ticks, conn)
     issuspend= update_issuspend(date_str, ticks, conn)
 
-    next_date = get_next_trading_day(date, dates)
-    next_ceil_only, next_floor_only, next_hit_ceil, next_hit_floor = update_hit(next_date, ticks, conn)
-    next_hastrade = update_hastrade(next_date, ticks, conn)
+    # Only use current-day states.
+    tradable = (hastrade & ~ceil_only & ~floor_only & ~hit_ceil & ~hit_floor
+                & ~isst & ~isnew & ~issuspend)
 
-    tradable = hastrade & next_hastrade &\
-               ~ceil_only & ~floor_only & ~hit_ceil & ~hit_floor & ~next_ceil_only & ~next_floor_only & ~next_hit_ceil & ~next_hit_floor &\
-               ~isst & ~isnew & ~issuspend
-
-    path = root / "basic" / "tradable.bin"
+    path = root / "basic" / "tradable_t.bin"
     arr = _ensure_memmap(
         path, (len(dates), len(ticks)), np.bool_, False
     )
