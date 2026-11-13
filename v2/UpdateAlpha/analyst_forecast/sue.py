@@ -189,8 +189,12 @@ def _quarterly_surprises(frame, config):
     ).sort(["tick", "period"])
 
     full = full.with_columns(
-        (pl.col("net_profit")-pl.col("net_profit").shift(4).over("tick")).alias("sue_change"),
-        (pl.col("revenue")-pl.col("revenue").shift(4).over("tick")).alias("sur_change"),
+        pl.when(pl.col("net_profit").shift(4).over("tick").is_not_null())
+        .then(pl.col("net_profit")-pl.col("net_profit").shift(4).over("tick"))
+        .otherwise(None).alias("sue_change"),
+        pl.when(pl.col("revenue").shift(4).over("tick").is_not_null())
+        .then(pl.col("revenue")-pl.col("revenue").shift(4).over("tick"))
+        .otherwise(None).alias("sur_change"),
     )
     expressions = []
     for source, prefix in (("net_profit", "sue"), ("revenue", "sur")):

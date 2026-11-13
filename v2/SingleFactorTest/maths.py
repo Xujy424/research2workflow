@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import bottleneck as bn
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -55,40 +56,43 @@ def transform(values, method="asinh"):
     raise ValueError(f"未知变换方法: {method}")
 
 
-def neutralize(values, industry=None, market_cap=None):
-    """逐日OLS残差化，含截距、行业哑变量及log流通市值。
+def calc_indmv_neutral_longshort(ind_signal, temp_mv):
+    """计算行业内市值中性化残差"""
+    ix = ~(np.isnan(ind_signal) | np.isinf(ind_signal) | np.isnan(temp_mv) | np.isinf(temp_mv))
+    ind_signal[~ix] = np.nan
+    temp_mv[~ix] = np.nan
 
-    Params: values/industry/market_cap: 同轴DataFrame，后两项可为None。
-    Return: DataFrame，缺少暴露或样本不足的位置为NaN。
-    """
-    out = values.copy() * np.nan
-    for i in range(len(values)):
-        y = values.iloc[i].to_numpy(float)
-        valid = np.isfinite(y)
-        if industry is not None:
-            ind = industry.iloc[i]
-            valid &= ind.notna().to_numpy()
-        if market_cap is not None:
-            mv = market_cap.iloc[i].to_numpy(float)
-            valid &= np.isfinite(mv) & (mv > 0)
-        if not valid.any():
-            continue
-        # Frisch–Waugh–Lovell：先去行业均值，再回归去均值的log市值。
-        # 与含行业哑变量的OLS残差等价，避免每日构造大矩阵并重复SVD。
-        group = pd.factorize(ind[valid], sort=False)[0] if industry is not None else np.zeros(valid.sum(), dtype=int)
-        count = np.bincount(group)
-        residual = y[valid] - (np.bincount(group, weights=y[valid]) / count)[group]
-        rank = len(count)
-        if market_cap is not None:
-            x = np.log(mv[valid])
-            x -= (np.bincount(group, weights=x) / count)[group]
-            variance = x @ x
-            if variance > 1e-20:
-                residual -= x * ((x @ residual) / variance)
-                rank += 1
-        if valid.sum() > rank:
-            out.iloc[i, np.flatnonzero(valid)] = residual
-    return out
+    mv_mean = bn.nanmean(temp_mv, axis=1)
+    signal_mean = bn.nanmean(ind_signal, axis=1)
+    m = (mv_mean * signal_mean - bn.nanmean(temp_mv * ind_signal, axis=1)) / (mv_mean**2 - bn.nanmean(temp_mv**2, axis=1) + 1e-6)
+    b = signal_mean - m * mv_mean
+    residual = (ind_signal.T - (temp_mv.T * m) - b).T
+    ind_signal = (residual.T - bn.nanmean(residual, axis=1)) / (bn.nanstd(residual, axis=1) + 1e-6)
+    return ind_signal.T
+
+
+def indmv_neutral_longshort(alpha_vec, ind_arr, mv_arr):
+    """逐行业执行市值中性化"""
+    new_signal = np.full_like(alpha_vec, np.nan)
+    ln_mv = np.log(mv_arr)
+    for i in range(31):
+        ind_ix = ind_arr == i
+        ind_select = ind_ix.any(axis=0)
+        ind_ix_select = ind_ix[:, ind_select]
+        ind_signal = alpha_vec[:, ind_select].copy()
+        ind_signal[~ind_ix_select] = np.nan
+        temp_mv = ln_mv[:, ind_select].copy()
+        new_signal[ind_ix] = calc_indmv_neutral_longshort(ind_signal, temp_mv)[ind_ix_select]
+    return new_signal
+
+
+def neutralize(values, industry=None, market_cap=None):
+    """执行行业与市值中性化"""
+    alpha = values.to_numpy(dtype=float, copy=True)
+    industry_values = np.zeros(alpha.shape, dtype=int) if industry is None else industry.to_numpy(copy=False)
+    market_values = np.ones(alpha.shape, dtype=float) if market_cap is None else market_cap.to_numpy(dtype=float, copy=False)
+    result = indmv_neutral_longshort(alpha, industry_values, market_values)
+    return pd.DataFrame(result, index=values.index, columns=values.columns)
 
 
 def cross_ic(factor, labels, rank=False, min_obs=3):
@@ -105,18 +109,15 @@ def cross_ic(factor, labels, rank=False, min_obs=3):
 
 
 def forward_returns(returns, horizon=1, start=1):
-    """计算t+start至t+start+horizon-1的复合收益，不填补尾端或中途缺失。
-
-    Params: returns: 日收益DataFrame；horizon/start: 正整数交易日。
-    Return: DataFrame，索引为信号日。
-    """
-    if horizon < 1 or start < 1:
-        raise ValueError("horizon/start须为正整数")
-    gross = 1 + returns
-    result = gross.shift(-start)
-    for lag in range(start + 1, start + horizon):
-        result = result * gross.shift(-lag)
-    return result - 1
+    """向量化计算信号日之后指定区间的复合收益"""
+    gross = 1.0 + returns.to_numpy(dtype=float, copy=False)
+    t_count, n_count = gross.shape
+    result = np.full((t_count, n_count), np.nan)
+    valid_count = t_count - start - horizon + 1
+    if valid_count > 0:
+        windows = np.lib.stride_tricks.sliding_window_view(gross, horizon, axis=0)
+        result[:valid_count] = np.prod(windows[start:start + valid_count], axis=-1) - 1.0
+    return pd.DataFrame(result, index=returns.index, columns=returns.columns)
 
 
 def weighted_returns(weights, returns):

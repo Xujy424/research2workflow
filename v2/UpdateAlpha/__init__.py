@@ -24,8 +24,17 @@ from .analyst_forecast.afr import (
     ExpectedInertiaFactor,
     ExpectedVolatilityFactor,
     PAFRFactor,
+    AFRAccelerationFactor,
+    PAFRAccelerationFactor,
     calculate_afr_family,
     update_afr_family,
+)
+from .analyst_forecast.alsue import (
+    ALSUEConfig,
+    ALSUEContext,
+    ALSUE0Factor,
+    ALSUE1Factor,
+    calculate_alsue_family,
 )
 from .analyst_forecast.sue import (
     SUEConfig,
@@ -62,10 +71,19 @@ from .analyst_forecast.disp import (
     DISPSeqFactor,
     DISPEqualFactor,
 )
+from .analyst_forecast.disp_new import (
+    DISPNewCVFactor,
+    DISPNewDownsideFactor,
+    DISPNewRevisionFactor,
+)
 from .analyst_forecast.suef_surf import (
     SUEFSURFContext,
     SUEFFactor,
     SUEFReportFactor,
+    EAR3Factor,
+    SUEFDecayFactor,
+    SUEFLatentFactor,
+    SUEFTrueFilterFactor,
 )
 from .pricevolume.w_cut_reversal import WCutContext, WCutReversalFactor
 from .pricevolume.smart_money import SmartMoneyContext, SmartMoneyFactor
@@ -190,6 +208,9 @@ FACTOR_REGISTRY = {
             (ACTPositiveFactor, ACTNegativeFactor),
             "pricevolume",
         ),
+        AlphaSpec(DISPNewCVFactor, DISPContext, "analyst_forecast"),
+        AlphaSpec(DISPNewDownsideFactor, DISPContext, "analyst_forecast"),
+        AlphaSpec(DISPNewRevisionFactor, DISPContext, "analyst_forecast"),
     )
 }
 
@@ -209,7 +230,15 @@ def discover_factors(target=None):
     """
     key = target.strip().lower() if target is not None else None
     for category in _DISCOVERY_CATEGORIES:
-        package = importlib.import_module(f"{__name__}.{category}")
+        try:
+            package = importlib.import_module(f"{__name__}.{category}")
+        except ModuleNotFoundError as exc:
+            # Optional discovery categories may be absent in a checkout.
+            # Skip only the missing category itself; surface broken imports
+            # raised from inside an installed category.
+            if exc.name == f"{__name__}.{category}":
+                continue
+            raise
         for module_info in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
             if module_info.ispkg or module_info.name in _DISCOVERED_MODULES:
                 continue
@@ -289,10 +318,17 @@ __all__ = [
     "AFRContext",
     "AFRFactor",
     "PAFRFactor",
+    "AFRAccelerationFactor",
+    "PAFRAccelerationFactor",
     "ExpectedInertiaFactor",
     "ExpectedVolatilityFactor",
     "calculate_afr_family",
     "update_afr_family",
+    "ALSUEConfig",
+    "ALSUEContext",
+    "ALSUE0Factor",
+    "ALSUE1Factor",
+    "calculate_alsue_family",
     "SUEConfig",
     "SUEContext",
     "SUE0Factor",
@@ -323,12 +359,19 @@ __all__ = [
     "SUEFSURFContext",
     "SUEFFactor",
     "SUEFReportFactor",
+    "EAR3Factor",
+    "SUEFDecayFactor",
+    "SUEFLatentFactor",
+    "SUEFTrueFilterFactor",
     "DISPContext",
     "DISPFreshnessFactor",
     "DISPInstitutionFactor",
     "DISPMidFactor",
     "DISPSeqFactor",
     "DISPEqualFactor",
+    "DISPNewCVFactor",
+    "DISPNewDownsideFactor",
+    "DISPNewRevisionFactor",
     "WCutContext",
     "WCutReversalFactor",
     "SmartMoneyContext",

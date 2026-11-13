@@ -412,9 +412,79 @@ class SUEFReportFactor(SUEFFactor):
     source = "reports"
 
 
+class EAR3Factor(AlphaBase):
+    """Three-session excess return around the latest earnings release."""
+
+    meta = AlphaMeta("ear3", "three-day earnings-announcement excess return")
+    dependencies = ("LC_IncomeStatementAll", "LC_STIBIncomeState", "d_essentials/pct")
+
+    def calculate(self, asof):
+        raise NotImplementedError(
+            "EAR3 needs announcement event dates and point-in-time market returns; "
+            "use ear3_from_events once the report-event adapter is supplied."
+        )
+
+
+def ear3_from_events(events, returns, trade_dates, tick_positions, universe_mask=None):
+    """Pure EAR3 calculation for ``tick,publish_date`` events and daily returns."""
+    dates = np.asarray(trade_dates, dtype="datetime64[D]")
+    ret = np.asarray(returns, dtype=float)
+    out = np.full(ret.shape[1], np.nan, dtype=np.float32)
+    frame = events.sort_values(["tick", "publish_date"]).drop_duplicates("tick", keep="last")
+    market = np.nanmean(ret, axis=1)
+    for row in frame.itertuples(index=False):
+        col = tick_positions.get(str(row.tick).strip().zfill(6), -1)
+        event_row = np.searchsorted(dates, np.datetime64(pd.Timestamp(row.publish_date)), side="left")
+        if col < 0 or event_row < 1 or event_row + 1 >= len(dates):
+            continue
+        window = np.arange(event_row-1, event_row+2)
+        if universe_mask is not None:
+            market_window = np.nanmean(ret[window][:, universe_mask], axis=1)
+        else:
+            market_window = market[window]
+        out[col] = float(np.prod(1+ret[window, col]) - np.prod(1+market_window))
+    return out
+
+
+class _AnnouncementDecayFactor(AlphaBase):
+    half_life = 20
+    source_factor = SUEFFactor
+    dependencies = SUEFFactor.dependencies
+
+    def calculate(self, asof):
+        raise NotImplementedError(
+            "Announcement decay requires the latest eligible earnings-event date."
+        )
+
+
+class SUEFDecayFactor(_AnnouncementDecayFactor):
+    meta = AlphaMeta("suef_decay", "SUE with 20-session announcement half-life decay")
+
+
+class SUEFLatentFactor(_AnnouncementDecayFactor):
+    """Pre-report latent surprise, using annual forecast revisions pre disclosure."""
+    meta = AlphaMeta("suef_latent", "pre-report analyst forecast revision signal")
+
+    def calculate(self, asof):
+        raise NotImplementedError(
+            "Latent surprise requires fiscal report appointments and analyst-event data."
+        )
+
+
+class SUEFTrueFilterFactor(SUEFFactor):
+    """Mask high-SUE names whose surprise was already priced in before release."""
+    meta = AlphaMeta("suef_true", "SUE filtered for pre-announcement price run-up")
+
+    def calculate(self, asof):
+        raise NotImplementedError(
+            "True-surprise filtering requires event-date-aligned pre/post excess returns."
+        )
+
+
 __all__ = [
     "SUEFSURFConfig", "SUEFSURFContext", "SUEFFactor",
-    "SUEFReportFactor",
+    "SUEFReportFactor", "EAR3Factor", "SUEFDecayFactor",
+    "SUEFLatentFactor", "SUEFTrueFilterFactor",
 ]
 
 

@@ -100,8 +100,9 @@ class AFRContext(AlphaContext):
         return latest_analyst_values(frame, value)
     def reports(self, asof, start):
         asof = _date(asof)
-        if asof in self._cache:
-            return self._cache[asof]
+        key = (asof, pd.Timestamp(start).date())
+        if key in self._cache:
+            return self._cache[key]
         sql = f"""
         SELECT
             f.id, f.report_id, f.stock_code, f.organ_id, ra.author_id,
@@ -119,7 +120,9 @@ class AFRContext(AlphaContext):
             pl.read_database(sql, self.conn, infer_schema_length=None)
             .with_columns(
                 pl.col("stock_code").cast(pl.String).str.zfill(6).alias("tick"),
-                pl.col("create_date").str.strptime(pl.Datetime("us"), format="%Y-%m-%d").alias("create_date")
+                pl.col("create_date").cast(pl.Datetime, strict=False).alias("create_date"),
+                pl.col("entrytime").cast(pl.Datetime, strict=False).alias("entrytime"),
+                pl.col("forecast_np").cast(pl.Float64, strict=False).alias("forecast_np"),
             )
             .sort([
                 "tick", "author_id", "report_year", "create_date", "entrytime", "id",
@@ -129,7 +132,7 @@ class AFRContext(AlphaContext):
                 keep="last", maintain_order=True,
             )
         )
-        self._cache[asof] = frame
+        self._cache[key] = frame
         return frame
 
     def empty(self):
@@ -295,6 +298,118 @@ class PAFRFactor(AFRFactor):
         )
         return self.context.align(stock)
 
+
+class _ExcessMomentumMixin:
+    def excess_momentum(self, starts, ends, ticks):
+        stock_momentum = np.log(
+            self.context.price(ends, ticks)
+            / self.context.price(starts, ticks)
+        )
+        market_momentum = np.log(
+            self.context.market_price(ends)
+            / self.context.market_price(starts)
+        )
+        return stock_momentum - market_momentum
+
+
+class AFRAccelerationFactor(AFRFactor):
+    """Annual forecast revision acceleration: recent AFR rate less prior rate."""
+
+    meta = AlphaMeta("afr_accel", "analyst forecast revision acceleration")
+    column = "afr_accel_event"
+
+    def calculate(self, asof):
+        asof = _date(asof)
+        events = self._events(asof)
+        frame = _aggregate(self.context, events, self.column)
+        return self.context.align(frame)
+
+    def _events(self, asof):
+        """Build two-step revision acceleration with shared, named date fields."""
+        cfg = self.context.config
+        start_date = asof - pd.Timedelta(days=cfg.max_history_days)
+        keys = ["tick", "author_id", "report_year"]
+        source = self.context.reports(asof, start_date).with_columns(
+            pl.col("create_date").rank(method="ordinal", descending=True)
+            .over(keys).alias("_latest_rank")
+        ).filter(
+            (pl.col("_latest_rank") <= 3)
+            | (pl.col("create_date") >= asof-pd.Timedelta(days=cfg.lookback_days))
+        ).sort(keys + ["create_date", "entrytime", "id"])
+        events = source.with_columns(
+            pl.col("forecast_np").shift(1).over(keys).alias("prior_np"),
+            pl.col("forecast_np").shift(2).over(keys).alias("prior2_np"),
+            pl.col("create_date").shift(1).over(keys).alias("prior_date"),
+            pl.col("create_date").shift(2).over(keys).alias("prior2_date"),
+        ).with_columns(
+            ((pl.col("forecast_np")-pl.col("prior_np"))
+             / pl.col("prior_np").abs()).clip(-cfg.revision_limit,
+                                                cfg.revision_limit).alias("recent"),
+            ((pl.col("prior_np")-pl.col("prior2_np"))
+             / pl.col("prior2_np").abs()).clip(-cfg.revision_limit,
+                                                cfg.revision_limit).alias("previous"),
+            (pl.col("create_date")-pl.col("prior_date")).dt.total_days().alias("recent_gap"),
+            (pl.col("prior_date")-pl.col("prior2_date")).dt.total_days().alias("prior_gap"),
+        ).with_columns(
+            (pl.col("recent") / pl.col("recent_gap").clip(lower_bound=1)
+             - pl.col("previous") / pl.col("prior_gap").clip(lower_bound=1))
+            .alias(self.column)
+        ).filter(
+            pl.col("prior2_date").is_not_null()
+            & pl.col("prior_np").is_finite() & (pl.col("prior_np") != 0)
+            & pl.col("prior2_np").is_finite() & (pl.col("prior2_np") != 0)
+            & (pl.col("create_date") >= asof-pd.Timedelta(days=cfg.lookback_days))
+            & pl.col(self.column).is_finite()
+            & (pl.col("organ_id").n_unique().over("tick") >= cfg.min_institutions)
+        )
+        return self.context.filter_universe(events, asof)
+
+
+class PAFRAccelerationFactor(_ExcessMomentumMixin, AFRAccelerationFactor):
+    """Revision acceleration with the same between/post momentum controls as PAFR."""
+
+    meta = AlphaMeta(
+        "pafr_accel",
+        "AFR acceleration residualized against between and post revision momentum",
+    )
+
+    def calculate(self, asof):
+        asof = _date(asof)
+        events = self._events(asof)
+        if events.is_empty():
+            return self.context.empty()
+        ticks = events["tick"].to_list()
+        between, post = self.excess_momentum_pair(
+            events["prior2_date"], events["prior_date"],
+            events["prior_date"], events["create_date"], ticks,
+        )
+        # Missing prices should not discard an otherwise valid forecast event.
+        # Keep those observations and residualize only the subset with both
+        # momentum controls available.
+        accel = events[self.column].to_numpy().astype(float)
+        momentum = np.column_stack((between, post))
+        residual = accel.copy()
+        valid = np.isfinite(accel) & np.all(np.isfinite(momentum), axis=1)
+        if valid.sum() > momentum.shape[1] + 1:
+            residual[:] = np.nan
+            residual[valid] = _residual(accel[valid], momentum[valid])
+        events = events.with_columns(pl.Series("pafr_accel_event", residual))
+        return self.context.align(
+            _aggregate(self.context, events, "pafr_accel_event")
+        )
+
+    def excess_momentum_pair(self, starts_a, ends_a, starts_b, ends_b, ticks):
+        """Read price/cap matrices once and calculate both residual controls."""
+        context = self.context
+        all_dates = list(starts_a) + list(ends_a) + list(starts_b) + list(ends_b)
+        all_ticks = list(ticks) * 4
+        prices = context.price(all_dates, all_ticks).reshape(4, len(ticks))
+        markets = context.market_price(all_dates).reshape(4, len(ticks))
+        stock_start_a, stock_end_a, stock_start_b, stock_end_b = prices
+        market_start_a, market_end_a, market_start_b, market_end_b = markets
+        a = np.log(stock_end_a / stock_start_a) - np.log(market_end_a / market_start_a)
+        b = np.log(stock_end_b / stock_start_b) - np.log(market_end_b / market_start_b)
+        return a, b
 
 class ExpectedInertiaFactor(AlphaBase):
     meta = AlphaMeta("expected_inertia", "Implied valuation multiple revision")
