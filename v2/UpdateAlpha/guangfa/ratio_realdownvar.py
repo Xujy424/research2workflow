@@ -7,7 +7,7 @@ class RatioRealdownvarContext(MinuteContext):
     pass
 
 class RatioRealdownvarFactor(AlphaBase):
-    meta = AlphaMeta('gf_ratio_realdownvar', 'ratio_realdownvar: daily minute-return statistic', direction=1)
+    meta = AlphaMeta('gf_ratio_realdownvar', 'ratio_realdownvar: daily minute-return statistic', direction=-1)
     dependencies = ('m_essentials/close',)
 
     def calculate(self, asof):
