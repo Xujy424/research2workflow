@@ -24,6 +24,7 @@ WINDOWS = {
     "1年 (2025-09-30)": "2025-09-30",
 }
 FREQUENCIES = ("daily", "weekly", "monthly")
+TABLE_FREQUENCY = "daily"
 OUTPUT_DIR = Path(__file__).resolve().parent
 
 
@@ -159,7 +160,7 @@ def main():
     # Summary table: metrics down rows, 5/3/1-year windows across columns,
     # all using the same weekly rebalancing rule.
     table = pd.DataFrame({
-        window_name: outputs[(window_name, "weekly")]["stats"]
+        window_name: outputs[(window_name, TABLE_FREQUENCY)]["stats"]
         for window_name in WINDOWS
     })
     table.columns.name = "回测区间（周度调仓）"
