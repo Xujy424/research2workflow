@@ -1,7 +1,7 @@
 """Compare daily, weekly, and monthly rebalancing over 5/3/1-year windows."""
 
 from pathlib import Path
-
+import os
 import bottleneck as bn
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,13 +10,20 @@ import pandas as pd
 
 # Data paths and factor direction. direction=-1 means long the lowest-ranked
 # bucket and short the highest-ranked bucket.
-ROOT = Path("Z:/")
+_LINUX_ROOT = Path("/data/shanghai/xujiayi/workflow/data")
+_WINDOWS_ROOT = Path("Z:/")
+ROOT = Path(
+    os.environ.get(
+        "RESEARCH_DATA_ROOT",
+        _WINDOWS_ROOT if os.name == "nt" else _LINUX_ROOT,
+    )
+)
 DATES_PATH = ROOT / "axis" / "dates.npy"
 TICKS_PATH = ROOT / "axis" / "stock_ticks.npy"
 FACTOR_PATH = ROOT / "stock" / "factor_pool" / "gf_ratio_realupvar.bin"
 FACTOR_NAME = FACTOR_PATH.stem
 RETURN_PATH = ROOT / "stock" / "d_essentials" / "pct.bin"
-DIRECTION = 1
+DIRECTION = -1
 END_DATE = "2026-09-30"
 WINDOWS = {
     "5年 (2021-01-01)": "2021-01-01",
