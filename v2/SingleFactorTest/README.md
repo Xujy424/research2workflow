@@ -53,7 +53,7 @@ cap = capacity.table(f, capitals=(1e7, 5e7, 1e8), construction="long", stock_cap
 （成交额元、股价元、volume股）。文件路径可通过`field_paths`覆盖；BP字段可能随本地存储版本不同，
 默认`d_financial/bp_lf`，缺失时相关表列为NaN，请覆盖为实际路径。
 所有DataFrame按时间标签、股票代码对齐，不按列位置直接相乘。缺失状态禁止交易。
-调用 `load_domains(indices=(...), styles=(...))` 按需读取指数权重和Barra暴露/分组mask；
+调用 `load(indices=(...), styles=(...))` 按需读取指数权重和Barra暴露/分组mask；
 也可在load时注入`domain_masks/domain_weights/barra`。默认不一次性读入所有风格，以控制内存。
 
 ## 统一口径与设计决策

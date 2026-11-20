@@ -1,6 +1,5 @@
-"""作者：xujiayi | 创建日期：2026-11-11
-整体表现（截面）：组内等权的研究超额收益、覆盖率和换手。
-"""
+﻿"""浣滆€咃細xujiayi | 鍒涘缓鏃ユ湡锛?026-11-11
+鏁翠綋琛ㄧ幇锛堟埅闈級锛氱粍鍐呯瓑鏉冪殑鐮旂┒瓒呴鏀剁泭銆佽鐩栫巼鍜屾崲鎵嬨€?"""
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,11 +7,8 @@ from . import maths as m
 
 
 def calculate(base, construction=None, group_numbers=None, domain="universe"):
-    """统一整体研究口径；Params: 基类/构建方式/组号/域；Return: 日频DataFrame。
-
-    多头：多头组-域内等权；空头：域内等权-空头组；多空：多头组-空头组。
-    多空为每腿100%的收益差，与交易组合默认总敞口100%有明确区别。
-    """
+    """缁熶竴鏁翠綋鐮旂┒鍙ｅ緞锛汸arams: 鍩虹被/鏋勫缓鏂瑰紡/缁勫彿/鍩燂紱Return: 鏃ラDataFrame銆?
+    澶氬ご锛氬澶寸粍-鍩熷唴绛夋潈锛涚┖澶达細鍩熷唴绛夋潈-绌哄ご缁勶紱澶氱┖锛氬澶寸粍-绌哄ご缁勩€?    澶氱┖涓烘瘡鑵?00%鐨勬敹鐩婂樊锛屼笌浜ゆ槗缁勫悎榛樿鎬绘暈鍙?00%鏈夋槑纭尯鍒€?    """
     construction = construction or base.construction
     base.cal_target_holding(construction, group_numbers, "equal", domain)
     long = m.weighted_returns(base.long_target.shift(1).fillna(0), base.pct)
@@ -21,12 +17,11 @@ def calculate(base, construction=None, group_numbers=None, domain="universe"):
     excess = long - short if construction == "longshort" else long - benchmark if construction == "long" else benchmark - short
     weights = base.long_target - base.short_target
     previous = weights.shift(1).fillna(0)
-    # 漂移后的旧权重与当日目标比较，日期移至实际收益日。
-    drift = previous * (1 + base.pct)
+    # 婕傜Щ鍚庣殑鏃ф潈閲嶄笌褰撴棩鐩爣姣旇緝锛屾棩鏈熺Щ鑷冲疄闄呮敹鐩婃棩銆?    drift = previous * (1 + base.pct)
     gross_ret = m.weighted_returns(previous, base.pct)
     drift = drift.div(1 + gross_ret, axis=0)
     turnover = weights.sub(drift).abs().sum(axis=1).div(2).shift(1)
-    pool = base.mask(domain)
+    pool = base.cal_mask(domain[0], domain[1])
     coverage = base.raw_alpha.where(pool).count(axis=1) / pool.sum(axis=1).replace(0, np.nan)
     valid = (base.long_target.sum(axis=1).gt(0) if construction == "long" else
              base.short_target.sum(axis=1).gt(0) if construction == "short" else
@@ -39,7 +34,7 @@ def calculate(base, construction=None, group_numbers=None, domain="universe"):
 
 
 def plot(base, construction=None, group_numbers=None, domain="universe"):
-    """画超额累计收益/覆盖率/换手；Params: 同calculate；Return: Figure。"""
+    """鐢昏秴棰濈疮璁℃敹鐩?瑕嗙洊鐜?鎹㈡墜锛汸arams: 鍚宑alculate锛汻eturn: Figure銆?""
     data = calculate(base, construction, group_numbers, domain).loc[base.report_start:]
     fig, ax = plt.subplots(figsize=(12, 5))
     (m.nav(data.excess_return) - 1).plot(ax=ax, label="Excess cumulative return")
@@ -52,7 +47,7 @@ def plot(base, construction=None, group_numbers=None, domain="universe"):
 
 
 def yearly_table(base, construction=None, group_numbers=None, domain="universe"):
-    """逐自然年及Overall表现；Params: 同calculate；Return: DataFrame。"""
+    """閫愯嚜鐒跺勾鍙奜verall琛ㄧ幇锛汸arams: 鍚宑alculate锛汻eturn: DataFrame銆?""
     data = calculate(base, construction, group_numbers, domain)
     table = pd.DataFrame({y: m.performance(data.excess_return.loc[mask], data.turnover.loc[mask])
                           for y, mask in m.periods(data.index).items()}).T
@@ -61,7 +56,7 @@ def yearly_table(base, construction=None, group_numbers=None, domain="universe")
 
 
 def monthly_table(base, construction=None, group_numbers=None, domain="universe"):
-    """各年月复合超额收益；Params: 同calculate；Return: 年份×1-12月，未来/缺失月为空。"""
+    """鍚勫勾鏈堝鍚堣秴棰濇敹鐩婏紱Params: 鍚宑alculate锛汻eturn: 骞翠唤脳1-12鏈堬紝鏈潵/缂哄け鏈堜负绌恒€?""
     r = calculate(base, construction, group_numbers, domain).excess_return
     r = r.loc[str(r.index[-1].year - 5):]
     rows = []
@@ -69,3 +64,4 @@ def monthly_table(base, construction=None, group_numbers=None, domain="universe"
         rows.append((year, month, (1 + values).prod(min_count=1) - 1))
     result = pd.DataFrame(rows, columns=["year", "month", "return"]).pivot(index="year", columns="month", values="return")
     return result.reindex(index=range(r.index[-1].year - 5, r.index[-1].year + 1), columns=range(1, 13))
+

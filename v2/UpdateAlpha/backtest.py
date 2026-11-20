@@ -128,10 +128,10 @@ def plot_group_ret(
     pred = context.data.load(factor_path)[
         start_idx:end_idx + 1, :context.data.axis.tick_count
     ].copy()
-    
     mask = _universe_mask(context, universe, start_idx, end_idx)
     if mask is not None:
         pred = np.where(mask[:, :context.data.axis.tick_count], pred, np.nan)
+    raw_pred = pred.copy()
 
     valid = np.isfinite(pred)
     count = valid.sum(axis=1, keepdims=True)
@@ -153,9 +153,18 @@ def plot_group_ret(
         raise ValueError("num_groups must be at least 2")
     usable = np.isfinite(pred).sum(axis=1) >= num_groups
     if not usable.any():
+        raw_count = np.isfinite(raw_pred).sum(axis=1)
+        best_idx = int(np.argmax(raw_count)) if len(raw_count) else 0
+        best_date = selected_dates[best_idx] if len(selected_dates) else None
+        best_std = (
+            float(np.nanstd(raw_pred[best_idx]))
+            if len(raw_count) and raw_count[best_idx] > 1 else np.nan
+        )
         raise ValueError(
             f"{name}: no date has {num_groups} valid, varying factor values; "
-            "check source data, warm-up history, universe and calculation dates"
+            "check source data, warm-up history, universe and calculation dates; "
+            f"best raw date={best_date}, finite values={raw_count[best_idx] if len(raw_count) else 0}, "
+            f"raw cross-sectional std={best_std:.6g}"
         )
     pred[~usable] = np.nan
 
@@ -459,7 +468,7 @@ if __name__ == "__main__":
         main()
         raise SystemExit(0)
     # IDE direct-run configuration. Factor names are shown by list_factors().
-    FACTORS = ("pafr_accel",)  # large_moneyflow_strength，large_residual_moneyflow_strength
+    FACTORS = ("gf_intraday_maxdrawdown",)  # large_moneyflow_strength，large_residual_moneyflow_strength
     # CONTEXT_KWARGS = {
     #     "config": {"extreme_minutes": None},  # Example for tgd.
     # }

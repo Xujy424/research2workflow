@@ -1,7 +1,5 @@
-"""作者：xujiayi | 创建日期：2026-11-11
-单因子报告统一入口：factor_pool读取→预处理→依Excel顺序计算→ECharts/表格协议。
-支持命令行完整报告及web.py复用同一Runner的局部参数更新。
-"""
+﻿"""浣滆€咃細xujiayi | 鍒涘缓鏃ユ湡锛?026-11-11
+鍗曞洜瀛愭姤鍛婄粺涓€鍏ュ彛锛歠actor_pool璇诲彇鈫掗澶勭悊鈫掍緷Excel椤哄簭璁＄畻鈫扙Charts/琛ㄦ牸鍗忚銆?鏀寔鍛戒护琛屽畬鏁存姤鍛婂強web.py澶嶇敤鍚屼竴Runner鐨勫眬閮ㄥ弬鏁版洿鏂般€?"""
 from __future__ import annotations
 import argparse
 import json
@@ -21,30 +19,27 @@ from .factorbase import FactorBase
 from . import reporting
 
 SECTION_ORDER = ("overall", "distribution", "groups", "ic", "domains", "portfolio", "capacity")
-SECTION_NAMES = dict(zip(SECTION_ORDER, ("基本表现", "因子值分布", "分组收益", "IC检验", "分域表现", "组合跟踪", "容量测试")))
+SECTION_NAMES = dict(zip(SECTION_ORDER, ("鍩烘湰琛ㄧ幇", "鍥犲瓙鍊煎垎甯?, "鍒嗙粍鏀剁泭", "IC妫€楠?, "鍒嗗煙琛ㄧ幇", "缁勫悎璺熻釜", "瀹归噺娴嬭瘯")))
 STYLE_NAMES = ("beta", "btop", "size", "nonlinear_size", "momentom", "residual_vol", "liquidity", "leverage", "growth1", "earnings_yield")
 INDEX_NAMES = ("hs300", "zz500", "a500", "zz1000", "zz2000")
 
 
 def list_factors(root=None):
-    """列出本地因子；Params: 含stock/axis的数据根；Return: 按名称排序的元数据列表。"""
+    """鍒楀嚭鏈湴鍥犲瓙锛汸arams: 鍚玸tock/axis鐨勬暟鎹牴锛汻eturn: 鎸夊悕绉版帓搴忕殑鍏冩暟鎹垪琛ㄣ€?""
     folder = Path(root or os.environ.get("RESEARCH_DATA_ROOT", "Z:/")) / "stock" / "factor_pool"
     if not folder.is_dir():
-        raise FileNotFoundError(f"因子目录不存在: {folder}")
+        raise FileNotFoundError(f"鍥犲瓙鐩綍涓嶅瓨鍦? {folder}")
     result = []
     for p in sorted(folder.rglob("*.bin")):
-        # 名称来自目录枚举，而非用户拼接路径。避免对每个网络盘文件重复resolve。
-        stat = p.stat()
+        # 鍚嶇О鏉ヨ嚜鐩綍鏋氫妇锛岃€岄潪鐢ㄦ埛鎷兼帴璺緞銆傞伩鍏嶅姣忎釜缃戠粶鐩樻枃浠堕噸澶峳esolve銆?        stat = p.stat()
         result.append({"name": p.relative_to(folder).with_suffix("").as_posix(),
                        "bytes": stat.st_size, "modified": stat.st_mtime})
     return result
 
 
 class ReportRunner:
-    """单工作线程使用的报告上下文，最多缓存一个因子的矩阵。
-
-    Params: root: 数据根；Return: Runner。网页通过单工作队列串行访问，避免共享实例竞态。
-    """
+    """鍗曞伐浣滅嚎绋嬩娇鐢ㄧ殑鎶ュ憡涓婁笅鏂囷紝鏈€澶氱紦瀛樹竴涓洜瀛愮殑鐭╅樀銆?
+    Params: root: 鏁版嵁鏍癸紱Return: Runner銆傜綉椤甸€氳繃鍗曞伐浣滈槦鍒椾覆琛岃闂紝閬垮厤鍏变韩瀹炰緥绔炴€併€?    """
     def __init__(self, root=None):
         self.root = Path(root or os.environ.get("RESEARCH_DATA_ROOT", "Z:/"))
         self.base = None
@@ -56,61 +51,49 @@ class ReportRunner:
 
     def prepare(self, factor_name, construction, normalization, transform, direction,
                 neutralize_industry, neutralize_size, start, end, progress):
-        """加载或复用因子；Params: 显式因子信息/进度回调；Return: FactorBase。"""
+        """鍔犺浇鎴栧鐢ㄥ洜瀛愶紱Params: 鏄惧紡鍥犲瓙淇℃伅/杩涘害鍥炶皟锛汻eturn: FactorBase銆?""
         name = str(factor_name).replace("\\", "/").removeprefix("factor_pool/").removesuffix(".bin")
         available = {x["name"]: x for x in list_factors(self.root)}
         if name not in available:
-            raise ValueError("请选择factor_pool目录中存在的因子名称")
+            raise ValueError("璇烽€夋嫨factor_pool鐩綍涓瓨鍦ㄧ殑鍥犲瓙鍚嶇О")
         key = (name, available[name]["modified"], construction, normalization, transform,
                direction, neutralize_industry, neutralize_size, start, end)
         if self.key == key and self.base is not None:
             return self.base
         self.base, self.key, self.cache, self.notes = None, None, {}, []
-        progress("loading", "读取本地因子与市场数据", None)
-        from .dataio import ReportDataPool
+        progress("loading", "璇诲彇鏈湴鍥犲瓙涓庡競鍦烘暟鎹?, None)
         if self._source is None:
-            self._source = ReportDataPool(self.root, asset="stock")
+            from v2.GetData import DataPool
+            self._source = DataPool(self.root, asset="stock")
         b = FactorBase(f"factor_pool/{name}", construction, normalization, transform,
                        neutralize_industry, neutralize_size, direction=direction,
                        start=start, end=end, root=self.root, data=self._source)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            if self._market is not None and self._market[0] == (start, end):
-                _, pct, fields, notes = self._market
-                progress("loading", "复用市场数据，读取所选因子", None)
-                alpha = pd.DataFrame(self._source.read(b.factor_name, pct.index[-1], pct.index[0]), pct.index, pct.columns)
-                b.load(alpha, pct, fields, strict_history=False)
-                self.notes.extend(notes)
-            else:
-                b.load(strict_history=False, progress=lambda msg: progress("loading", msg, None))
-        self.notes = [str(x.message) for x in caught]
-        self._market = ((start, end), b.pct, b.fields, self.notes)
-        # 本地轴可能包含未维护的未来行情行，报告末日使用有收益数据的最后一行。
-        valid = b.raw_alpha.notna().any(axis=1) & b.pct.notna().any(axis=1)
+        b.load()
+        # 鏈湴杞村彲鑳藉寘鍚湭缁存姢鐨勬湭鏉ヨ鎯呰锛屾姤鍛婃湯鏃ヤ娇鐢ㄦ湁鏀剁泭鏁版嵁鐨勬渶鍚庝竴琛屻€?        valid = b.raw_alpha.notna().any(axis=1) & b.pct.notna().any(axis=1)
         if not valid.any():
-            raise ValueError("因子与日收益没有共同有效样本")
-        progress("preprocess", "处理因子值并计算当日中性化", None)
+            raise ValueError("鍥犲瓙涓庢棩鏀剁泭娌℃湁鍏卞悓鏈夋晥鏍锋湰")
+        progress("preprocess", "澶勭悊鍥犲瓙鍊煎苟璁＄畻褰撴棩涓€у寲", None)
         b.process_alpha()
         effective = b.alpha.notna().any(axis=1)
         if not effective.any():
-            raise ValueError("因子在当前股票池内没有可分组的有效截面")
+            raise ValueError("鍥犲瓙鍦ㄥ綋鍓嶈偂绁ㄦ睜鍐呮病鏈夊彲鍒嗙粍鐨勬湁鏁堟埅闈?)
         first, last = b.dates[effective][0], b.dates[effective][-1]
         if (last - first).days < 365 * 5:
-            self.notes.append(f"有效因子样本不足5年：{first:%Y-%m-%d} 至 {last:%Y-%m-%d}，缺失年份保留空值")
+            self.notes.append(f"鏈夋晥鍥犲瓙鏍锋湰涓嶈冻5骞达細{first:%Y-%m-%d} 鑷?{last:%Y-%m-%d}锛岀己澶卞勾浠戒繚鐣欑┖鍊?)
         self.base, self.key = b, key
         return b
 
     def ensure_domain(self, domain):
-        """按需加载注册指数；Params: 域名；Return: None。"""
+        """鎸夐渶鍔犺浇娉ㄥ唽鎸囨暟锛汸arams: 鍩熷悕锛汻eturn: None銆?""
         if domain.startswith("index:"):
             name = domain.split(":", 1)[1]
             if name not in INDEX_NAMES:
-                raise ValueError("未知指数")
+                raise ValueError("鏈煡鎸囨暟")
             if name not in self.base.domain_weights:
-                self.base.load_domains((name,), ())
+                self.base.load(indices=(name,))
 
     def render(self, section, options):
-        """单模块重算/缓存；Params: 模块及参数；Return: 面板结果字典。"""
+        """鍗曟ā鍧楅噸绠?缂撳瓨锛汸arams: 妯″潡鍙婂弬鏁帮紱Return: 闈㈡澘缁撴灉瀛楀吀銆?""
         key = json.dumps([section, options], sort_keys=True, ensure_ascii=False)
         if key in self.cache:
             return self.cache[key]
@@ -124,7 +107,7 @@ class ReportRunner:
             if dtype == "barra":
                 missing = tuple(s for s in STYLE_NAMES if s not in self.base.barra)
                 if missing:
-                    self.base.load_domains((), missing)
+                    self.base.load(styles=missing)
         if section in ("portfolio", "capacity") and options.get("benchmark_method") == "index":
             self.ensure_domain(f"index:{options['benchmark_index']}")
         func = {"overall": reporting.overall, "distribution": reporting.value_distribution,
@@ -132,14 +115,13 @@ class ReportRunner:
                 "portfolio": reporting.portfolio, "capacity": reporting.capacity_report}[section]
         result = func(self.base, options)
         self.cache[key] = result
-        # 图表协议体积小；最多保留24组参数结果，矩阵始终只有当前因子。
-        if len(self.cache) > 24:
+        # 鍥捐〃鍗忚浣撶Н灏忥紱鏈€澶氫繚鐣?4缁勫弬鏁扮粨鏋滐紝鐭╅樀濮嬬粓鍙湁褰撳墠鍥犲瓙銆?        if len(self.cache) > 24:
             self.cache.pop(next(iter(self.cache)))
         return result
 
 
 def _options(section, construction, normalization, long_group, short_group, overrides):
-    """模块参数校验与显式默认值；Params: 模块/构建配置/覆盖项；Return: 参数字典。"""
+    """妯″潡鍙傛暟鏍￠獙涓庢樉寮忛粯璁ゅ€硷紱Params: 妯″潡/鏋勫缓閰嶇疆/瑕嗙洊椤癸紱Return: 鍙傛暟瀛楀吀銆?""
     common = {"construction": construction, "long_group": long_group, "short_group": short_group, "domain": "universe"}
     defaults = {
         "overall": common, "distribution": {"processed": True, "year": "Overall"},
@@ -157,24 +139,24 @@ def _options(section, construction, normalization, long_group, short_group, over
     defaults["capacity"] = {**defaults["portfolio"], "capitals": (1e7, 5e7, 1e8, 5e8)}
     unknown = set(overrides) - set(defaults[section])
     if unknown:
-        raise ValueError(f"未知{section}参数: {sorted(unknown)}")
+        raise ValueError(f"鏈煡{section}鍙傛暟: {sorted(unknown)}")
     options = {**defaults[section], **overrides}
     if "construction" in options:
         side = options["construction"]
         if side not in ("long", "short", "longshort"):
-            raise ValueError("构建方式无效")
+            raise ValueError("鏋勫缓鏂瑰紡鏃犳晥")
         lg, sg = int(options.pop("long_group")), int(options.pop("short_group"))
         if not 1 <= lg <= 10 or not 1 <= sg <= 10 or (side == "longshort" and lg == sg):
-            raise ValueError("组号须在1—10，多空组不可相同")
+            raise ValueError("缁勫彿椤诲湪1鈥?0锛屽绌虹粍涓嶅彲鐩稿悓")
         options["group_numbers"] = ((lg,), (sg,)) if side == "longshort" else (lg,) if side == "long" else (sg,)
     if "years" in options and options["years"] not in (1, 3, 5):
-        raise ValueError("年限须为1/3/5")
+        raise ValueError("骞撮檺椤讳负1/3/5")
     if "horizon" in options and options["horizon"] not in (1, 3, 5, 10, 20):
-        raise ValueError("收益期限须为1/3/5/10/20日")
+        raise ValueError("鏀剁泭鏈熼檺椤讳负1/3/5/10/20鏃?)
     if "rebalance_days" in options and options["rebalance_days"] not in (1, 3, 5, 10, 20):
-        raise ValueError("调仓频率须为1/3/5/10/20个交易日")
+        raise ValueError("璋冧粨棰戠巼椤讳负1/3/5/10/20涓氦鏄撴棩")
     if "capitals" in options and (not 1 <= len(options["capitals"]) <= 8 or any(not 0 < float(c) <= 1e12 for c in options["capitals"])):
-        raise ValueError("容量档位须为1—8个正数，单档不超过1万亿元")
+        raise ValueError("瀹归噺妗ｄ綅椤讳负1鈥?涓鏁帮紝鍗曟。涓嶈秴杩?涓囦嚎鍏?)
     return options
 
 
@@ -182,19 +164,15 @@ def run(factor_name, construction="longshort", normalization="equal", transform=
         direction=1, neutralize_industry=True, neutralize_size=True, long_group=10,
         short_group=1, start=None, end=None, description="", root=None, output=None,
         sections=None, section_options=None, runner=None, progress=None):
-    """按排版顺序执行研究报告，网页与命令行共用此函数。
-
-    Params: factor_name: stock/factor_pool内名称；其余显式参数为因子信息；
-        sections: 选算模块（默认全部）；section_options: 内部图表参数映射；
-        runner: 可复用上下文；progress(stage,message,payload): 增量回调；output: 可选JSON输出路径。
-    Return: {metadata, sections, errors}，缺失值为JSON null，不生成假数据填充图表。
-    """
+    """鎸夋帓鐗堥『搴忔墽琛岀爺绌舵姤鍛婏紝缃戦〉涓庡懡浠よ鍏辩敤姝ゅ嚱鏁般€?
+    Params: factor_name: stock/factor_pool鍐呭悕绉帮紱鍏朵綑鏄惧紡鍙傛暟涓哄洜瀛愪俊鎭紱
+        sections: 閫夌畻妯″潡锛堥粯璁ゅ叏閮級锛泂ection_options: 鍐呴儴鍥捐〃鍙傛暟鏄犲皠锛?        runner: 鍙鐢ㄤ笂涓嬫枃锛沺rogress(stage,message,payload): 澧為噺鍥炶皟锛沷utput: 鍙€塉SON杈撳嚭璺緞銆?    Return: {metadata, sections, errors}锛岀己澶卞€间负JSON null锛屼笉鐢熸垚鍋囨暟鎹～鍏呭浘琛ㄣ€?    """
     started = perf_counter()
     progress = progress or (lambda stage, message, payload: None)
     runner = runner or ReportRunner(root)
     selected = tuple(sections) if sections is not None else SECTION_ORDER
     if not selected or not set(selected).issubset(SECTION_ORDER):
-        raise ValueError("请求模块无效")
+        raise ValueError("璇锋眰妯″潡鏃犳晥")
     b = runner.prepare(factor_name, construction, normalization, transform, direction,
                        neutralize_industry, neutralize_size, start, end, progress)
     effective = b.alpha.notna().any(axis=1)
@@ -207,11 +185,11 @@ def run(factor_name, construction="longshort", normalization="equal", transform=
                 "stocks": len(b.ticks), "days": len(b.dates), "notes": runner.notes,
                 "years": list(range(b.dates[-1].year - 5, b.dates[-1].year + 1))}
     report = {"metadata": metadata, "sections": {}, "errors": {}}
-    progress("metadata", "因子数据准备完成", metadata)
+    progress("metadata", "鍥犲瓙鏁版嵁鍑嗗瀹屾垚", metadata)
     for section in SECTION_ORDER:
         if section not in selected:
             continue
-        progress(section, f"正在计算{SECTION_NAMES[section]}", None)
+        progress(section, f"姝ｅ湪璁＄畻{SECTION_NAMES[section]}", None)
         try:
             overrides = (section_options or {}).get(section, {})
             if section == "capacity":
@@ -219,7 +197,7 @@ def run(factor_name, construction="longshort", normalization="equal", transform=
             options = _options(section, construction, normalization, long_group, short_group, overrides)
             payload = runner.render(section, options)
             report["sections"][section] = payload
-            progress(section, f"{SECTION_NAMES[section]}已完成", payload)
+            progress(section, f"{SECTION_NAMES[section]}宸插畬鎴?, payload)
         except (ValueError, KeyError, FileNotFoundError, PermissionError) as error:
             report["errors"][section] = str(error)
             progress(section, str(error), {"error": str(error)})
@@ -232,7 +210,7 @@ def run(factor_name, construction="longshort", normalization="equal", transform=
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="从stock/factor_pool生成单因子报告")
+    parser = argparse.ArgumentParser(description="浠巗tock/factor_pool鐢熸垚鍗曞洜瀛愭姤鍛?)
     parser.add_argument("factor_name")
     parser.add_argument("--root", default=None)
     parser.add_argument("--construction", choices=("long", "short", "longshort"), default="longshort")
@@ -244,4 +222,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="artifacts/single_factor/report.json")
     args = vars(parser.parse_args())
     result = run(**args, progress=lambda stage, message, payload: print(message, flush=True))
-    print(f"报告已保存；模块错误数: {len(result['errors'])}")
+    print(f"鎶ュ憡宸蹭繚瀛橈紱妯″潡閿欒鏁? {len(result['errors'])}")
+
+

@@ -1,6 +1,5 @@
-"""作者：xujiayi | 创建日期：2026-11-11
-分域表现：事前域构建、域内选股和回归暴露归因。
-"""
+﻿"""浣滆€咃細xujiayi | 鍒涘缓鏃ユ湡锛?026-11-11
+鍒嗗煙琛ㄧ幇锛氫簨鍓嶅煙鏋勫缓銆佸煙鍐呴€夎偂鍜屽洖褰掓毚闇插綊鍥犮€?"""
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,57 +9,55 @@ from .overall_cross_section import calculate
 
 
 def universe(base):
-    """股票池域；Params: base；Return: 名称→bool DataFrame。"""
-    return {"universe": base.mask(), **{k: v for k, v in base.domain_masks.items() if k.startswith("universe:")}}
+    """鑲＄エ姹犲煙锛汸arams: base锛汻eturn: 鍚嶇О鈫抌ool DataFrame銆?""
+    return {"universe": base.cal_mask(), **{k: v for k, v in base.domain_masks.items() if k.startswith("universe:")}}
 
 
 def industry(base):
-    """行业域；Params: base；Return: 行业代码→当日mask。"""
+    """琛屼笟鍩燂紱Params: base锛汻eturn: 琛屼笟浠ｇ爜鈫掑綋鏃ask銆?""
     base.require("industry")
     x = base.fields["industry"]
     return {str(c): x.eq(c) for c in pd.unique(x.to_numpy().ravel()) if pd.notna(c)}
 
 
 def index(base):
-    """指数成分域；Params: base；Return: 名称→正权重mask。"""
+    """鎸囨暟鎴愬垎鍩燂紱Params: base锛汻eturn: 鍚嶇О鈫掓鏉冮噸mask銆?""
     return {name: w.gt(0) for name, w in base.domain_weights.items()}
 
 
 def barra(base):
-    """Barra正负域；Params: base；Return: 风格名称±→mask，缺失值不入域。"""
+    """Barra姝ｈ礋鍩燂紱Params: base锛汻eturn: 椋庢牸鍚嶇О卤鈫抦ask锛岀己澶卞€间笉鍏ュ煙銆?""
     return {f"{name}{suffix}": base.domain_masks.get(f"barra:{name}{suffix}",
                                                     x.gt(0) if suffix == "+" else x.lt(0))
             for name, x in base.barra.items() for suffix in ("+", "-")}
 
 
 def _tails(x):
-    """截面20/80分位域；Params: x；Return: high/low字典。"""
+    """鎴潰20/80鍒嗕綅鍩燂紱Params: x锛汻eturn: high/low瀛楀吀銆?""
     return {"high": x.ge(x.quantile(.8, axis=1), axis=0) & x.notna(),
             "low": x.le(x.quantile(.2, axis=1), axis=0) & x.notna()}
 
 
 def volume(base):
-    """过去20日平均成交量域；Params: base；Return: high/low mask。"""
+    """杩囧幓20鏃ュ钩鍧囨垚浜ら噺鍩燂紱Params: base锛汻eturn: high/low mask銆?""
     base.require("volume")
-    return _tails(base.fields["volume"].where(base.mask()).rolling(20, min_periods=20).mean())
+    return _tails(base.fields["volume"].where(base.cal_mask()).rolling(20, min_periods=20).mean())
 
 
 def vol(base):
-    """过去20日收益波动域；Params: base；Return: high/low mask。"""
-    return _tails(base.pct.where(base.mask()).rolling(20, min_periods=20).std())
+    """杩囧幓20鏃ユ敹鐩婃尝鍔ㄥ煙锛汸arams: base锛汻eturn: high/low mask銆?""
+    return _tails(base.pct.where(base.cal_mask()).rolling(20, min_periods=20).std())
 
 
 def momentum(base):
-    """过去20日复合动量域；Params: base；Return: high/low mask。"""
+    """杩囧幓20鏃ュ鍚堝姩閲忓煙锛汸arams: base锛汻eturn: high/low mask銆?""
     x = (1 + base.pct).rolling(20, min_periods=20).apply(np.prod, raw=True) - 1
-    return _tails(x.where(base.mask()))
+    return _tails(x.where(base.cal_mask()))
 
 
 def regime(base):
-    """沿用analyzer的60日均线±5%牛/熊/震荡域，无全样本阈值。
-
-    Params: base；Return: 三种市场状态mask，最初不足20日不分类。
-    """
+    """娌跨敤analyzer鐨?0鏃ュ潎绾柯?%鐗?鐔?闇囪崱鍩燂紝鏃犲叏鏍锋湰闃堝€笺€?
+    Params: base锛汻eturn: 涓夌甯傚満鐘舵€乵ask锛屾渶鍒濅笉瓒?0鏃ヤ笉鍒嗙被銆?    """
     nav = m.nav(base.cal_benchmark())
     ma = nav.rolling(60, min_periods=20).mean()
     bull, bear = nav > ma * 1.05, nav < ma * .95
@@ -74,14 +71,14 @@ BUILDERS = {"universe": universe, "industry": industry, "index": index, "barra":
 
 
 def domain_returns(base, domain="industry"):
-    """域收益：前日域内等权；Params: base/domain类型；Return: DataFrame，并注册mask。"""
+    """鍩熸敹鐩婏細鍓嶆棩鍩熷唴绛夋潈锛汸arams: base/domain绫诲瀷锛汻eturn: DataFrame锛屽苟娉ㄥ唽mask銆?""
     masks = BUILDERS[domain](base)
     if not masks:
-        raise ValueError(f"{domain}没有域数据，请注入domain_masks/domain_weights/barra")
+        raise ValueError(f"{domain}娌℃湁鍩熸暟鎹紝璇锋敞鍏omain_masks/domain_weights/barra")
     output = {}
     for name, mask in masks.items():
         key = f"{domain}:{name}"
-        base.domain_masks[key] = mask & base.mask()
+        base.domain_masks[key] = mask & base.cal_mask()
         w = m.normalize(base.domain_masks[key].astype(float))
         output[name] = m.weighted_returns(w.shift(1).fillna(0), base.pct).where(w.shift(1).sum(axis=1) > 0)
     result = pd.DataFrame(output)
@@ -90,26 +87,21 @@ def domain_returns(base, domain="industry"):
 
 
 def table(base, years=5, domain="industry", construction=None, group_numbers=None):
-    """域内IC/回归暴露/收益贡献和选股表现。
-
-    Params: base/years:1或3或5/domain:八种类型/construction/group_numbers；Return: 域×指标表。
-    beta为全市场因子组合超额对域超额收益的单变量OLS斜率；贡献=beta×域日均超额×252，
-    域有重叠，贡献不可相加。Barra暴露为标准化因子组合对标准化风格的主动权重暴露。
-    """
+    """鍩熷唴IC/鍥炲綊鏆撮湶/鏀剁泭璐＄尞鍜岄€夎偂琛ㄧ幇銆?
+    Params: base/years:1鎴?鎴?/domain:鍏绫诲瀷/construction/group_numbers锛汻eturn: 鍩熋楁寚鏍囪〃銆?    beta涓哄叏甯傚満鍥犲瓙缁勫悎瓒呴瀵瑰煙瓒呴鏀剁泭鐨勫崟鍙橀噺OLS鏂滅巼锛涜础鐚?beta脳鍩熸棩鍧囪秴棰澝?52锛?    鍩熸湁閲嶅彔锛岃础鐚笉鍙浉鍔犮€侭arra鏆撮湶涓烘爣鍑嗗寲鍥犲瓙缁勫悎瀵规爣鍑嗗寲椋庢牸鐨勪富鍔ㄦ潈閲嶆毚闇层€?    """
     if years not in (1, 3, 5) or domain not in BUILDERS:
-        raise ValueError("years/domain无效")
+        raise ValueError("years/domain鏃犳晥")
     base.cal_labels((1,))
     start = base.dates[-1] - pd.DateOffset(years=years)
     dr = domain_returns(base, domain)
     market = base.cal_benchmark()
     overall = calculate(base, construction, group_numbers).excess_return
-    market_mean = base.alpha.where(base.mask()).mean(axis=1)
+    market_mean = base.alpha.where(base.cal_mask()).mean(axis=1)
     rows = {}
     for name in dr:
         key = f"{domain}:{name}"
         mask = base.domain_masks[key]
-        # 分组只处理该域曾出现的股票；保留前一交易日用于收益对齐。
-        positions = np.flatnonzero(base.dates >= start)
+        # 鍒嗙粍鍙鐞嗚鍩熸浘鍑虹幇鐨勮偂绁紱淇濈暀鍓嶄竴浜ゆ槗鏃ョ敤浜庢敹鐩婂榻愩€?        positions = np.flatnonzero(base.dates >= start)
         begin = max(0, positions[0] - 1) if len(positions) else 0
         dates = base.dates[begin:]
         columns = mask.loc[dates].any(axis=0)
@@ -137,16 +129,17 @@ def table(base, years=5, domain="industry", construction=None, group_numbers=Non
             row["exposure"] = (view.active_target * style).sum(axis=1, min_count=1).loc[start:].mean()
         rows[name] = row
     result = pd.DataFrame(rows).T
-    result.attrs["title"] = f"{years}年期{domain}域对比"
+    result.attrs["title"] = f"{years}骞存湡{domain}鍩熷姣?
     base.results[f"domain_{years}_{domain}"] = result
     return result
 
 
 def plot(base, years=5, domain="industry", construction=None, group_numbers=None):
-    """域暴露柱图；Params: 同table；Return: Figure。"""
+    """鍩熸毚闇叉煴鍥撅紱Params: 鍚宼able锛汻eturn: Figure銆?""
     result = table(base, years, domain, construction, group_numbers)
     fig, ax = plt.subplots(figsize=(12, 5))
     result.exposure.plot.bar(ax=ax)
     ax.set_title(result.attrs["title"])
     fig.tight_layout()
     return fig
+

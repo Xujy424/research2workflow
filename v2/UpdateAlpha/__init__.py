@@ -216,7 +216,7 @@ FACTOR_REGISTRY = {
 
 
 _DISCOVERY_CATEGORIES = (
-    "analyst_forecast", "pricevolume", "gh_factor_calendar",
+    "analyst_forecast", "pricevolume", "gh_factor_calendar", "guangfa",
 )
 _DISCOVERED_MODULES = set()
 
