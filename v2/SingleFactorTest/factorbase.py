@@ -1,4 +1,4 @@
-﻿"""作者：xujiayi | 创建日期：2026-11-11
+"""作者：xujiayi | 创建日期：2026-11-11
 单因子研究上下文：数据、预处理、标签、分组、持仓和成交模拟。
 """
 from __future__ import annotations
@@ -6,8 +6,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from . import maths as m
-
-
+from .backtest import simulate
+from .strategy import build_target
 from v2.GetData import DataPool
 from v2.UpdateData.config import ROOT
 
@@ -28,7 +28,7 @@ LOCAL_FIELDS = {
     "limit_down": "basic/floor_only",
     "suspended": "basic/issuspend",
     "st": "basic/isst",
-    "bp_lf": "d_financial/bp_lf",
+    "pb_lf": "fundamental/valuation/pb_lf",
     "adjustment": "d_essentials/ratio_adjusting_factor",
     "hastrade": "basic/hastrade",
 }
@@ -36,9 +36,13 @@ LOCAL_FIELDS = {
 INDEX_FIELDS = {name: f"index/weight/{name}_weight"
                 for name in ("hs300", "zz500", "a500", "zz1000", "zz2000")}
 BARRA_FIELDS = {name: f"barra/{name}"
-                for name in ("beta", "btop", "size", "nonlinear_size", "momentom",
-                             "residual_vol", "liquidity", "leverage", "growth1", "earnings_yield")}
+                for name in (
+                    "beta", "btop", "size", "nonlinear_size", "momentom",
+                    "residual_vol", "liquidity", "leverage", "growth1", "earnings_yield"
+                )}
 
+
+from .backtest import PortfolioResult
 
 class FactorBase:
     """单因子检验基类，计算结果保存在实例中。
@@ -53,7 +57,7 @@ class FactorBase:
             self,
             factor_name,
             construction="longshort",  # long / short / longshort
-            normalization="equal",    # equal / market_cap / factor
+            normalization="factor",    # equal / market_cap / factor
             transform="asinh",        # softsign / piecewise / rank_gaussian / yeo_johnson / none
             neutralize=True,
             standardize=True,
@@ -62,14 +66,19 @@ class FactorBase:
             start=None, end=None, history_years=6,
             root=ROOT, data=None
         ):
-        self.factor_name, self.construction = factor_name, construction
+        # 因子名称、单边或双边、因子方向
+        self.factor_name, self.construction, self.direction = factor_name, construction, direction
+        # 归一化、变换、中性化、标准化
         self.normalization, self.transform = normalization, transform
+        self.groups = groups
         self.neutralize, self.standardize = neutralize, standardize
-        self.groups, self.direction = groups, direction
+        # 报告日期、历史窗口
         self.start, self.end, self.history_years = start, end, history_years
+        # 数据根目录、数据源
         self.root, self.data = root, data
 
-        self.fields, self.domain_masks, self.domain_weights, self.barra = {}, {}, {}, {}
+        # 读取的字段、域掩码、域权重、Barra头尾组掩码
+        self.fields, self.domain_masks, self.domain_weights = {}, {}, {}
         self.results = {}
 
     def _read_field(self, path):
@@ -79,7 +88,7 @@ class FactorBase:
         values = self.data.read(path, self.dates[-1], self.dates[0], copy=False)
         return pd.DataFrame(values, index=self.dates, columns=self.ticks)
 
-    def load(self, indices=(), styles=()):
+    def load(self):
         """创建DataPool并读取因子、行情和指定域数据。
         Params: indices/styles: 指数和Barra名称。
         Return: self；请求至少5年、默认6年的历史窗口，实际可用历史取决于本地数据。
@@ -94,8 +103,8 @@ class FactorBase:
         self.raw_alpha = self._read_field('factor_pool/'+self.factor_name)
         self.fields = {name: self._read_field(path) for name, path in LOCAL_FIELDS.items()}
         self.pct = self.fields['pct']*.01
-        self.fields["pe_lf"] = 1 / self.fields["bp_lf"].replace(0, np.nan)
-        self.barra = {name: self._read_field(path) for name, path in BARRA_FIELDS.items()}
+        self.fields["bp_lf"] = 1 / self.fields["pb_lf"].replace(0, np.nan)
+        self.fields['barra'] = {name: self._read_field(path) for name, path in BARRA_FIELDS.items()}
         self.cal_mask()
         self.cal_weight()
         self.report_start = pd.Timestamp(self.start) if self.start else self.dates[-1] - pd.DateOffset(years=5)
@@ -142,232 +151,335 @@ class FactorBase:
         return self.domain_weights
 
     def cal_barra_ret(self):
-        """以昨日风格暴露及行业哑变量解释当日股票收益，计算风格因子收益。
-        模型：r_t = X_{t-1} f_t + D_{t-1} g_t + e_t。
-        WLS最小化sum(sqrt(mv_{t-1}) * e_t**2)，使用昨日流通市值。
-        行业采用完整哑变量、不另加截距；仅保留当日样本中出现的行业列。
-        Params: 无；
-        Return: 日期×十大风格的DataFrame，并保存barra_returns。
-        首日、有效样本不足或设计矩阵不满秩时保留NaN。
-        """
+        """计算Barra因子收益，使用前日因子暴露和当日收益，行业和市值中性化。"""
         styles = list(BARRA_FIELDS)
         returns = self.pct.to_numpy(dtype=float, copy=False)
-        exposures = np.stack([self.barra[name].to_numpy(dtype=float, copy=False)
-                              for name in styles], axis=2)
+        exposures = np.stack([
+            self.fields["barra"][name].to_numpy(dtype=float, copy=False)
+            for name in styles
+        ], axis=2)
         industry = self.fields["industry"].to_numpy(dtype=float, copy=False)
         market_cap = self.fields["market_cap"].to_numpy(dtype=float, copy=False)
+
         factor_returns = np.full((len(self.dates), len(styles)), np.nan)
         for day in range(1, len(self.dates)):
-            x = exposures[day - 1]
-            y = returns[day]
+            x, y = exposures[day - 1], returns[day]
             codes, mv = industry[day - 1], market_cap[day - 1]
-            valid = (np.isfinite(y) & np.isfinite(x).all(axis=1)
-                     & np.isin(codes, np.arange(31)) & np.isfinite(mv) & (mv > 0))
-            codes = codes[valid]
-            dummies = codes[:, None] == np.unique(codes)[None, :]
-            design = np.column_stack((x[valid], dummies))
-            if design.shape[0] <= design.shape[1]:
+            valid = (
+                np.isfinite(y) 
+                & np.isfinite(x).all(axis=1)
+                & np.isin(codes, np.arange(31)) 
+                & np.isfinite(mv) & (mv > 0)
+            )
+            x, y, codes, mv = x[valid], y[valid], codes[valid].astype(np.int64), mv[valid]
+            # 与包含行业哑变量的 WLS 保持一致：样本数须大于参数数。
+            if len(y) <= len(styles) + np.unique(codes).size:
                 continue
-            # lstsq两侧乘sqrt(W)：W=sqrt(mv)，因此缩放因子为mv**0.25。
-            scale = mv[valid] ** .25
-            coefficients, _, rank, _ = np.linalg.lstsq(
-                design * scale[:, None], y[valid] * scale, rcond=None)
-            if rank == design.shape[1]:
-                factor_returns[day] = coefficients[:len(styles)]
+            w = np.sqrt(mv)
+            w_sum = np.bincount(codes, weights=w, minlength=31)
+            y_sum = np.bincount(codes, weights=w*y, minlength=31)
+            y_mean = np.divide(
+                y_sum, w_sum,
+                out=np.zeros_like(y_sum),
+                where=w_sum > 0
+            )
+            y_res = y - y_mean[codes]
+            x_res = np.empty_like(x)
+
+            for k in range(len(styles)):
+                x_sum = np.bincount(codes, weights=w*x[:, k], minlength=31)
+                x_mean = np.divide(
+                    x_sum, w_sum,
+                    out=np.zeros_like(x_sum),
+                    where=w_sum > 0
+                )
+                x_res[:, k] = x[:, k] - x_mean[codes]
+
+            scale = np.sqrt(w)
+            xw = x_res * scale[:, None]
+            yw = y_res * scale
+            coefficients, _, rank, _ = np.linalg.lstsq(xw, yw, rcond=None)
+            if rank == len(styles):
+                factor_returns[day] = coefficients
+
         result = pd.DataFrame(factor_returns, index=self.dates, columns=styles)
         self.barra_returns = result
         return result
-
-    
-    
 
 
     def process_alpha(self):
         """执行因子变换、行业市值中性化和截面标准化。
         Params: 无，使用实例配置；Return: DataFrame，并保存self.alpha。
         """
-        if self.neutralize_industry:
-            self.require("industry")
-        if self.neutralize_size:
-            self.require("market_cap")
-        values = m.transform(self.raw_alpha.where(self.pct.notna()) * self.direction, self.transform)
-        if self.neutralize_industry or self.neutralize_size:
-            values = m.neutralize(values, self.fields.get("industry") if self.neutralize_industry else None,
-                                  self.fields.get("market_cap") if self.neutralize_size else None)
+        values = m.transform(
+            self.raw_alpha.where(self.pct.notna()) * self.direction, 
+            self.transform
+        )
+        if self.neutralize:
+            values = m.neutralize(
+                values, 
+                self.fields.get("industry"),
+                self.fields.get("market_cap")
+            )
         self.alpha = m.standardize(values) if self.standardize else values
+
+        # 清除旧因子计算结果对应的缓存，防止重新执行 process_alpha() 后，后续回测仍然使用上一次的结果
         self._group_cache_key = None
         for name in ("labels", "ics", "rankics", "sign_ics"):
             self.__dict__.pop(name, None)
+
         return self.alpha
 
+
     def cal_labels(self, horizons=(1, 3, 5, 10, 20)):
-        """计算未来复合收益和IC。
-        Params: horizons: 交易日窗口；Return: 标签字典。
-        t行对应t+1起的未来收益，尾部不完整窗口保留NaN。
+        """t行对应t+2/t+1起的未来收益，尾部不完整窗口保留NaN。
+        Params: horizons: 交易日窗口；
+        Return: 标签字典。
+        """
+        if not hasattr(self, "labels"):
+            self.labels = {}
+        for h in horizons:
+            if h in self.labels: continue
+            self.labels[h] = m.forward_returns(
+                self.pct,
+                horizon=h,
+                start=2
+            )
+        return self.labels
+        
+    def cal_ics(self, horizons=(1, 3, 5, 10, 20)):
+        """计算IC和RankIC。
+        Params: horizons: 交易日窗口；
+        Return: DataFrame，列为horizon，行索引为日期。
         """
         if not hasattr(self, "alpha"):
             self.process_alpha()
         if not hasattr(self, "labels"):
-            self.labels, self.sign_ics = {}, {}
-            self.ics, self.rankics = pd.DataFrame(index=self.dates), pd.DataFrame(index=self.dates)
+            self.cal_labels(horizons)
+
+        self.ics, self.rankics, self.sign_ics = {}, {}, {}
         for h in horizons:
-            if h in self.labels:
-                continue
-            y = self.labels[h] = m.forward_returns(self.pct, h)
-            self.ics[h], self.rankics[h] = m.cross_ic(self.alpha, y), m.cross_ic(self.alpha, y, True)
+            if (h in self.ics and h in self.rankics and h in self.sign_ics): continue
+            y = self.labels[h]
+
+            self.ics[h] = m.cross_ic(self.alpha, y)
+            self.rankics[h] = m.cross_ic(self.alpha, y, True)
             self.sign_ics[h] = pd.DataFrame({
-            "pos_ic": m.cross_ic(self.alpha.where(y > 0), y),
-            "neg_ic": m.cross_ic(self.alpha.where(y < 0), y),
-            "rank_pos_ic": m.cross_ic(self.alpha.where(y > 0), y, True),
-            "rank_neg_ic": m.cross_ic(self.alpha.where(y < 0), y, True),
+                "pos_ic": m.cross_ic(self.alpha.where(y>0), y),
+                "neg_ic": m.cross_ic(self.alpha.where(y<0), y),
+                "rank_pos_ic": m.cross_ic(self.alpha.where(y>0), y, True),
+                "rank_neg_ic": m.cross_ic(self.alpha.where(y<0), y, True),
             })
-        return self.labels
 
-    def cal_benchmark(self, method="equal", domain="universe", index_name=None):
-        """计算基准收益和净值，使用前日权重。
-        Params: method: equal/market_cap/index；domain: 域名；index_name: 指数名称。
-        Return: 收益Series，并保存benchmark_weight、benchmark_return、benchmark_nav。
+        return self.ics, self.rankics, self.sign_ics
+
+
+    def cal_benchmark(self):
+        """计算全市场、指数、行业及Barra基准收益和净值。
+        权重来源：
+            universe: 全市场等权、市值加权
+            index:    self.domain_weights["index"]
+            industry: self.domain_weights["industry"]
+            barra:    self.domain_weights["barra"]
+        时序：
+            T日基准收益 = T-1日权重 × T日股票收益
+        Return:
+            self.benchmark = {
+                "ret": {domain: {name: Series}},
+                "nav": {domain: {name: Series}}
+            }
         """
-        if domain == "universe":
-            mask = self.pct.notna()
-        else:
-            kind, name = domain if isinstance(domain, tuple) else domain.split(":", 1)
-            if kind == "industry":
-                mask = self.domain_masks[kind].eq(float(name))
-            elif kind == "barra":
-                mask = (self.domain_masks[kind][name[:-1]].eq(1 if name[-1] == "+" else -1)
-                        if name.endswith(("+", "-")) else self.domain_masks[kind][name].isin([1, -1]))
-            else:
-                mask = self.domain_masks[kind][name].eq(1)
-        if method == "equal":
-            weight = mask.astype(float)
-        elif method == "market_cap":
-            self.require("market_cap")
-            weight = self.fields["market_cap"].where(mask, 0)
-        elif method == "index":
-            weight = self.domain_weights["index"][index_name].where(mask, 0)
-        else:
-            raise ValueError('未知基准方法')
-        self.benchmark_weight = m.normalize(weight)
-        self.benchmark_return = m.weighted_returns(self.benchmark_weight.shift(1).fillna(0), self.pct)
-        self.benchmark_nav = m.nav(self.benchmark_return)
-        return self.benchmark_return
+        pct = self.pct
+        mv = self.fields["market_cap"]
 
-    def cal_groups(self, domain="universe"):
-        """计算域内分组和组内等权收益。
-        Params: domain: 域名；Return: 分组收益DataFrame，Average为有效分组的等权平均。
-        并列因子保持同组，常数截面不分组。
+        # 构建全市场基准权重
+        mask = pct.notna() & np.isfinite(mv) & (mv > 0)
+        universe = {
+            "equal": mask.astype(float),
+            "market_cap": mv.where(mask, 0)
+        }
+        # 仅对universe进行归一化
+        for name, weight in universe.items():
+            universe[name] = weight.div(
+                weight.sum(axis=1).replace(0, np.nan),
+                axis=0
+            ).fillna(0)
+
+        # 合并所有域的权重； index、industry、barra直接使用cal_weight的结果
+        weights = {
+            "universe": universe,
+            **self.domain_weights
+        }
+
+        self.benchmark = {
+            "ret": {},
+            "nav": {}
+        }
+        for domain, domain_weights in weights.items():
+            self.benchmark["ret"][domain] = {}
+            self.benchmark["nav"][domain] = {}
+
+            for name, weight in domain_weights.items():
+                # 使用前一交易日权重
+                w = weight.shift(1).fillna(0)
+                # 检查持仓股票当日收益是否缺失
+                missing = ((w != 0) & pct.isna()).any(axis=1)
+                # 检查是否存在有效持仓
+                active = w.abs().sum(axis=1) > 0
+                # 计算加权收益，支持Barra正负权重
+                ret = (w * pct.fillna(0)).sum(axis=1)
+                ret = ret.where(active & ~missing)
+                # 计算累计净值
+                nav = (1 + ret.fillna(0)).cumprod()
+                nav = nav.where(ret.notna())
+                # 保存结果
+                self.benchmark["ret"][domain][name] = ret
+                self.benchmark["nav"][domain][name] = nav
+
+        return self.benchmark
+
+
+    def cal_groups(self, num_groups=10, domain="universe", name=None, horizon=1):
+        """计算域内因子分组及各组未来 horizon 日等权累计收益。
+
+        G1 为最小的方向调整后 Alpha，G{num_groups} 为最大的一组。
+        T 日分组直接匹配 cal_labels() 中 T 日的未来标签：
+        start=2 对应 T+2 至 T+horizon+1 的日收益复合结果。
         """
         if not hasattr(self, "alpha"):
             self.process_alpha()
-        key = (id(self.alpha), domain, self.groups, id(self.domain_masks.get(domain)))
+        if not isinstance(horizon, (int, np.integer)) or horizon < 1:
+            raise ValueError("horizon 必须是正整数")
+        if not isinstance(num_groups, (int, np.integer)) or num_groups < 2:
+            raise ValueError("num_groups 必须是大于等于 2 的整数")
+
+        # 1. 分组域（与原版本一致）
+        if domain == "universe":
+            domain_mask = self.pct.notna()
+        elif domain == "index":
+            domain_mask = self.domain_masks["index"][name].eq(1)
+        elif domain == "industry":
+            domain_mask = self.domain_masks["industry"].eq(int(name))
+        else:
+            raise ValueError(f"未知分组域: {domain}")
+
+        # 2. 缓存必须包含 horizon；同组号在不同 horizon 下对应不同收益
+        key = (id(self.alpha), domain, name, num_groups, horizon)
         if getattr(self, "_group_cache_key", None) == key:
             return self.group_returns
-        if domain == "universe":
-            mask = self.pct.notna()
-        else:
-            kind, name = domain if isinstance(domain, tuple) else domain.split(":", 1)
-            if kind == "industry":
-                mask = self.domain_masks[kind].eq(float(name))
-            elif kind == "barra":
-                mask = (self.domain_masks[kind][name[:-1]].eq(1 if name[-1] == "+" else -1)
-                        if name.endswith(("+", "-")) else self.domain_masks[kind][name].isin([1, -1]))
-            else:
-                mask = self.domain_masks[kind][name].eq(1)
-        x = self.alpha.where(mask)
+
+        # 3. 默认升序：因子值越大，排名及组号越大
+        x = self.alpha.where(domain_mask)
         count = x.count(axis=1)
-        codes = np.ceil((x.rank(axis=1, method="average") - .5).div(count, axis=0) * self.groups).clip(1, self.groups)
+        rank = x.rank(axis=1, method="average", ascending=True)
+        codes = np.ceil(
+            rank.sub(0.5).div(count.replace(0, np.nan), axis=0) * num_groups
+        ).clip(1, num_groups)
         self.group_codes = codes.where(x.nunique(axis=1).gt(1), axis=0)
-        self.group_weights, returns = {}, {}
-        for g in range(1, self.groups + 1):
-            w = m.normalize(self.group_codes.eq(g).astype(float))
-            self.group_weights[g] = w
-            returns[f"G{g}"] = m.weighted_returns(w.shift(1).fillna(0), self.pct).where(w.shift(1).sum(axis=1) > 0)
-        self.group_returns = pd.DataFrame(returns)
+
+        # 4. T 日组号匹配 T 日未来 horizon 日收益，不再 shift(1)
+        future_ret = self.labels[horizon]
+        returns = {
+            f"G{g}": future_ret.where(self.group_codes.eq(g)).mean(axis=1)
+            for g in range(1, num_groups + 1)
+        }
+        self.group_returns = pd.DataFrame(returns, index=self.dates)
         self.group_returns["Average"] = self.group_returns.mean(axis=1)
-        self.group_domain = domain
         self._group_cache_key = key
         return self.group_returns
 
-    def cal_target_holding(self, construction=None, group_numbers=None, normalization=None,
-                           domain="universe", benchmark_enhanced=False, active_gross=1.,
-                           benchmark_method="equal", benchmark_index=None):
-        """选择分组并生成归一化目标持仓。
-        Params: construction: long/short/longshort；group_numbers: 分组编号；
-            normalization: equal/market_cap/factor；domain: 域名；
-            benchmark_enhanced: 是否叠加基准；active_gross: 主动总敞口；
-            benchmark_method/benchmark_index: 基准配置。
-        Return: 信号日目标权重DataFrame，空头权重为负。
-        """
-        construction = construction or self.construction
-        normalization = normalization or self.normalization
-        if construction not in ("long", "short", "longshort") or active_gross < 0:
-            raise ValueError('构建方式或active_gross无效')
-        self.cal_groups(domain)
-        if group_numbers is None:
-            group_numbers = ((self.groups,), (1,)) if construction == "longshort" else ((self.groups,) if construction == "long" else (1,))
-        long_groups, short_groups = (group_numbers if construction == "longshort" else
-                                     (group_numbers, ()) if construction == "long" else ((), group_numbers))
-        if set(long_groups) & set(short_groups):
-            raise ValueError('多空分组不能重叠')
-        if not set(long_groups).union(short_groups).issubset(range(1, self.groups + 1)):
-            raise ValueError('组号超出范围')
 
-        def leg(groups, sign):
-            selected = self.group_codes.isin(groups)
-            if normalization == "equal":
-                raw = selected.astype(float)
-            elif normalization == "market_cap":
-                self.require("market_cap")
-                raw = self.fields["market_cap"].where(selected, 0)
-            elif normalization == "factor":
-                # 组内分数平移为非负值，保留因子方向。
-                score = (self.alpha * sign).where(selected)
-                raw = score.sub(score.min(axis=1), axis=0).add(1e-8).where(selected, 0)
-            else:
-                raise ValueError('未知归一化方法')
-            return m.normalize(raw)
-
-        self.long_target, self.short_target = leg(long_groups, 1), leg(short_groups, -1)
-        scale = active_gross / 2 if construction == "longshort" else active_gross
-        self.active_target = (self.long_target - self.short_target) * scale
-        self.target_holding = self.active_target.copy()
-        if benchmark_enhanced:
-            self.cal_benchmark(benchmark_method, domain, benchmark_index)
-            self.target_holding += self.benchmark_weight
-        self.target_spec = (construction, group_numbers, normalization, domain, benchmark_enhanced, active_gross)
+    def cal_target_holding(
+            self,
+            strategy="enhanced",
+            construction="longshort",
+            num_group=None,
+            group_numbers=(10, 1),
+            normalization="factor",
+            domain="universe",
+            name=None,
+            industry_neutral=True,
+            active_gross=1.0,
+            hedge_method="dollar",
+            hedge_window=60,
+            hedge_min_periods=40,
+    ):
+        """根据因子分组生成目标持仓，并保存为实例变量。"""
+        self.target_holding = build_target(
+            self,
+            strategy=strategy,
+            construction=construction,
+            group_numbers=group_numbers,
+            normalization=normalization,
+            domain=domain,
+            name=name,
+            industry_neutral=industry_neutral,
+            active_gross=active_gross,
+            num_groups=num_group if num_group is not None else self.num_group,
+            hedge_method=hedge_method,
+            hedge_window=hedge_window,
+            hedge_min_periods=hedge_min_periods,
+        )
         return self.target_holding
 
-    def cal_portfolio(self, turnover_limit=1., stock_deviation=None, stock_cap=1.,
-                      industry_deviation=None, commission=.0003, stamp_tax=.0005,
-                      execution_price="vwap", capital=1e8, max_participation=.1,
-                      impact_coefficient=.001, lot_size=100, borrow_rate=0.,
-                      construction=None, group_numbers=None, normalization=None,
-                      domain="universe", benchmark_enhanced=False, active_gross=1.,
-                      rebalance_days=1, benchmark_method="equal", benchmark_index=None):
-        """成交和容量模拟入口。
-        Params: 换手、偏离和持仓上限为NAV比例；费用为小数；
-            execution_price: 次日open/vwap；capital: 初始资金（元）；
-            max_participation: 成交额参与上限；impact_coefficient: 平方根冲击系数；
-            lot_size: 每手股数；borrow_rate: 年化借券成本；其余参数见cal_target_holding。
-        Return: PortfolioResult，保存至self.portfolio。
-        """
-        from .execution import simulate
-        self.cal_target_holding(construction, group_numbers, normalization, domain,
-                                benchmark_enhanced, active_gross, benchmark_method, benchmark_index)
-        if stock_deviation is not None or industry_deviation is not None:
-            self.cal_benchmark(benchmark_method, domain, benchmark_index)
-        self.portfolio = simulate(self, turnover_limit, stock_deviation, stock_cap,
-                                  industry_deviation, commission, stamp_tax, execution_price,
-                                  capital, max_participation, impact_coefficient, lot_size, borrow_rate,
-                                  rebalance_days=rebalance_days)
-        return self.portfolio
+    def cal_portfolio(
+            self,
+            strategy="enhanced",
+            construction="longshort",
+            num_group=None,
+            group_numbers=(10, 1),
+            normalization="factor",
+            domain="universe",
+            name=None,
+            industry_neutral=True,
+            active_gross=1.0,
+            hedge_method="dollar",
+            hedge_window=60,
+            hedge_min_periods=40,
+            commission=0.0003,
+            stamp_tax=0.0005,
+            execution_price="vwap",
+            capital=1e8,
+            max_participation=0.1,
+            impact_coefficient=0.001,
+            lot_size=100,
+            borrow_rate=0.0,
+            rebalance_days=1,
+    ):
+        """T日生成目标权重，T+1执行；不进行权重优化。"""
 
-    def cal_porfolio(self, *args, **kwargs):
-        """兼容原需求的函数拼写。
-        Params: 同cal_portfolio；Return: PortfolioResult。
-        """
-        return self.cal_portfolio(*args, **kwargs)
+        # 1. 生成并保存目标权重
+        if not hasattr(self, "target_holding"):
+            self.cal_target_holding(
+                strategy=strategy,
+                construction=construction,
+                num_group=num_group,
+                group_numbers=group_numbers,
+                normalization=normalization,
+                domain=domain,
+                name=name,
+                industry_neutral=industry_neutral,
+                active_gross=active_gross,
+                hedge_method=hedge_method,
+                hedge_window=hedge_window,
+                hedge_min_periods=hedge_min_periods,
+            )
+
+        # 2. 模拟实际成交及收益
+        self.portfolio = simulate(
+            self,
+            self.target_holding,
+            commission=commission,
+            stamp_tax=stamp_tax,
+            execution_price=execution_price,
+            capital=capital,
+            max_participation=max_participation,
+            impact_coefficient=impact_coefficient,
+            lot_size=lot_size,
+            borrow_rate=borrow_rate,
+            rebalance_days=rebalance_days,
+        )
+        return self.portfolio
 
 
 factorbase = FactorBase

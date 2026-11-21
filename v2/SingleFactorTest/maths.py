@@ -11,7 +11,6 @@ from scipy import stats
 
 def normalize(values):
     """非负行归一化，空行保留零仓位。
-
     Params: values: DataFrame，非负原始权重。
     Return: DataFrame，每行权重和为1或0。
     """
@@ -97,7 +96,6 @@ def neutralize(values, industry=None, market_cap=None):
 
 def cross_ic(factor, labels, rank=False, min_obs=3):
     """成对有效样本上的逐日相关系数。
-
     Params: factor/labels: 同轴DataFrame；rank: Spearman；min_obs: 最小截面样本。
     Return: Series，不足样本或零方差为NaN。
     """
@@ -108,7 +106,7 @@ def cross_ic(factor, labels, rank=False, min_obs=3):
     return x.corrwith(y, axis=1).where(valid.sum(axis=1) >= min_obs)
 
 
-def forward_returns(returns, horizon=1, start=1):
+def forward_returns(returns, horizon=1, start=2):
     """向量化计算信号日之后指定区间的复合收益"""
     gross = 1.0 + returns.to_numpy(dtype=float, copy=False)
     t_count, n_count = gross.shape
