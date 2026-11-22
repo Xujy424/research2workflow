@@ -59,8 +59,9 @@ def estimate_hedge_ratio(
     # T日对冲比例仅使用截至T-1日的数据
     h = h.shift(1)
 
-    hedge_valid = h.notna().to_numpy()
-    hedge = np.where(hedge_valid, h.to_numpy(), 0.)
+    hedge_valid = h.notna().rolling(window, min_periods=1).sum().gt(0).to_numpy()
+    hedge = h.ffill(limit=window).to_numpy()
+    hedge = np.where(hedge_valid, hedge, 0.)
 
     return hedge, hedge_valid
 
@@ -112,6 +113,7 @@ def build_target(
 
     b_w = b_frame.to_numpy(dtype=float, copy=False)
     valid_b = b_w.sum(axis=1) > 1e-12
+    valid = valid_b
 
     # --------------------------------------------------
     # 2. 计算域内分组
@@ -193,6 +195,7 @@ def build_target(
                 out=np.zeros_like(raw_l),
                 where=l_total > 1e-12
             )
+            wl += np.where((l_total <= 1e-12) & (b_w > 0), b_w, 0.)
         if len(sg) > 0:
             s_total = np.take_along_axis(s_ind, industry, axis=1)
             s_budget = np.take_along_axis(b_ind, industry, axis=1)
@@ -202,6 +205,7 @@ def build_target(
                 out=np.zeros_like(raw_s),
                 where=s_total > 1e-12
             )
+            ws += np.where((s_total <= 1e-12) & (b_w > 0), b_w, 0.)
 
     # --------------------------------------------------
     # 6. 根据策略类型构建初始主动权重
@@ -243,7 +247,7 @@ def build_target(
         else:  # longshort
             init = wl - hedge[:, None] * ws
 
-        valid = valid_b & hedge_valid
+        valid &= hedge_valid
 
     init[~valid] = 0.
 
