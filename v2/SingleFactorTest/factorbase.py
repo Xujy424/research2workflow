@@ -61,16 +61,16 @@ class FactorBase:
             transform="asinh",        # softsign / piecewise / rank_gaussian / yeo_johnson / none
             neutralize=True,
             standardize=True,
-            groups=10,
+            num_groups=10,
             direction=1,
             start=None, end=None, history_years=6,
             root=ROOT, data=None
         ):
-        # 因子名称、单边或双边、因子方向
-        self.factor_name, self.construction, self.direction = factor_name, construction, direction
+        # 因子名称、单边或双边、因子方向、分组数
+        self.factor_name, self.construction = factor_name, construction 
+        self.direction, self.num_groups = direction, num_groups
         # 归一化、变换、中性化、标准化
         self.normalization, self.transform = normalization, transform
-        self.groups = groups
         self.neutralize, self.standardize = neutralize, standardize
         # 报告日期、历史窗口
         self.start, self.end, self.history_years = start, end, history_years
@@ -393,7 +393,7 @@ class FactorBase:
             self,
             strategy="enhanced",
             construction="longshort",
-            num_group=None,
+            num_groups=None,
             group_numbers=(10, 1),
             normalization="factor",
             domain="universe",
@@ -415,7 +415,7 @@ class FactorBase:
             name=name,
             industry_neutral=industry_neutral,
             active_gross=active_gross,
-            num_groups=num_group if num_group is not None else self.num_group,
+            num_groups=num_groups if num_groups is not None else self.num_groups,
             hedge_method=hedge_method,
             hedge_window=hedge_window,
             hedge_min_periods=hedge_min_periods,
