@@ -45,15 +45,16 @@ def basic_info(
     )
     name = "equal" if domain == "universe" else name
     benchmark_ret = base.benchmark["ret"][domain][name].shift(-2)
+    group_returns = base.group_returns[1]
 
     if construction == "longshort":
-        excess = base.group_returns[f"G{group_numbers[0]}"] - base.group_returns[f"G{group_numbers[-1]}"]
+        excess = group_returns[f"G{group_numbers[0]}"] - group_returns[f"G{group_numbers[-1]}"]
         holds = base.group_codes.eq(group_numbers[0])-base.group_codes.eq(group_numbers[-1])
     elif construction == "long":
-        excess = base.group_returns[f"G{group_numbers[0]}"] - benchmark_ret
+        excess = group_returns[f"G{group_numbers[0]}"] - benchmark_ret
         holds = base.group_codes.eq(group_numbers[0])
     elif construction == "short":
-        excess = benchmark_ret - base.group_returns[f"G{group_numbers[-1]}"]
+        excess = benchmark_ret - group_returns[f"G{group_numbers[-1]}"]
         holds = base.group_codes.eq(group_numbers[-1])
     else:
         raise ValueError("construction 必须为 longshort、long 或 short")
