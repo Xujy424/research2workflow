@@ -4,7 +4,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from . import maths as m
+from ..base import maths as m
 
 
 def table(base, capitals=(1e7, 5e7, 1e8, 5e8), min_fill=.8,

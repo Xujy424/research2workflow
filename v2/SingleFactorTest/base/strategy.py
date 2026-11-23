@@ -131,7 +131,7 @@ def build_target(
     if group_numbers is None:
         group_numbers = (num_groups, 1)
     if construction == "longshort":
-        lg, sg = group_numbers
+        lg, sg = (group_numbers[0],), (group_numbers[1],)
     elif construction == "long":
         lg, sg = group_numbers[0], ()
     else:
@@ -178,10 +178,17 @@ def build_target(
         ws = np.divide(raw_s, sum_s, out=np.zeros_like(raw_s), where=sum_s > 1e-12)
     else:
         # 行业中性：按Benchmark行业权重分配预算
-        industry = base.fields["industry"].to_numpy(dtype=int, copy=False)
+        industry_values = base.fields["industry"].to_numpy(dtype=float, copy=False)
+        valid_industry = (
+            np.isfinite(industry_values)
+            & (industry_values >= 0)
+            & (industry_values < 31)
+        )
+        industry = np.where(valid_industry, industry_values, -1).astype(np.int64)
         groups = np.arange(31)
         # 股票所属行业掩码
         industry_mask = industry[:, :, None] == groups[None, None, :]
+        industry_mask &= valid_industry[:, :, None]
         # 各行业Benchmark权重及候选股票原始权重
         b_ind = (industry_mask * b_w[:, :, None]).sum(axis=1)
         l_ind = (industry_mask * raw_l[:, :, None]).sum(axis=1)

@@ -4,7 +4,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from . import maths as m
+from ..base import maths as m
 
 
 def value_table(base, processed=True):

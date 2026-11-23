@@ -5,11 +5,26 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from . import maths as m
-from .backtest import simulate
-from .strategy import build_target
-from v2.GetData import DataPool
-from v2.UpdateData.config import ROOT
+if __package__:
+    from . import maths as m
+    from .backtest import simulate
+    from .backtest import PortfolioResult
+    from .strategy import build_target
+    from v2.GetData import DataPool
+    from v2.UpdateData.config import ROOT
+else:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from v2.SingleFactorTest.base import maths as m
+    from v2.SingleFactorTest.base.backtest import simulate
+    from v2.SingleFactorTest.base.backtest import PortfolioResult
+    from v2.SingleFactorTest.base.strategy import build_target
+    from v2.GetData import DataPool
+    from v2.UpdateData.config import ROOT
 
 
 # 本地字段路径映射。
@@ -41,8 +56,6 @@ BARRA_FIELDS = {name: f"barra/{name}"
                     "residual_vol", "liquidity", "leverage", "growth1", "earnings_yield"
                 )}
 
-
-from .backtest import PortfolioResult
 
 class FactorBase:
     """单因子检验基类，计算结果保存在实例中。
@@ -79,7 +92,6 @@ class FactorBase:
 
         # 读取的字段、域掩码、域权重、Barra头尾组掩码
         self.fields, self.domain_masks, self.domain_weights = {}, {}, {}
-        self.results = {}
 
     def _read_field(self, path):
         """读取当前区间的DataPool字段。
@@ -107,8 +119,7 @@ class FactorBase:
         self.fields['barra'] = {name: self._read_field(path) for name, path in BARRA_FIELDS.items()}
         self.cal_mask()
         self.cal_weight()
-        self.report_start = pd.Timestamp(self.start) if self.start else self.dates[-1] - pd.DateOffset(years=5)
-        self.results.clear()
+        self.report_start = pd.Timestamp(self.start) if self.start else pd.Timestamp(self.dates[-1].year - 5, 1, 1)
         # 重载时清除派生结果。
         for name in ("alpha", "labels", "ics", "rankics", "sign_ics", "group_codes", "group_returns",
                      "group_weights", "target_holding", "portfolio", "capacity_results"):
@@ -116,10 +127,11 @@ class FactorBase:
         return self
     
     def cal_mask(self):
-        """读取本地指数、行业和Barra掩码，不附加交易状态过滤。
+        """读取本地股票池、指数、行业和Barra掩码。
         Params: 无；Return: 域掩码字典，行业为编码矩阵，Barra为正负编码矩阵。
         """
         self.domain_masks = {
+            "universe": self.fields["tradable_t"].eq(1),
             "index": {name: self._read_field(f"index/mask/{name}_mask")
                       for name in INDEX_FIELDS},
             "industry": self.fields["industry"],
@@ -129,15 +141,20 @@ class FactorBase:
         return self.domain_masks
 
     def cal_weight(self):
-        """计算各域权重，指数读取本地权重，行业和Barra按流通市值归一。
+        """计算各域权重；股票池按等权归一，行业和Barra按流通市值归一，指数读取本地权重。
         Params: 无；Return: 域权重字典。行业编码0—30，共31类；Barra为正组减负组。
         """
         market_cap = self.fields["market_cap"]
         self.domain_weights = {
+            "universe": {},
             "index": {name: self._read_field(INDEX_FIELDS[name])
                       for name in self.domain_masks["index"]},
             "industry": {}, "barra": {},
         }
+        universe = self.domain_masks["universe"].astype(float)
+        self.domain_weights["universe"] = universe.div(
+            universe.sum(axis=1).replace(0, np.nan), axis=0
+        ).fillna(0)
         for code in range(31):
             raw = market_cap.where(self.domain_masks["industry"].eq(code), 0)
             self.domain_weights["industry"][str(code)] = raw.div(
@@ -222,6 +239,7 @@ class FactorBase:
                 self.fields.get("market_cap")
             )
         self.alpha = m.standardize(values) if self.standardize else values
+        self.alpha = pd.DataFrame(self.alpha, index=self.dates, columns=self.ticks)
 
         # 清除旧因子计算结果对应的缓存，防止重新执行 process_alpha() 后，后续回测仍然使用上一次的结果
         self._group_cache_key = None
@@ -240,11 +258,8 @@ class FactorBase:
             self.labels = {}
         for h in horizons:
             if h in self.labels: continue
-            self.labels[h] = m.forward_returns(
-                self.pct,
-                horizon=h,
-                start=2
-            )
+            values = m.forward_returns(self.pct, horizon=h, start=2)
+            self.labels[h] = pd.DataFrame(values, index=self.dates, columns=self.ticks)
         return self.labels
         
     def cal_ics(self, horizons=(1, 3, 5, 10, 20)):
@@ -265,10 +280,10 @@ class FactorBase:
             self.ics[h] = m.cross_ic(self.alpha, y)
             self.rankics[h] = m.cross_ic(self.alpha, y, True)
             self.sign_ics[h] = pd.DataFrame({
-                "pos_ic": m.cross_ic(self.alpha.where(y>0), y),
-                "neg_ic": m.cross_ic(self.alpha.where(y<0), y),
-                "rank_pos_ic": m.cross_ic(self.alpha.where(y>0), y, True),
-                "rank_neg_ic": m.cross_ic(self.alpha.where(y<0), y, True),
+                "pos_ic": m.cross_ic(self.alpha.where(y.to_numpy() > 0).to_numpy(), y.to_numpy()),
+                "neg_ic": m.cross_ic(self.alpha.where(y.to_numpy() < 0).to_numpy(), y.to_numpy()),
+                "rank_pos_ic": m.cross_ic(self.alpha.where(y.to_numpy() > 0).to_numpy(), y.to_numpy(), True),
+                "rank_neg_ic": m.cross_ic(self.alpha.where(y.to_numpy() < 0).to_numpy(), y.to_numpy(), True),
             })
 
         return self.ics, self.rankics, self.sign_ics
@@ -290,26 +305,7 @@ class FactorBase:
             }
         """
         pct = self.pct
-        mv = self.fields["market_cap"]
-
-        # 构建全市场基准权重
-        mask = pct.notna() & np.isfinite(mv) & (mv > 0)
-        universe = {
-            "equal": mask.astype(float),
-            "market_cap": mv.where(mask, 0)
-        }
-        # 仅对universe进行归一化
-        for name, weight in universe.items():
-            universe[name] = weight.div(
-                weight.sum(axis=1).replace(0, np.nan),
-                axis=0
-            ).fillna(0)
-
-        # 合并所有域的权重； index、industry、barra直接使用cal_weight的结果
-        weights = {
-            "universe": universe,
-            **self.domain_weights
-        }
+        weights = self.domain_weights
 
         self.benchmark = {
             "ret": {},
@@ -319,7 +315,12 @@ class FactorBase:
             self.benchmark["ret"][domain] = {}
             self.benchmark["nav"][domain] = {}
 
-            for name, weight in domain_weights.items():
+            named_weights = (
+                {"equal": domain_weights}
+                if isinstance(domain_weights, pd.DataFrame)
+                else domain_weights
+            )
+            for name, weight in named_weights.items():
                 # 使用前一交易日权重
                 w = weight.shift(1).fillna(0)
                 # 检查持仓股票当日收益是否缺失
@@ -339,23 +340,27 @@ class FactorBase:
         return self.benchmark
 
 
-    def cal_groups(self, num_groups=10, domain="universe", name=None, horizon=1):
+    def cal_groups(self, num_groups=10, domain="universe", name=None, horizon=(1,5,10,20)):
         """计算域内因子分组及各组未来 horizon 日等权累计收益。
-
         G1 为最小的方向调整后 Alpha，G{num_groups} 为最大的一组。
-        T 日分组直接匹配 cal_labels() 中 T 日的未来标签：
-        start=2 对应 T+2 至 T+horizon+1 的日收益复合结果。
+        T 日分组直接匹配 cal_labels() 中 T 日的未来标签；
+        Params: 
+            num_groups: 分组数；
+            domain/name: 分组域及名称；
+            horizon: 单个周期或周期序列。
+        Return: horizon 到分组收益 DataFrame 的字典。
         """
         if not hasattr(self, "alpha"):
             self.process_alpha()
-        if not isinstance(horizon, (int, np.integer)) or horizon < 1:
-            raise ValueError("horizon 必须是正整数")
+        horizons = (horizon,) if isinstance(horizon, (int, np.integer)) else tuple(horizon)
+        if not horizons or any(not isinstance(h, (int, np.integer)) or h < 1 for h in horizons):
+            raise ValueError("horizon 必须是正整数或正整数序列")
         if not isinstance(num_groups, (int, np.integer)) or num_groups < 2:
             raise ValueError("num_groups 必须是大于等于 2 的整数")
 
         # 1. 分组域（与原版本一致）
         if domain == "universe":
-            domain_mask = self.pct.notna()
+            domain_mask = self.domain_masks["universe"].eq(1)
         elif domain == "index":
             domain_mask = self.domain_masks["index"][name].eq(1)
         elif domain == "industry":
@@ -364,7 +369,7 @@ class FactorBase:
             raise ValueError(f"未知分组域: {domain}")
 
         # 2. 缓存必须包含 horizon；同组号在不同 horizon 下对应不同收益
-        key = (id(self.alpha), domain, name, num_groups, horizon)
+        key = (id(self.alpha), domain, name, num_groups, horizons)
         if getattr(self, "_group_cache_key", None) == key:
             return self.group_returns
 
@@ -378,13 +383,18 @@ class FactorBase:
         self.group_codes = codes.where(x.nunique(axis=1).gt(1), axis=0)
 
         # 4. T 日组号匹配 T 日未来 horizon 日收益，不再 shift(1)
-        future_ret = self.labels[horizon]
-        returns = {
-            f"G{g}": future_ret.where(self.group_codes.eq(g)).mean(axis=1)
-            for g in range(1, num_groups + 1)
-        }
-        self.group_returns = pd.DataFrame(returns, index=self.dates)
-        self.group_returns["Average"] = self.group_returns.mean(axis=1)
+        if not hasattr(self, "labels") or any(h not in self.labels for h in horizons):
+            self.cal_labels(horizons)
+        self.group_returns = {}
+        for h in horizons:
+            future_ret = self.labels[h]
+            returns = {
+                f"G{g}": future_ret.where(self.group_codes.eq(g)).mean(axis=1)
+                for g in range(1, num_groups + 1)
+            }
+            result = pd.DataFrame(returns, index=self.dates)
+            result["Average"] = result.mean(axis=1)
+            self.group_returns[h] = result
         self._group_cache_key = key
         return self.group_returns
 
@@ -426,7 +436,7 @@ class FactorBase:
             self,
             strategy="enhanced",
             construction="longshort",
-            num_group=None,
+            num_groups=None,
             group_numbers=(10, 1),
             normalization="factor",
             domain="universe",
@@ -453,7 +463,7 @@ class FactorBase:
             self.cal_target_holding(
                 strategy=strategy,
                 construction=construction,
-                num_group=num_group,
+                num_group=num_groups,
                 group_numbers=group_numbers,
                 normalization=normalization,
                 domain=domain,

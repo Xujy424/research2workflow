@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
-from . import maths as m
+from ..base import maths as m
 
 
 def _ensure(base, horizon=1):

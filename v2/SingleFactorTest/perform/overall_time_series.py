@@ -3,7 +3,7 @@
 """
 import numpy as np
 import pandas as pd
-from . import maths as m
+from ..base import maths as m
 
 
 def _samples(base, signal, benchmark, threshold, side, horizon):

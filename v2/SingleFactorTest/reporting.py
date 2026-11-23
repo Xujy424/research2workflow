@@ -5,7 +5,8 @@ from __future__ import annotations
 import copy
 import numpy as np
 import pandas as pd
-from . import maths as m, overall_cross_section as cross, distribution, ic_test, domains, capacity
+from .base import maths as m
+from .perform import overall_cross_section as cross, distribution, ic_test, domains, capacity
 
 
 LABELS = {
