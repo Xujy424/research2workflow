@@ -46,21 +46,28 @@ def basic_info(
     name = "equal" if domain == "universe" else name
     benchmark_ret = base.benchmark["ret"][domain][name].shift(-2)
     group_returns = base.group_returns[1]
-
     if construction == "longshort":
+        long_mask = base.group_codes.eq(group_numbers[0])
+        short_mask = base.group_codes.eq(group_numbers[-1])
+        long_count = long_mask.sum(axis=1).replace(0, np.nan)
+        short_count = short_mask.sum(axis=1).replace(0, np.nan)
         excess = group_returns[f"G{group_numbers[0]}"] - group_returns[f"G{group_numbers[-1]}"]
-        holds = base.group_codes.eq(group_numbers[0])-base.group_codes.eq(group_numbers[-1])
+        holds = long_mask.div(long_count, axis=0).fillna(0) - short_mask.div(short_count, axis=0).fillna(0)
     elif construction == "long":
+        long_mask = base.group_codes.eq(group_numbers[0])
+        long_count = long_mask.sum(axis=1).replace(0, np.nan)
         excess = group_returns[f"G{group_numbers[0]}"] - benchmark_ret
-        holds = base.group_codes.eq(group_numbers[0])
+        holds = long_mask.div(long_count, axis=0).fillna(0)
     elif construction == "short":
+        short_mask = base.group_codes.eq(group_numbers[-1])
+        short_count = short_mask.sum(axis=1).replace(0, np.nan)
         excess = benchmark_ret - group_returns[f"G{group_numbers[-1]}"]
-        holds = base.group_codes.eq(group_numbers[-1])
+        holds = short_mask.div(short_count, axis=0).fillna(0)
     else:
         raise ValueError("construction 必须为 longshort、long 或 short")
 
-    turnover = (holds-holds.shift(1))/np.sum(holds.shift(1))/2
-    
+    turnover = holds.sub(holds.shift(1).fillna(0)).abs().sum(axis=1) / 2
+
     coverage = np.sum(~np.isnan(base.alpha), axis=1)/np.sum(base.fields['tradable_t'],axis=1)
 
     result = pd.DataFrame({"excess_return": excess, "coverage": coverage, "turnover": turnover})
