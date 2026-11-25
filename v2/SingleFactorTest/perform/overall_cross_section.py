@@ -121,29 +121,34 @@ def table_monthly_return(basic_info, start):
 
 
 if __name__ == "__main__":
-    if __package__:
-        from ..base.create_base import create_base
-    else:
-        import sys
-        from pathlib import Path
+    import sys
+    from pathlib import Path
 
-        project_root = Path(__file__).resolve().parents[2]
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-        from v2.SingleFactorTest.base.create_base import create_base
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from v2.SingleFactorTest.base.create_base import create_base
 
-    from v2.SingleFactorTest.base import create_base as config
     base = create_base()
 
-    basic_info = basic_info(
-        base, num_groups=config.NUM_GROUPS, group_numbers=config.G_IDS,
-        domain=config.DOMAIN, name=config.DOMAIN_NAME,
+    result = basic_info(
+        base, 
+        num_groups=10, 
+        group_numbers=(10,1),
+        domain='universe', 
+        construction='longshort',
+        name=None,
     )
-    fig = plot_basic_info(basic_info, base.report_start)
-    yearly = table_yearly_performance(basic_info, base.report_start)
-    monthly = table_monthly_return(basic_info, base.report_start)
+    fig = plot_basic_info(result, base.report_start)
+    yearly = table_yearly_performance(result, base.report_start)
+    monthly = table_monthly_return(result, base.report_start)
     print("Yearly performance:")
-    print(yearly)
+    percent_columns = ["annual_return", "annual_vol", "max_drawdown", "turnover"]
+    print(yearly.to_string(formatters={
+        column: lambda value: f"{value:.2%}" for column in percent_columns
+    } | {"sharpe": lambda value: f"{value:.2f}"}), flush=True)
     print("Monthly excess return:")
-    print(monthly)
+    print(monthly.to_string(formatters={
+        column: lambda value: f"{value:.2%}" for column in monthly.columns
+    }), flush=True)
     plt.show()

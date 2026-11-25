@@ -67,66 +67,62 @@ def create_base():
         start=START, end=END, history_years=HISTORY_YEARS,
     )
 
-    try:
-        base.load()
-        print("Local data loaded.")
-        base.process_alpha()
-        print("Alpha processed.")
-        base.cal_labels()
-        base.cal_ics()
-        base.cal_benchmark()
-        base.cal_barra_ret()
-        print("Relative data calculated.")
-        base.cal_groups(
-            num_groups=NUM_GROUPS, 
-            domain=DOMAIN, 
-            name=DOMAIN_NAME, 
-            horizon=HORIZONS
-        )
-        print("Groups calculated.")
-        base.cal_target_holding(
-            strategy=STRATEGY,
-            construction=CONSTRUCTION,
-            num_groups=NUM_GROUPS,
-            group_numbers=G_IDS,
-            normalization=NORMALIZATION,
-            domain=DOMAIN,
-            name=DOMAIN_NAME,
-            industry_neutral=NEURALIZE,
-            active_gross=ACTIVE_GROSS,
-            hedge_method=HEDGE_METHOD,
-            hedge_window=HEDGE_WINDOW,
-            hedge_min_periods=HEDGE_MIN_PERIOD,
-        )
-        print("Target holdings calculated.")
-        base.cal_portfolio(
-            strategy=STRATEGY,
-            construction=CONSTRUCTION,
-            num_groups=NUM_GROUPS,
-            group_numbers=G_IDS,
-            normalization=NORMALIZATION,
-            domain=DOMAIN,
-            name=DOMAIN_NAME,
-            industry_neutral=NEURALIZE,
-            active_gross=ACTIVE_GROSS,
-            hedge_method=HEDGE_METHOD,
-            hedge_window=HEDGE_WINDOW,
-            hedge_min_periods=HEDGE_MIN_PERIOD,
-            commission=COMMISSION,
-            stamp_tax=STAMP_TAX,
-            execution_price=EXECUTION_PRICE,
-            capital=CAPITAL,
-            max_participation=MAX_PARTICIPATION,
-            impact_coefficient=IMPACT_COEFF,
-            lot_size=LOT_SIZE,
-            borrow_rate=BORROW_RATE,
-            rebalance_days=REBALANCE_DAYS,
-        )
-        print("FactorBase pipeline completed.")
-    finally:
-        data = getattr(base, "data", None)
-        if data is not None and hasattr(data, "close"):
-            data.close()
+
+    base.load()
+    print("Local data loaded.")
+    base.process_alpha()
+    print("Alpha processed.")
+    base.cal_labels()
+    base.cal_ics()
+    base.cal_benchmark()
+    base.cal_barra_ret()
+    print("Relative data calculated.")
+    base.cal_groups(
+        num_groups=NUM_GROUPS, 
+        domain=DOMAIN, 
+        name=DOMAIN_NAME, 
+        horizon=HORIZONS
+    )
+    print("Groups calculated.")
+    base.cal_target_holding(
+        strategy=STRATEGY,
+        construction=CONSTRUCTION,
+        num_groups=NUM_GROUPS,
+        group_numbers=G_IDS,
+        normalization=NORMALIZATION,
+        domain=DOMAIN,
+        name=DOMAIN_NAME,
+        industry_neutral=NEURALIZE,
+        active_gross=ACTIVE_GROSS,
+        hedge_method=HEDGE_METHOD,
+        hedge_window=HEDGE_WINDOW,
+        hedge_min_periods=HEDGE_MIN_PERIOD,
+    )
+    print("Target holdings calculated.")
+    base.cal_portfolio(
+        strategy=STRATEGY,
+        construction=CONSTRUCTION,
+        num_groups=NUM_GROUPS,
+        group_numbers=G_IDS,
+        normalization=NORMALIZATION,
+        domain=DOMAIN,
+        name=DOMAIN_NAME,
+        industry_neutral=NEURALIZE,
+        active_gross=ACTIVE_GROSS,
+        hedge_method=HEDGE_METHOD,
+        hedge_window=HEDGE_WINDOW,
+        hedge_min_periods=HEDGE_MIN_PERIOD,
+        commission=COMMISSION,
+        stamp_tax=STAMP_TAX,
+        execution_price=EXECUTION_PRICE,
+        capital=CAPITAL,
+        max_participation=MAX_PARTICIPATION,
+        impact_coefficient=IMPACT_COEFF,
+        lot_size=LOT_SIZE,
+        borrow_rate=BORROW_RATE,
+        rebalance_days=REBALANCE_DAYS,
+    )
+    print("FactorBase pipeline completed.")
     
     return base
 

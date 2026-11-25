@@ -4,7 +4,18 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from ..base import maths as m
+from scipy import stats
+
+if __package__:
+    from ..base import maths as m
+else:
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from v2.SingleFactorTest.base import maths as m
 
 
 def value_table(base, processed=True):
@@ -20,30 +31,48 @@ def value_table(base, processed=True):
         v = x.loc[mask]
         pooled = v.to_numpy().ravel()
         pooled = pooled[np.isfinite(pooled)]
-        rows[year] = {"max": pooled.max() if len(pooled) else np.nan,
-                      "min": pooled.min() if len(pooled) else np.nan,
-                      "max_avg": v.max(axis=1).mean(), "min_avg": v.min(axis=1).mean(),
-                      "skew_avg": v.skew(axis=1).mean(), "kurt_avg": v.kurt(axis=1).mean(),
-                      "mean": pooled.mean() if len(pooled) else np.nan,
-                      "std": pooled.std() if len(pooled) else np.nan}
+        rows[year] = {
+            "max": pooled.max() if len(pooled) else np.nan,
+            "min": pooled.min() if len(pooled) else np.nan,
+            "max_avg": v.max(axis=1).mean(), 
+            "min_avg": v.min(axis=1).mean(),
+            "skew_avg": v.skew(axis=1).mean(), 
+            "kurt_avg": v.kurt(axis=1).mean(),
+            "mean": pooled.mean() if len(pooled) else np.nan,
+            "std": pooled.std() if len(pooled) else np.nan
+        }
     return pd.DataFrame(rows).T
 
 
-def plot_values(base, processed=True, bins=60):
-    """各年和Overall直方图；Params: base/processed/bins；Return: Figure。"""
+def plot_values(base, processed=True, bins=60, period=None):
+    """画因子值分布。period为年份时画该年直方图和PDF；None时画全部年份PDF。"""
     if not hasattr(base, "alpha"):
         base.process_alpha()
     x = base.alpha if processed else base.raw_alpha
     periods = m.periods(x.index)
-    fig, axes = plt.subplots(int(np.ceil(len(periods) / 3)), 3, figsize=(13, 9), squeeze=False)
-    for ax, (year, mask) in zip(axes.flat, periods.items()):
-        values = x.loc[mask].to_numpy().ravel()
+    fig, ax = plt.subplots(figsize=(10, 5))
+    if period is not None:
+        if period not in periods:
+            raise ValueError(f"period={period} 不在数据年份中，可选年份：{list(periods)}")
+        values = x.loc[periods[period]].to_numpy().ravel()
         values = values[np.isfinite(values)]
         if len(values):
-            ax.hist(values, bins=bins, density=True)
-        ax.set_title(year)
-    for ax in list(axes.flat)[len(periods):]:
-        ax.set_visible(False)
+            ax.hist(values, bins=bins, density=True, alpha=0.4, label=f"{period} histogram")
+            if len(values) > 1 and np.ptp(values) > 0:
+                grid = np.linspace(values.min(), values.max(), 400)
+                ax.plot(grid, stats.gaussian_kde(values)(grid), label=f"{period} PDF")
+        ax.set_title(str(period))
+    else:
+        for year, mask in periods.items():
+            values = x.loc[mask].to_numpy().ravel()
+            values = values[np.isfinite(values)]
+            if len(values) > 1 and np.ptp(values) > 0:
+                grid = np.linspace(values.min(), values.max(), 400)
+                ax.plot(grid, stats.gaussian_kde(values)(grid), label=str(year))
+        ax.set_title("Yearly PDFs")
+    ax.set_xlabel("Factor value")
+    ax.set_ylabel("Density")
+    ax.legend()
     fig.tight_layout()
     return fig
 
@@ -85,3 +114,22 @@ def plot_groups(base, domain="universe"):
     m.nav(r).plot(ax=ax)
     fig.tight_layout()
     return fig
+
+
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from v2.SingleFactorTest.base.create_base import create_base
+
+    base = create_base()
+    table1 = value_table(base, processed=True)
+    fig = plot_values(base, processed=True)
+    print(table1)
+    plt.show()
+
+    
