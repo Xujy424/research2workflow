@@ -141,7 +141,7 @@ def ic(base, options):
     view.dates = base.dates[selection]
     view.ics, view.rankics = base.ics.loc[selection], base.rankics.loc[selection]
     view.sign_ics = {h: frame.loc[selection] for h, frame in base.sign_ics.items()}
-    stats = ic_test.table(view, horizon, options.get("kind", "IC"))
+    stats = ic_test.table(view, horizon)
     current = pd.DataFrame({"IC": view.ics[horizon], "RankIC": view.rankics[horizon]})
     bins = np.linspace(-1, 1, 61)
     densities = pd.DataFrame(index=[f"{v:.3f}" for v in (bins[1:] + bins[:-1]) / 2])
@@ -153,12 +153,11 @@ def ic(base, options):
         base.results[key] = ic_test.decay_table(window(base, years))
     decay = base.results[key].rename(columns={"IC_autocorrelation": "IC序列相关", "rankIC_autocorrelation": "RankIC序列相关",
                                              "rank_autocorrelation": "因子Rank自相关"})
-    cumulative = ic_test.cumulative(view, years, horizon).rename(columns={"ic": "IC", "pos_ic": "上涨子样本IC",
-                    "neg_ic": "下跌子样本IC", "rank_ic": "RankIC", "rank_pos_ic": "上涨子样本RankIC", "rank_neg_ic": "下跌子样本RankIC"})
+    cumulative = ic_test.ploticcumulative(view, years, horizon)
     dist = chart(densities, zoom=False)
     dist["note"] = "；".join(f"{c} 均值 {current[c].mean():.4f} / 标准差 {current[c].std():.4f}" for c in current)
     return {"ic_table": table(stats), "ic_distribution": dist,
-            "ic_cumulative": chart(cumulative), "ic_decay": chart(decay, zoom=False)}
+            "ic_cumulative": cumulative, "ic_decay": chart(decay, zoom=False)}
 
 
 def domain_report(base, options):

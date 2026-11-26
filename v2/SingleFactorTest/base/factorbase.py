@@ -115,7 +115,6 @@ class FactorBase:
         self.raw_alpha = self._read_field('factor_pool/'+self.factor_name)
         self.fields = {name: self._read_field(path) for name, path in LOCAL_FIELDS.items()}
         self.pct = self.fields['pct']*.01
-        self.fields["bp_lf"] = 1 / self.fields["pb_lf"].replace(0, np.nan)
         self.fields['barra'] = {name: self._read_field(path) for name, path in BARRA_FIELDS.items()}
         self.cal_mask()
         self.cal_weight()
