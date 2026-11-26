@@ -20,20 +20,9 @@ def _daily(base, portfolio_result, params):
     if not hasattr(base, "benchmark"):
         base.cal_benchmark()
     domain = params.get("domain", "universe")
-    name = params.get("name") or "equal"
-    if domain == "universe" and params.get("strategy", "enhanced") == "enhanced":
-        weight = getattr(base, "benchmark_weight", None)
-        if weight is None:
-            mv = base.fields["market_cap"]
-            valid = base.pct.notna() & mv.gt(0) & np.isfinite(mv)
-            weight = mv.where(valid, 0)
-            weight = weight.div(weight.sum(axis=1).replace(0, float("nan")), axis=0).fillna(0)
-        prior = weight.shift(1).fillna(0)
-        missing = ((prior != 0) & base.pct.isna()).any(axis=1)
-        benchmark = (prior * base.pct.fillna(0)).sum(axis=1).where(~missing)
-    else:
-        benchmark = base.benchmark["ret"][domain][name].reindex(daily.index)
-    benchmark = benchmark.reindex(daily.index)
+    name = params.get("name") or ("market_cap" if domain == "universe" and
+                                   params.get("strategy", "enhanced") == "enhanced" else "equal")
+    benchmark = base.benchmark["ret"][domain][name].reindex(daily.index)
     capital = result.daily.equity.iloc[0] - result.daily.pnl.iloc[0]
     return daily, benchmark, result.daily, capital
 

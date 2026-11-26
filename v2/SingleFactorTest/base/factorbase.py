@@ -314,11 +314,17 @@ class FactorBase:
             self.benchmark["ret"][domain] = {}
             self.benchmark["nav"][domain] = {}
 
-            named_weights = (
-                {"equal": domain_weights}
-                if isinstance(domain_weights, pd.DataFrame)
-                else domain_weights
-            )
+            if isinstance(domain_weights, pd.DataFrame):
+                named_weights = {"equal": domain_weights}
+                if domain == "universe":
+                    market_cap = self.fields["market_cap"]
+                    valid = pct.notna() & np.isfinite(market_cap) & (market_cap > 0)
+                    cap_weight = market_cap.where(valid, 0)
+                    named_weights["market_cap"] = cap_weight.div(
+                        cap_weight.sum(axis=1).replace(0, np.nan), axis=0
+                    ).fillna(0)
+            else:
+                named_weights = domain_weights
             for name, weight in named_weights.items():
                 # 使用前一交易日权重
                 w = weight.shift(1).fillna(0)
