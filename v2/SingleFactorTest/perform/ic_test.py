@@ -28,7 +28,7 @@ def table(base, horizon=1):
     ic = pd.Series(base.ics[horizon], index=base.dates)
     ric = pd.Series(base.rankics[horizon], index=base.dates)
     conditional = {
-        key: pd.Series(value, index=base.dates)
+        key: pd.Series(value.to_numpy(), index=base.dates)
         for key, value in base.sign_ics[horizon].items()
     }
     rows = {}
@@ -56,7 +56,10 @@ def plot_distribution(base, horizon=1):
     base.cal_labels((horizon,))
     base.cal_ics((horizon,))
     start = base.dates[-1] - pd.DateOffset(years=5)
-    data = pd.DataFrame({"IC": base.ics[horizon], "rankIC": base.rankics[horizon]}).loc[start:]
+    data = pd.DataFrame({
+        "IC": pd.Series(base.ics[horizon], index=base.dates),
+        "rankIC": pd.Series(base.rankics[horizon], index=base.dates),
+    }).loc[start:]
     fig, ax = plt.subplots(figsize=(10, 5))
     summary = {}
     for name in data:
@@ -71,7 +74,6 @@ def plot_distribution(base, horizon=1):
             if x.nunique() > 1:
                 grid = np.linspace(x.min(), x.max(), 400)
                 ax.plot(grid, stats.gaussian_kde(x)(grid), label=label)
-    base.results["ic_distribution_stats"] = pd.DataFrame(summary).T
     ax.set_title(f"IC / RankIC distribution (last 5 years, horizon={horizon})")
     ax.set_xlabel("IC value")
     ax.set_ylabel("Density")
@@ -88,8 +90,9 @@ def plot_ic_cumulative(base, years=3, horizon=1):
     if years not in (1, 3, 5):
         raise ValueError("years须为1/3/5")
     start = base.dates[-1] - pd.DateOffset(years=years)
-    ic, ric = base.ics[horizon].loc[start:], base.rankics[horizon].loc[start:]
-    data = base.sign_ics[horizon].loc[start:].copy()
+    ic = pd.Series(base.ics[horizon], index=base.dates).loc[start:]
+    ric = pd.Series(base.rankics[horizon], index=base.dates).loc[start:]
+    data = base.sign_ics[horizon].set_axis(base.dates).loc[start:]
     data["ic"], data["rank_ic"] = ic, ric
     result = data[["ic", "pos_ic", "neg_ic", "rank_ic", "rank_pos_ic", "rank_neg_ic"]].cumsum()
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -109,22 +112,52 @@ def plot_decay(base, max_lag=20):
     if not 1 <= max_lag <= 20:
         raise ValueError("max_lag须在1-20")
     alpha = base.alpha.loc[base.report_start:]
-    first = m.cross_ic(alpha, base.pct.shift(-2).reindex(alpha.index))
-    first_rank = m.cross_ic(alpha, base.pct.shift(-2).reindex(alpha.index), True)
+    first = pd.Series(m.cross_ic(alpha, base.pct.shift(-2).reindex(alpha.index)), index=alpha.index)
+    first_rank = pd.Series(m.cross_ic(alpha, base.pct.shift(-2).reindex(alpha.index), True), index=alpha.index)
     rows = {}
     for k in range(1, max_lag + 1):
-        label = base.pct.shift(-1-k).reindex(alpha.index)
-        ic, ric = m.cross_ic(alpha, label), m.cross_ic(alpha, label, True)
+        label = base.pct.shift(-2-k).reindex(alpha.index)
+        ic = pd.Series(m.cross_ic(alpha, label), index=alpha.index)
+        ric = pd.Series(m.cross_ic(alpha, label, True), index=alpha.index)
+        factor_rank_ic = pd.Series(
+            m.cross_ic(alpha, base.alpha.shift(k).reindex(alpha.index), True), index=alpha.index
+        )
         rows[k] = {"IC": ic.mean(), "rankIC": ric.mean(),
                    "IC_autocorrelation": first.corr(ic), "rankIC_autocorrelation": first_rank.corr(ric),
-                   "rank_autocorrelation": m.cross_ic(alpha, base.alpha.shift(k).reindex(alpha.index), True).mean()}
+                   "rank_autocorrelation": factor_rank_ic.mean()}
     result = pd.DataFrame(rows).T
 
     fig, ax = plt.subplots(figsize=(11, 5))
-    result.plot(ax=ax, marker=".")
+    right = ax.twinx()
+    result.drop(columns="rank_autocorrelation").plot(ax=ax, marker=".")
+    result["rank_autocorrelation"].plot(
+        ax=right, marker=".", linestyle="--", color="black", label="rank_autocorrelation"
+    )
+    ax.set_ylabel("IC / IC autocorrelation")
+    right.set_ylabel("Factor rank autocorrelation")
+    ic_curve = result["IC"].dropna()
+    if len(ic_curve) > 1 and ic_curve.iloc[0] != 0:
+        target = ic_curve.iloc[0] / 2
+        crossed = ic_curve[ic_curve.index > ic_curve.index[0]]
+        crossed = crossed[(crossed - target) * ic_curve.iloc[0] <= 0]
+        if len(crossed):
+            half_life = crossed.index[0]
+            ax.axhline(target, color="gray", linestyle=":", alpha=0.6)
+            ax.axvline(half_life, color="black", linestyle="--", alpha=0.7,
+                       label=f"IC half-life = {half_life}")
+    left_values = result.drop(columns="rank_autocorrelation").to_numpy(dtype=float)
+    right_values = result["rank_autocorrelation"].to_numpy(dtype=float)
+    left_limit = np.nanmax(np.abs(left_values))
+    right_limit = np.nanmax(np.abs(right_values))
+    ax.set_ylim(-left_limit * 1.1, left_limit * 1.1)
+    right.set_ylim(-right_limit * 1.1, right_limit * 1.1)
+    ax.axhline(0, color="gray", linewidth=0.7, alpha=0.7)
+    left_handles, left_labels = ax.get_legend_handles_labels()
+    right_handles, right_labels = right.get_legend_handles_labels()
+    ax.legend(left_handles + right_handles, left_labels + right_labels, loc="best")
     ax.set_xlabel("Future trading day k")
     fig.tight_layout()
-    return result
+    return result, fig
 
 
 if __name__ == "__main__":
@@ -144,7 +177,7 @@ if __name__ == "__main__":
         plot_distribution(base, horizon),
         plot_ic_cumulative(base, years=3, horizon=horizon),
     ]
-    decay = plot_decay(base)
+    decay, decay_fig = plot_decay(base)
     print("IC decay:")
     print(decay.to_string(float_format=lambda value: f"{value:.4f}"))
     plt.show()

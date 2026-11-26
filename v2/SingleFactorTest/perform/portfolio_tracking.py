@@ -1,61 +1,138 @@
-"""作者：xujiayi | 创建日期：2026-11-11
-组合跟踪：四类图独立返回Figure，默认复用最近一次实际成交结果。
-"""
+"""投资组合净值、PnL、回撤和绩效统计。"""
 import matplotlib.pyplot as plt
+import pandas as pd
+
+if __package__:
+    from ..base import maths as m
+else:
+    import sys
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from v2.SingleFactorTest.base import maths as m
 
 
-def _result(base, params):
-    """获取组合；Params: base/参数；Return: PortfolioResult。"""
-    if params or not hasattr(base, "portfolio"):
-        return base.cal_portfolio(**params)
-    return base.portfolio
+def _daily(base, portfolio_result, params):
+    result = portfolio_result if portfolio_result is not None else base.cal_portfolio(**params)
+    daily = result.daily.loc[base.report_start:]
+    if not hasattr(base, "benchmark"):
+        base.cal_benchmark()
+    domain = params.get("domain", "universe")
+    name = params.get("name") or "equal"
+    benchmark = base.benchmark["ret"][domain][name].reindex(daily.index)
+    capital = result.daily.equity.iloc[0] - result.daily.pnl.iloc[0]
+    return daily, benchmark, result.daily, capital
 
 
-def plot_performance(base, **portfolio_params):
-    """净值/回撤图；Params: base/组合参数；Return: Figure。"""
-    p = _result(base, portfolio_params)
-    daily = p.daily.loc[base.report_start:]
-    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
-    daily.nav.plot(ax=axes[0], label="Net NAV")
-    drawdown = daily.nav / p.daily.nav.cummax().clip(lower=1).reindex(daily.index) - 1
-    drawdown.plot(ax=axes[1], label="Drawdown")
-    for ax in axes:
-        ax.legend()
+def _curves(daily, benchmark, full_daily, capital):
+    previous_equity = full_daily.equity.shift(1).fillna(capital).reindex(daily.index)
+    costs = daily[["commission", "stamp_tax", "impact", "borrow"]].sum(axis=1) * previous_equity
+    start_equity = previous_equity.iloc[0]
+    pnl = pd.DataFrame({
+        "Portfolio (before costs)": daily.pnl + costs,
+        "Benchmark": benchmark * benchmark.cumprod().shift(1).fillna(1) * start_equity,
+        "Portfolio (after costs)": daily.pnl,
+    }).cumsum()
+    nav = pnl.div(start_equity).add(1)
+    return nav, pnl
+
+
+def performance_table(base, portfolio_result=None, capitals=None, **portfolio_params):
+    """统计绩效和容量指标；行按初始资金区分，列为各项指标。"""
+    if portfolio_result is not None:
+        results = portfolio_result if isinstance(portfolio_result, (list, tuple)) else [portfolio_result]
+    elif capitals is not None:
+        results = [base.cal_portfolio(capital=capital, **portfolio_params) for capital in capitals]
+    else:
+        results = [base.cal_portfolio(**portfolio_params)]
+
+    rows = {}
+    for result in results:
+        daily = result.daily.loc[base.report_start:]
+        stats = m.performance(daily.net_return, daily.turnover)
+        for col in ("commission", "stamp_tax", "impact", "borrow"):
+            if col in daily:
+                stats[f"cumulative_{col}"] = daily[col].sum()
+                stats[f"annual_{col}"] = daily[col].mean() * 252
+        cost_cols = [c for c in ("commission", "stamp_tax", "impact", "borrow") if c in daily]
+        if cost_cols:
+            stats["cumulative_total_cost"] = daily[cost_cols].sum(axis=1).sum()
+        if "fill_ratio" in daily:
+            stats["avg_fill_ratio"] = daily.fill_ratio.mean()
+            stats["fill_ratio_p05"] = daily.fill_ratio.quantile(.05)
+        diagnostics = result.diagnostics.reindex(daily.index)
+        if "target_gap" in diagnostics:
+            stats["tracking_gap"] = diagnostics.target_gap.mean()
+        for col in ("gross_exposure", "net_exposure"):
+            if col in diagnostics:
+                stats[col] = diagnostics[col].mean()
+        if {"st_remaining_value"}.issubset(diagnostics.columns):
+            stats["st_remaining_max"] = diagnostics.st_remaining_value.max()
+        if "stock_cap_excess" in diagnostics:
+            stats["stock_cap_excess_max"] = diagnostics.stock_cap_excess.max()
+        if {"cash", "equity"}.issubset(daily.columns):
+            stats["cash_ratio"] = (daily.cash / daily.equity).mean()
+        capital = daily.equity.iloc[0] - daily.pnl.iloc[0] if len(daily) else "Portfolio"
+        rows[f"Initial capital {capital:,.0f}" if isinstance(capital, (int, float)) else capital] = stats
+    return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def plot_nav(base, portfolio_result=None, **portfolio_params):
+    """绘制扣费前组合、benchmark和扣费后组合净值。"""
+    daily, benchmark, full_daily, capital = _daily(base, portfolio_result, portfolio_params)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    nav, _ = _curves(daily, benchmark, full_daily, capital)
+    nav.plot(ax=ax)
+    ax.set(title="Portfolio NAV", xlabel="Date", ylabel="NAV")
+    ax.grid(True, color="gray", alpha=0.2, linewidth=0.7)
+    ax.legend()
     fig.tight_layout()
     return fig
 
 
-def plot_holdings(base, **portfolio_params):
-    """目标/实际总敞口与净敞口；Params: base/组合参数；Return: Figure。"""
-    p = _result(base, portfolio_params)
-    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
-    for name, w in (("Target", p.target), ("Actual", p.actual)):
-        w.abs().sum(axis=1).loc[base.report_start:].plot(ax=axes[0], label=name)
-        w.sum(axis=1).loc[base.report_start:].plot(ax=axes[1], label=name)
-    axes[0].set_ylabel("Gross exposure")
-    axes[1].set_ylabel("Net exposure")
-    for ax in axes:
-        ax.legend()
+def plot_pnl(base, portfolio_result=None, **portfolio_params):
+    """绘制扣费前组合、benchmark和扣费后组合累计PnL。"""
+    daily, benchmark, full_daily, capital = _daily(base, portfolio_result, portfolio_params)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    _, pnl = _curves(daily, benchmark, full_daily, capital)
+    pnl.plot(ax=ax)
+    ax.set(title="Cumulative PnL", xlabel="Date", ylabel="PnL")
+    ax.grid(True, color="gray", alpha=0.2, linewidth=0.7)
+    ax.legend()
     fig.tight_layout()
     return fig
 
 
-def plot_execution(base, **portfolio_params):
-    """换手/成交率/目标跟踪偏离；Params: base/组合参数；Return: Figure。"""
-    p = _result(base, portfolio_params)
-    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
-    p.daily[["turnover", "fill_ratio"]].loc[base.report_start:].plot(ax=axes[0])
-    p.diagnostics[["target_gap", "stock_cap_excess", "industry_deviation"]].loc[base.report_start:].plot(ax=axes[1])
+def plot_drawdown(base, portfolio_result=None, **portfolio_params):
+    """绘制扣费前组合、benchmark和扣费后组合回撤。"""
+    daily, benchmark, full_daily, capital = _daily(base, portfolio_result, portfolio_params)
+    nav, _ = _curves(daily, benchmark, full_daily, capital)
+    drawdown = nav.div(nav.cummax()).sub(1)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    drawdown.plot(ax=ax)
+    ax.fill_between(drawdown.index, drawdown.min(axis=1), 0, alpha=0.12)
+    ax.set(title="Portfolio Drawdown", xlabel="Date", ylabel="Drawdown")
+    ax.grid(True, color="gray", alpha=0.2, linewidth=0.7)
+    ax.legend()
     fig.tight_layout()
     return fig
 
 
-def plot_costs(base, **portfolio_params):
-    """各项累计成本和PnL；Params: base/组合参数；Return: Figure。"""
-    p = _result(base, portfolio_params)
-    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
-    p.daily[["commission", "stamp_tax", "impact", "borrow"]].loc[base.report_start:].cumsum().plot(ax=axes[0])
-    p.daily.pnl.loc[base.report_start:].cumsum().plot(ax=axes[1], label="Cumulative PnL")
-    axes[1].legend()
-    fig.tight_layout()
-    return fig
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[3]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from v2.SingleFactorTest.base.create_base import create_base
+
+    base = create_base()
+    result = base.cal_portfolio()
+    print("Portfolio performance:")
+    print(performance_table(base, result).to_string(float_format=lambda value: f"{value:.4f}"))
+    plot_nav(base, result)
+    plot_pnl(base, result)
+    plot_drawdown(base, result)
+    plt.show()

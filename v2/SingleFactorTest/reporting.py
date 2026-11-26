@@ -6,7 +6,7 @@ import copy
 import numpy as np
 import pandas as pd
 from .base import maths as m
-from .perform import overall_cross_section as cross, distribution, ic_test, domains, capacity
+from .perform import overall_cross_section as cross, distribution, ic_test, domains, portfolio_tracking
 
 
 LABELS = {
@@ -203,8 +203,5 @@ def capacity_report(base, options):
     options = dict(options)
     options.pop("capital", None)
     capitals = options.pop("capitals", (1e7, 5e7, 1e8, 5e8))
-    stats = capacity.table(base, capitals=capitals, **options)
-    curves = pd.DataFrame({f"{c/1e4:,.0f}万": m.nav(p.daily.net_return.loc[base.report_start:]) - 1
-                           for c, p in base.capacity_results.items()})
-    stats.index = [f"{c/1e4:,.0f}万" for c in stats.index]
-    return {"capacity_table": table(stats, "初始资金"), "capacity_chart": chart(curves, True)}
+    stats = portfolio_tracking.performance_table(base, capitals=capitals, **options)
+    return {"capacity_table": table(stats, "初始资金")}
