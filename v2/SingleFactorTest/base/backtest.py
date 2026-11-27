@@ -116,7 +116,7 @@ def simulate(
 
         shares += order
 
-        position_value = shares * base.fields['close']*base.fields['adjustment']
+        position_value = np.sum(shares * base.fields['close'].iloc[t])
 
         borrow_cost = (
             np.maximum(-shares, 0.)
