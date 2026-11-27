@@ -1,14 +1,15 @@
-"""T日目标权重 -> T+1日实际成交、现金、持仓及净值；不做二次权重投影。"""
+"""按目标权重生成订单并模拟日频成交、成本和组合收益。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
 
 @dataclass
 class PortfolioResult:
-    """成交日维度的组合结果。"""
+    """回测结果，所有表均按日期和股票对齐。"""
     daily: pd.DataFrame
     target: pd.DataFrame
     actual: pd.DataFrame
@@ -17,163 +18,150 @@ class PortfolioResult:
     diagnostics: pd.DataFrame
 
 
-def calc_cost(change, mark, amount, commission, stamp_tax, impact_coefficient):
-    """计算成交佣金、卖出印花税和成交参与率平方根冲击成本（货币金额）。"""
-    value = change * mark
-    gross = np.abs(value)
-    participation = np.divide(gross, amount, out=np.zeros_like(gross), where=amount > 0)
+def calc_cost(change, price, amount, commission, stamp_tax, impact_coefficient):
+    value = change * price
+    traded = np.abs(value)
+    participation = np.divide(
+        traded, amount, out=np.zeros_like(traded), where=amount > 0
+    )
     return (
-        gross.sum() * commission,
+        traded.sum() * commission,
         -np.minimum(value, 0.).sum() * stamp_tax,
-        np.sum(gross * impact_coefficient * np.sqrt(participation))
+        np.sum(traded * impact_coefficient / 100 * np.sqrt(participation)),
     )
 
 
-def calc_trade(desired, shares, equity, mark, valid, prices, amount,
-               hastrade, suspended, limit_up, limit_down, st,
-               max_participation, lot_size, rebalance):
-    """按理想权重生成可成交股数，不修改目标权重；旧股不可交易则继续持有。"""
-    desired_shares = np.divide(desired * equity, mark, out=np.zeros_like(shares), where=mark > 0)
-    desired_shares = np.trunc(desired_shares / lot_size) * lot_size
-    if not rebalance:
-        desired_shares = np.where(st == 1, 0., shares)
-    requested = desired_shares - shares
-    max_shares = np.divide(amount * max_participation, prices, out=np.zeros_like(prices), where=valid)
-    delta = np.sign(requested) * np.minimum(np.abs(requested), max_shares)
-    delta = np.trunc(delta / lot_size) * lot_size
-    tradable = (valid & (hastrade == 1) & (suspended == 0) & (limit_up == 0) & (limit_down == 0) & np.isfinite(st))
-    delta[~tradable] = 0.
-    # 原持仓完整退出且参与率允许时，可清理零碎股。
-    liquidation = (desired == 0) & tradable & (np.abs(shares) <= max_shares)
-    delta[liquidation] = -shares[liquidation]
-    return requested, delta
-
-
 def simulate(
-        base, frame, commission=.0003, stamp_tax=.0005,
+        base, frame, commission=.003, stamp_tax=.0005,
         execution_price="vwap", capital=1e8, max_participation=.1,
         impact_coefficient=.001, lot_size=100, borrow_rate=0.,
         rebalance_days=1):
-    """生成目标持仓并执行T+1日成交仿真，参数全部显式传入。
-    T日收盘生成目标，T+1日open/vwap执行、收盘估值
-    使用实际成交股数、停牌/ST/涨跌停限制、整手、成交额参与率和成本。
-    无法成交时保留旧持仓；返回PortfolioResult。
-    注意：VWAP/全日成交额和当日交易状态为事后成交近似，不是无前视逐笔模拟；
-    做空假定有券源，未建模保证金及股指期货对冲。
-    """
-    index, columns = frame.index, frame.columns
+    """T 日信号于 T+1 日执行；按执行价估值，收益使用 base.pct。"""
+    dates, stocks = frame.index, frame.columns
     target = frame.shift(1).fillna(0).to_numpy(float)
-    rebalance = (np.arange(len(index)) > 0) & ((np.arange(len(index)) - 1) % rebalance_days == 0)
-    for t in range(1, len(index)):
+    rebalance = (np.arange(len(dates)) > 0) & ((np.arange(len(dates)) - 1) % rebalance_days == 0)
+    for t in range(1, len(dates)):
         if not rebalance[t]:
             target[t] = target[t - 1]
-    arrays = {
-        k: v.to_numpy() 
-        for k, v in base.fields.items() 
-        if isinstance(v, pd.DataFrame)
+
+    names = (execution_price, "st", "amount", "tradable_t")
+    data = {
+        name: base.fields[name].reindex(index=dates, columns=stocks).to_numpy()
+        for name in names
     }
-    prices, closes = arrays[execution_price], arrays["close"]
-    actual, holdings, trades = [np.zeros_like(target) for _ in range(3)]
-    shares, last_mark = np.zeros(len(columns)), np.zeros(len(columns))
-    cash, previous_equity = float(capital), float(capital)
+    prices = data[execution_price].astype(float)
+    returns = base.pct.reindex(index=dates, columns=stocks).to_numpy(float)
+    n_stocks = target.shape[1]
+    actual = np.zeros_like(target)
+    holdings = np.zeros_like(target)
+    trades = np.zeros_like(target)
+    equity = float(capital)
+    cash = equity
+    shares = np.zeros(n_stocks)
     rows, diagnostics = [], []
-    for t in range(len(index)):
-        factor = arrays["adjustment"][t].astype(float)
-        if t:
-            old_factor = arrays["adjustment"][t - 1].astype(float)
-            held = shares != 0
-            if np.any(held & (~np.isfinite(factor) | ~np.isfinite(old_factor) | (factor <= 0) | (old_factor <= 0))):
-                raise ValueError(f"{index[t]}持仓复权因子缺失，无法安全估值")
-            ratio = np.divide(factor, old_factor, out=np.ones_like(factor), where=(factor > 0) & (old_factor > 0))
-            shares *= ratio
-            last_mark /= ratio
-        p = prices[t].astype(float)
-        valid = np.isfinite(p) & (p > 0)
-        valuation_price = np.where(valid, p, last_mark)
-        trade_price = np.where(valid, p, 0.)
-        equity = cash + shares @ valuation_price
-        if equity <= 0:
-            raise ValueError(f"{index[t]}组合净资产非正，回测终止")
-        previous = shares * valuation_price / equity
-        # 不优化目标权重：调仓日直接执行T-1信号目标；非调仓日保持实际股数。
-        desired = target[t].copy() if rebalance[t] else previous.copy()
-        is_st = arrays["st"][t] == 1
-        # ST强制退出；不可交易时留仓并在之后重试。
-        desired[is_st] = 0.
-        amount = np.nan_to_num(arrays["amount"][t].astype(float), nan=0., posinf=0., neginf=0.).clip(0)
-        requested, delta = calc_trade(
-            desired, shares, equity, valuation_price, valid, p, amount,
-            arrays["hastrade"][t], arrays["suspended"][t],
-            arrays["limit_up"][t], arrays["limit_down"][t],
-            arrays["st"][t], max_participation, lot_size,
-            rebalance=bool(rebalance[t])
+
+    for t, date in enumerate(dates):
+        trade_price = np.where(
+            np.isfinite(prices[t]) & (prices[t] > 0), prices[t], 0.
         )
-        # 先卖后买，现金足以覆盖买入和全部交易成本；缩量仍遵守整手。
-        sell = np.minimum(delta, 0)
-        sell_costs = calc_cost(sell, trade_price, amount, commission, stamp_tax, impact_coefficient)
-        cash_after_sell = cash - sell @ trade_price - sum(sell_costs)
-        buy = np.maximum(delta, 0)
-        full_buy_cost = buy @ trade_price + sum(calc_cost(buy, trade_price, amount, commission, stamp_tax, impact_coefficient))
-        if full_buy_cost > cash_after_sell:
+        amount = np.nan_to_num(data["amount"][t].astype(float), nan=0., posinf=0., neginf=0.).clip(0.)
+
+        desired = np.divide(
+            target[t] * equity, trade_price,
+            out=np.zeros(n_stocks), where=trade_price > 0,
+        )
+        desired = np.trunc(desired / lot_size) * lot_size
+        desired[data["st"][t] == 1] = 0.
+        
+        requested = desired - shares
+        max_shares = np.divide(
+            amount * max_participation, trade_price,
+            out=np.zeros(n_stocks), where=trade_price > 0,
+        )
+        order = np.trunc(
+            np.sign(requested) * np.minimum(np.abs(requested), max_shares)
+            / lot_size
+        ) * lot_size
+        tradable = (trade_price > 0) & (data["tradable_t"][t] == 1)
+        order[~tradable] = 0.
+
+        sell, buy = np.minimum(order, 0.), np.maximum(order, 0.)
+        sell_commission, sell_tax, sell_impact = calc_cost(
+            sell, trade_price, amount, commission, stamp_tax, impact_coefficient
+        )
+        cash += -sell @ trade_price 
+        sell_cost = sell_commission + sell_tax + sell_impact
+
+        def buy_requirement(candidate):
+            fee = calc_cost(
+                candidate, trade_price, amount,
+                commission, stamp_tax, impact_coefficient,
+            )
+            return candidate @ trade_price + sum(fee)
+
+        if buy_requirement(buy) > cash-sell_cost:
             low, high = 0., 1.
-            for _ in range(40):
+            for _ in range(50):
                 scale = (low + high) / 2
                 candidate = np.floor(buy * scale / lot_size) * lot_size
-                if candidate @ trade_price + sum(calc_cost(candidate, trade_price, amount, commission, stamp_tax, impact_coefficient)) <= cash_after_sell:
+                if buy_requirement(candidate) <= cash:
                     low = scale
                 else:
                     high = scale
             buy = np.floor(buy * low / lot_size) * lot_size
 
-        delta = sell + buy
-        comm, tax, impact = calc_cost(delta, trade_price, amount, commission, stamp_tax, impact_coefficient)
-        cash -= delta @ trade_price + comm + tax + impact
-        shares += delta
-        closing = closes[t].astype(float)
-        close_valid = np.isfinite(closing) & (closing > 0)
-        last_mark = np.where(close_valid, closing, valuation_price)
-        borrow = np.abs(np.minimum(shares * last_mark, 0)).sum() * borrow_rate / 252
-        cash -= borrow
-        end_equity = cash + shares @ last_mark
-        actual[t], holdings[t], trades[t] = shares * last_mark / end_equity, shares, delta
-        req_value = np.abs(requested * valuation_price).sum()
-        traded_value = np.abs(delta * trade_price).sum()
-        fill = traded_value / req_value if req_value > 0 else np.nan
-        cost_total = comm + tax + impact + borrow
+        order = sell + buy
+        cash -= buy @ trade_price
+        buy_commission, buy_tax, buy_impact = calc_cost(
+            buy, trade_price, amount, commission, stamp_tax, impact_coefficient
+        )
+        buy_cost = buy_commission + buy_tax + buy_impact
+        shares += order
 
+        position_value = shares * base.fields['close']*base.fields['adjustment']
+
+        borrow_cost = np.abs(np.minimum(position_value, 0.)).sum() * borrow_rate / 252
+        total_cost = buy_cost + sell_cost + borrow_cost 
+
+        current_gross_equity = cash + position_value  # 扣费前资产价值
+        gross_pnl = current_gross_equity - equity     # 扣费前pnl
+        net_pnl = gross_pnl - total_cost      # 扣费后pnl
+        current_equity = current_gross_equity - total_cost    # 扣费后资产价值
+        if current_equity <= 0:
+            raise ValueError(f"{date} 组合净资产非正，回测终止")
+
+        holdings[t], trades[t] = shares, order
+        requested_value = np.abs(requested * trade_price).sum()
+        traded_value = np.abs(order * trade_price).sum()
         rows.append({
-            "nav": end_equity / capital, 
-            "equity": end_equity, 
+            "nav": current_equity / capital,
+            "equity": position_value,
             "cash": cash,
-            "net_return": end_equity / previous_equity - 1,
-            "gross_return": (end_equity + cost_total) / previous_equity - 1,
-            "pnl": end_equity - previous_equity, 
-            "fill_ratio": fill,
-            "turnover": traded_value / previous_equity / 2,
-            "commission": comm / previous_equity, 
-            "stamp_tax": tax / previous_equity,
-            "impact": impact / previous_equity, 
-            "borrow": borrow / previous_equity,
-            "requested_value": req_value, 
+            "net_return": current_equity / equity,
+            "gross_return": gross_pnl / equity,
+            "pnl": net_pnl,
+            "fill_ratio": np.clip(traded_value / requested_value, 0, 1) if requested_value else np.nan,
+            "turnover": traded_value / equity / 2,
+            "commission": (sell_commission+buy_commission) / equity,
+            "stamp_tax": (sell_tax+buy_tax)/ equity,
+            "impact": (sell_impact+buy_impact) / equity,
+            "borrow": borrow_cost / equity,
+            "requested_value": requested_value,
             "traded_value": traded_value,
-            "rebalance": bool(rebalance[t])
+            "rebalance": bool(rebalance[t]),
         })
         diagnostics.append({
-            "target_gap": np.abs(actual[t] - target[t]).sum(),
-            "gross_exposure": np.abs(actual[t]).sum(),
-            "net_exposure": actual[t].sum(),
-            "st_remaining_value": np.abs((shares * last_mark)[is_st]).sum(),
-            "stale_mark_count": int(((shares != 0) & ~close_valid).sum())
+            "target_gap": np.abs(order - requested).sum(),
+            "gross_exposure": np.abs(order).sum(),
+            "net_exposure": order.sum(),
         })
-        previous_equity = end_equity
+        equity = current_equity
 
-    result = PortfolioResult(
-        pd.DataFrame(rows, index), 
-        pd.DataFrame(target, index, columns),
-        pd.DataFrame(actual, index, columns), 
-        pd.DataFrame(holdings, index, columns),
-        pd.DataFrame(trades, index, columns), 
-        pd.DataFrame(diagnostics, index)
+    return PortfolioResult(
+        pd.DataFrame(rows, index=dates),
+        pd.DataFrame(target, index=dates, columns=stocks),
+        pd.DataFrame(actual, index=dates, columns=stocks),
+        pd.DataFrame(holdings, index=dates, columns=stocks),
+        pd.DataFrame(trades, index=dates, columns=stocks),
+        pd.DataFrame(diagnostics, index=dates),
     )
-    return result
-

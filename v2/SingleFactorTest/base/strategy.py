@@ -1,4 +1,4 @@
-"""将因子分组映射为目标持仓；不计算交易成本、不改变实际成交。"""
+"""按因子分组构造目标持仓权重。"""
 from __future__ import annotations
 
 import numpy as np
@@ -6,64 +6,38 @@ import pandas as pd
 from .maths import normalize
 
 
-
-def estimate_hedge_ratio(
-        base, 
-        long_w, 
-        short_w, 
-        benchmark, 
-        construction,
-        window=60, min_periods=40
-    ):
-    """滚动回归：T日h仅使用截至T-1日已实现的历史组合收益。"""
-    exposure = (
-        long_w if construction == "long" else
-        short_w if construction == "short" else
-        0.5 * (long_w - short_w)
-    )
-
-    pct = base.pct.to_numpy(dtype=float, copy=False)
+def estimate_hedge_ratio(base, long_w, short_w, benchmark, construction, window=60, min_periods=40):
+    """用历史收益估计对冲比例，T日仅使用截至T-1日的数据。"""
     dates = base.dates
+    returns = base.pct.to_numpy(dtype=float, copy=False)
 
-    # T-1日持仓计算T日收益
-    b_prev = pd.DataFrame(benchmark, index=dates).shift(1).to_numpy()
-    leg_prev = pd.DataFrame(exposure, index=dates).shift(1).to_numpy()
+    # 持仓滞后一天计算收益，并在持仓股票收益缺失时剔除该日。
+    def portfolio_returns(weights):
+        previous = pd.DataFrame(weights, index=dates).shift(1).to_numpy()
+        valid = np.isfinite(returns)
+        values = (np.nan_to_num(previous) * np.where(valid, returns, 0)).sum(axis=1)
+        missing = ((np.abs(previous) > 0) & ~valid).any(axis=1)
+        return pd.Series(values, index=dates).mask(missing)
 
-    valid_pct = np.isfinite(pct)
+    benchmark_returns = portfolio_returns(benchmark)
+    variance = benchmark_returns.rolling(window, min_periods=min_periods).var()
 
-    bm_ret = np.sum(
-        np.nan_to_num(b_prev) * np.where(valid_pct, pct, 0.),
-        axis=1
-    )
-    leg_ret = np.sum(
-        np.nan_to_num(leg_prev) * np.where(valid_pct, pct, 0.),
-        axis=1
-    )
+    # 计算组合相对基准的滚动 beta。
+    def beta(weights):
+        leg_returns = portfolio_returns(weights)
+        covariance = leg_returns.rolling(window, min_periods=min_periods).cov(benchmark_returns)
+        return covariance / variance.where(variance > 1e-12)
 
-    # 持仓股票收益缺失时，当日组合收益无效
-    missing_b = ((np.abs(b_prev) > 0) & ~valid_pct).any(axis=1)
-    missing_leg = ((np.abs(leg_prev) > 0) & ~valid_pct).any(axis=1)
+    if construction == "longshort":
+        long_beta, short_beta = beta(long_w), beta(short_w)
+        hedge = long_beta / short_beta.where(short_beta.abs() > 1e-12)
+    else:
+        hedge = beta(long_w if construction == "long" else short_w)
 
-    rb = pd.Series(bm_ret, index=dates).mask(missing_b)
-    rl = pd.Series(leg_ret, index=dates).mask(missing_leg)
-
-    # 首日无前一日持仓
-    rb.iloc[0] = np.nan
-    rl.iloc[0] = np.nan
-
-    # 截至当日的滚动Beta
-    cov = rl.rolling(window, min_periods=min_periods).cov(rb)
-    var = rb.rolling(window, min_periods=min_periods).var()
-    h = cov / var.where(var > 1e-12)
-
-    # T日对冲比例仅使用截至T-1日的数据
-    h = h.shift(1)
-
-    hedge_valid = h.notna().rolling(window, min_periods=1).sum().gt(0).to_numpy()
-    hedge = h.ffill(limit=window).to_numpy()
-    hedge = np.where(hedge_valid, hedge, 0.)
-
-    return hedge, hedge_valid
+    # 滞后一日使用已知的 hedge ratio，并向前填充有限窗口。
+    hedge = hedge.shift(1).ffill(limit=window)
+    valid = hedge.notna().to_numpy()
+    return hedge.fillna(0).to_numpy(), valid
 
 
 def build_target(
@@ -79,271 +53,122 @@ def build_target(
     active_gross=1.0,
     hedge_method="dollar",
     hedge_window=60,
-    hedge_min_periods=40
+    hedge_min_periods=40,
 ):
-    """将T日Alpha分组映射为T日目标权重，不处理成交。"""
+    """按选定分组和策略生成目标权重，不修改 base.alpha。"""
+    # 1. 统一参数，并复制因子值，后续筛选只作用于副本。
+    alpha = base.alpha.copy(deep=True)
+    alpha = alpha.where(np.isfinite(alpha))
+    dates, ticks = alpha.index, alpha.columns
+    market_cap = base.fields["market_cap"].reindex(index=dates, columns=ticks)
 
-    # --------------------------------------------------
-    # 0. 参数处理
-    # --------------------------------------------------
-    strategy = str(strategy).lower()
-    construction = str(construction or base.construction).lower()
-    normalization = str(normalization or base.normalization).lower()
-    num_groups = base.num_groups if num_groups is None else num_groups
-    active_gross = (
-        0.1 if strategy == "enhanced" else 1.0
-    ) if active_gross is None else float(active_gross)
+    # 2. 按 domain/name 读取已计算的基准权重。
+    if not hasattr(base, "benchmark") or "weight" not in base.benchmark:
+        base.cal_benchmark()
+    name = "market_cap" if domain == "universe" else name
+    key = str(int(name)) if domain == "industry" else name
+    benchmark_frame = base.benchmark["weight"][domain][key].reindex(
+        index=dates, columns=ticks
+    ).fillna(0)
+    benchmark = benchmark_frame.to_numpy(dtype=float, copy=False)
 
-    # --------------------------------------------------
-    # 1. 获取Benchmark归一化权重
-    # --------------------------------------------------
-    if domain == "universe":
-        name = "market_cap"
-        mv_df = base.fields["market_cap"]
-        eligible = (base.pct.notna() & np.isfinite(mv_df) & (mv_df > 0))
-        b_frame = mv_df.where(eligible, 0).fillna(0)
-        b_frame = b_frame.div(
-            b_frame.sum(axis=1).replace(0, np.nan),
-            axis=0
-        ).fillna(0)
-    else:
-        # 指数、行业基准：读取已有权重
-        key = str(int(name)) if domain == "industry" else name
-        b_frame = base.domain_weights[domain][key]
-
-    b_w = b_frame.to_numpy(dtype=float, copy=False)
-    valid_b = b_w.sum(axis=1) > 1e-12
-    valid = valid_b
-
-    # --------------------------------------------------
-    # 2. 计算域内分组
-    # --------------------------------------------------
-    base.cal_groups(
-        num_groups=num_groups,
-        domain=domain,
-        name=None if domain == "universe" else name
+    # 3. 按 construction 和 group_numbers 保留因子值，其余设为 NaN。
+    base.cal_groups(num_groups=num_groups, domain=domain, name=None if domain == "universe" else name)
+    codes = base.group_codes.reindex(index=dates, columns=ticks)
+    groups = (num_groups, 1) if group_numbers is None else (
+        (group_numbers,) if np.isscalar(group_numbers) else tuple(group_numbers)
     )
-    codes = base.group_codes.to_numpy(dtype=float, copy=False)
-
-    # --------------------------------------------------
-    # 3. 确定域内多空分组
-    # --------------------------------------------------
-    if group_numbers is None:
-        group_numbers = (num_groups, 1)
     if construction == "longshort":
-        lg, sg = (group_numbers[0],), (group_numbers[1],)
+        if len(groups) < 2:
+            raise ValueError("longshort需要多头和空头组号")
+        long_groups, short_groups = groups[0:1], groups[1:2]
     elif construction == "long":
-        lg, sg = group_numbers[0], ()
+        long_groups, short_groups = groups[0:1], ()
     else:
-        lg, sg = (), group_numbers[1]
+        long_groups, short_groups = (), groups[-1:]
+    eligible = benchmark_frame.gt(0)
+    long_alpha = alpha.where(codes.isin(long_groups) & eligible)
+    short_alpha = alpha.where(codes.isin(short_groups) & eligible)
 
-    # --------------------------------------------------
-    # 4. 构建多头和空头原始权重
-    # --------------------------------------------------
-    mv = base.fields["market_cap"].to_numpy(dtype=float, copy=False)
-    alpha = base.alpha.to_numpy(dtype=float, copy=False)
-    # cal_groups已经完成域内分组， benchmark > 0进一步保证股票具有有效基准权重
-    in_long = np.isin(codes, lg) & (b_w > 0)
-    in_short = np.isin(codes, sg) & (b_w > 0)
-
+    # 4. 按等权、市值或因子值分数分别归一化多头腿和空头腿。
     if normalization == "equal":
-        raw_l = in_long.astype(float)
-        raw_s = in_short.astype(float)
+        long_raw = long_alpha.notna().to_numpy(dtype=float)
+        short_raw = short_alpha.notna().to_numpy(dtype=float)
     elif normalization == "market_cap":
-        valid_mv = np.isfinite(mv) & (mv > 0)
-        raw_l = np.where(in_long & valid_mv, mv, 0.)
-        raw_s = np.where(in_short & valid_mv, mv, 0.)
+        valid_cap = np.isfinite(market_cap) & market_cap.gt(0)
+        long_raw = market_cap.where(long_alpha.notna() & valid_cap, 0).to_numpy(dtype=float)
+        short_raw = market_cap.where(short_alpha.notna() & valid_cap, 0).to_numpy(dtype=float)
     else:
-        valid_alpha = np.isfinite(alpha)
-        # 多头：因子值越高，权重越大
-        alpha_l = np.where(in_long & valid_alpha, alpha, np.nan)
-        min_l = np.nanmin(alpha_l, axis=1, keepdims=True)
-        min_l = np.where(np.isfinite(min_l), min_l, 0.)
-        raw_l = np.where(in_long & valid_alpha, alpha-min_l, 0.)
-        # 空头：因子值越低，权重越大
-        alpha_s = np.where(in_short & valid_alpha, alpha, np.nan)
-        max_s = np.nanmax(alpha_s, axis=1, keepdims=True)
-        max_s = np.where(np.isfinite(max_s), max_s, 0.)
-        raw_s = np.where(in_short & valid_alpha, max_s-alpha, 0.)
+        long_raw = long_alpha.to_numpy(dtype=float)
+        short_raw = -short_alpha.to_numpy(dtype=float)
+    long_w, short_w = normalize(long_raw), normalize(short_raw)
+    benchmark_valid = benchmark.sum(axis=1) > 1e-12
 
-    # --------------------------------------------------
-    # 5. 构建完整的多头和空头组合
-    # --------------------------------------------------
-    wl = np.zeros_like(b_w)
-    ws = np.zeros_like(b_w)
-    if strategy=='absolute' or not industry_neutral:   # 非行业中性：分别在整个组合内归一化
-        sum_l = raw_l.sum(axis=1, keepdims=True)
-        sum_s = raw_s.sum(axis=1, keepdims=True)
-        wl = np.divide(raw_l, sum_l, out=np.zeros_like(raw_l), where=sum_l > 1e-12)
-        ws = np.divide(raw_s, sum_s, out=np.zeros_like(raw_s), where=sum_s > 1e-12)
-    else:
-        # 行业中性：按Benchmark行业权重分配预算
-        industry_values = base.fields["industry"].to_numpy(dtype=float, copy=False)
-        valid_industry = (
-            np.isfinite(industry_values)
-            & (industry_values >= 0)
-            & (industry_values < 31)
-        )
-        industry = np.where(valid_industry, industry_values, -1).astype(np.int64)
-        groups = np.arange(31)
-        # 股票所属行业掩码
-        industry_mask = industry[:, :, None] == groups[None, None, :]
-        industry_mask &= valid_industry[:, :, None]
-        # 各行业Benchmark权重及候选股票原始权重
-        b_ind = (industry_mask * b_w[:, :, None]).sum(axis=1)
-        l_ind = (industry_mask * raw_l[:, :, None]).sum(axis=1)
-        s_ind = (industry_mask * raw_s[:, :, None]).sum(axis=1)
-        if len(lg) > 0:
-            l_total = np.take_along_axis(l_ind, industry, axis=1)
-            l_budget = np.take_along_axis(b_ind, industry, axis=1)
-            wl = np.divide(
-                raw_l * l_budget,
-                l_total,
-                out=np.zeros_like(raw_l),
-                where=l_total > 1e-12
-            )
-            wl += np.where((l_total <= 1e-12) & (b_w > 0), b_w, 0.)
-        if len(sg) > 0:
-            s_total = np.take_along_axis(s_ind, industry, axis=1)
-            s_budget = np.take_along_axis(b_ind, industry, axis=1)
-            ws = np.divide(
-                raw_s * s_budget,
-                s_total,
-                out=np.zeros_like(raw_s),
-                where=s_total > 1e-12
-            )
-            ws += np.where((s_total <= 1e-12) & (b_w > 0), b_w, 0.)
+    # 5. 指数增强可将多空腿分别缩放到各自行业的基准预算；无候选股票时不回填。
+    if strategy == "enhanced" and industry_neutral:
+        industry_values = base.fields["industry"].reindex(index=dates, columns=ticks).to_numpy(dtype=float)
+        valid_industry = np.isfinite(industry_values) & (industry_values >= 0) & (industry_values < 31)
+        industry = np.where(valid_industry, industry_values, -1).astype(int)
+        budget = np.zeros((len(dates), 31))
+        long_total, short_total = np.zeros_like(budget), np.zeros_like(budget)
+        for code in range(31):
+            mask = valid_industry & (industry == code)
+            budget[:, code] = (benchmark * mask).sum(axis=1)
+            long_total[:, code] = (long_w * mask).sum(axis=1)
+            short_total[:, code] = (short_w * mask).sum(axis=1)
+        rows = np.arange(len(dates))[:, None]
+        stock_budget = budget[rows, industry]
+        long_budget = long_total[rows, industry]
+        short_budget = short_total[rows, industry]
+        long_w = np.divide(long_w * stock_budget, long_budget, out=np.zeros_like(long_w), where=valid_industry & (long_budget > 1e-12))
+        short_w = np.divide(short_w * stock_budget, short_budget, out=np.zeros_like(short_w), where=valid_industry & (short_budget > 1e-12))
 
-    # --------------------------------------------------
-    # 6. 根据策略类型构建初始主动权重
-    # --------------------------------------------------
+    # 6. 按策略生成目标权重：absolute直接持有，enhanced叠加主动权重。
     if strategy == "absolute":
-        if construction == "long":
-            init = wl.copy()
-        elif construction == "short":
-            init = -ws.copy()
-        else:
-            init = 0.5 * (wl - ws)
-
+        target = long_w - short_w
+        active = target.copy()
+        hedge, hedge_valid = np.zeros(len(dates)), np.zeros(len(dates), dtype=bool)
     elif strategy == "enhanced":
-        if construction == "long":
-            init = wl - b_w
-        elif construction == "short":
-            init = b_w - ws
-        else:
-            init = 0.5 * (wl - ws)
-
-    elif strategy == "market_neutral":
-        hedge_valid = np.ones(len(base.dates), dtype=bool)
+        active = long_w - short_w
+        active *= active_gross
+        active[~benchmark_valid] = 0
+        target = benchmark + active
+        hedge, hedge_valid = np.zeros(len(dates)), np.zeros(len(dates), dtype=bool)
+    else:
+        # 市场中性不做行业缩放，可用美元或历史 beta 估计对冲比例。
         if hedge_method == "dollar":
-            hedge = np.ones(len(base.dates))
+            hedge, hedge_valid = np.ones(len(dates)), np.ones(len(dates), dtype=bool)
         elif hedge_method == "beta":
             hedge, hedge_valid = estimate_hedge_ratio(
-                base,
-                wl,
-                ws,
-                b_w,
-                construction,
-                hedge_window,
-                hedge_min_periods
+                base, long_w, short_w, benchmark, construction,
+                hedge_window, hedge_min_periods,
             )
+        else:
+            raise ValueError("hedge_method须为dollar或beta")
         if construction == "long":
-            init = wl - hedge[:, None] * b_w
+            target = long_w - hedge[:, None] * benchmark
         elif construction == "short":
-            init = hedge[:, None] * b_w - ws
-        else:  # longshort
-            init = wl - hedge[:, None] * ws
+            target = hedge[:, None] * benchmark - short_w
+        else:
+            target = long_w - hedge[:, None] * short_w
+        hedge_valid &= benchmark_valid
+        target[~hedge_valid] = 0
+        active = target.copy()
 
-        valid &= hedge_valid
-
-    init[~valid] = 0.
-
-    # --------------------------------------------------
-    # 9. 按目标主动敞口缩放
-    # --------------------------------------------------
-    gross = np.abs(init).sum(axis=1)
-    scale = np.divide(active_gross, gross, out=np.zeros_like(gross), where=gross > 1e-12)
-
-    if strategy == "enhanced":
-        # 取所有股票允许的最大缩放系数中的最小值，保证所有股票都满足非负约束;
-        # 保证Benchmark + Active之后的个股权重不为负
-        feasible = np.divide(
-            b_w,
-            -init,
-            out=np.full_like(b_w, np.inf),
-            where=init < -1e-12
-        )
-        scale = np.minimum(scale, feasible.min(axis=1))
-
-    active = init * scale[:, None]
-    target = (
-        b_w + active
-        if strategy == "enhanced"
-        else active
-    )
-
-    # --------------------------------------------------
-    # 10. 保存结果
-    # --------------------------------------------------
-    base.long_target = pd.DataFrame(
-        wl,
-        index=base.dates,
-        columns=base.ticks
-    )
-
-    base.short_target = pd.DataFrame(
-        ws,
-        index=base.dates,
-        columns=base.ticks
-    )
-
-    base.benchmark_weight = pd.DataFrame(
-        b_w,
-        index=base.dates,
-        columns=base.ticks
-    )
-
-    base.active_target = pd.DataFrame(
-        active,
-        index=base.dates,
-        columns=base.ticks
-    )
-
-    base.target_holding = pd.DataFrame(
-        target,
-        index=base.dates,
-        columns=base.ticks
-    )
-
+    # 7. 保存各腿、主动权重、目标权重和对冲比例。
+    base.long_target = pd.DataFrame(long_w, index=dates, columns=ticks)
+    base.short_target = pd.DataFrame(-short_w, index=dates, columns=ticks)
+    base.benchmark_weight = pd.DataFrame(benchmark, index=dates, columns=ticks)
+    base.active_target = pd.DataFrame(active, index=dates, columns=ticks)
+    base.target_holding = pd.DataFrame(target, index=dates, columns=ticks)
     base.hedge_ratio = pd.Series(
-        np.where(
-            hedge_valid & valid_b,
-            hedge,
-            np.nan
-        ) if strategy == "market_neutral"
-        else np.full(len(base.dates), np.nan),
-        index=base.dates,
-        name="hedge_ratio"
+        np.where(hedge_valid, hedge, np.nan) if strategy == "market_neutral" else np.nan,
+        index=dates, name="hedge_ratio",
     )
-
-    base.realized_active_gross = pd.Series(
-        np.abs(active).sum(axis=1),
-        index=base.dates
-    )
-
+    base.realized_active_gross = pd.Series(np.abs(active).sum(axis=1), index=dates)
     base.target_spec = (
-        strategy,
-        construction,
-        group_numbers,
-        normalization,
-        domain,
-        name,
-        industry_neutral,
-        active_gross,
-        num_groups,
-        hedge_method,
-        hedge_window,
-        hedge_min_periods
+        strategy, construction, group_numbers, normalization, domain, name,
+        industry_neutral, active_gross, num_groups, hedge_method,
+        hedge_window, hedge_min_periods,
     )
-
     return base.target_holding

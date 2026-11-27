@@ -299,6 +299,7 @@ class FactorBase:
             T日基准收益 = T-1日权重 × T日股票收益
         Return:
             self.benchmark = {
+                "weight": {domain: {name: DataFrame}},
                 "ret": {domain: {name: Series}},
                 "nav": {domain: {name: Series}}
             }
@@ -307,10 +308,12 @@ class FactorBase:
         weights = self.domain_weights
 
         self.benchmark = {
+            "weight": {},
             "ret": {},
-            "nav": {}
+            "nav": {},
         }
         for domain, domain_weights in weights.items():
+            self.benchmark["weight"][domain] = {}
             self.benchmark["ret"][domain] = {}
             self.benchmark["nav"][domain] = {}
 
@@ -326,6 +329,7 @@ class FactorBase:
             else:
                 named_weights = domain_weights
             for name, weight in named_weights.items():
+                self.benchmark["weight"][domain][name] = weight.copy()
                 # 使用前一交易日权重
                 w = weight.shift(1).fillna(0)
                 # 检查是否存在有效持仓
@@ -450,7 +454,7 @@ class FactorBase:
             hedge_method="dollar",
             hedge_window=60,
             hedge_min_periods=40,
-            commission=0.0003,
+            commission=0.003,
             stamp_tax=0.0005,
             execution_price="vwap",
             capital=1e8,
@@ -458,26 +462,26 @@ class FactorBase:
             impact_coefficient=0.001,
             lot_size=100,
             borrow_rate=0.0,
-            rebalance_days=1,
+            rebalance_days=5,
     ):
         """T日生成目标权重，T+1执行；不进行权重优化。"""
 
-        # 1. 生成并保存目标权重
-        if not hasattr(self, "target_holding"):
-            self.cal_target_holding(
-                strategy=strategy,
-                construction=construction,
-                num_group=num_groups,
-                group_numbers=group_numbers,
-                normalization=normalization,
-                domain=domain,
-                name=name,
-                industry_neutral=industry_neutral,
-                active_gross=active_gross,
-                hedge_method=hedge_method,
-                hedge_window=hedge_window,
-                hedge_min_periods=hedge_min_periods,
-            )
+        # Rebuild target weights from the parameters of every portfolio run.
+        # This prevents stale holdings when a FactorBase instance is reused.
+        self.cal_target_holding(
+            strategy=strategy,
+            construction=construction,
+            num_groups=num_groups,
+            group_numbers=group_numbers,
+            normalization=normalization,
+            domain=domain,
+            name=name,
+            industry_neutral=industry_neutral,
+            active_gross=active_gross,
+            hedge_method=hedge_method,
+            hedge_window=hedge_window,
+            hedge_min_periods=hedge_min_periods,
+        )
 
         # 2. 模拟实际成交及收益
         self.portfolio = simulate(
