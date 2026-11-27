@@ -328,13 +328,12 @@ class FactorBase:
             for name, weight in named_weights.items():
                 # 使用前一交易日权重
                 w = weight.shift(1).fillna(0)
-                # 检查持仓股票当日收益是否缺失
-                missing = ((w != 0) & pct.isna()).any(axis=1)
                 # 检查是否存在有效持仓
                 active = w.abs().sum(axis=1) > 0
-                # 计算加权收益，支持Barra正负权重
+                # 缺失收益按0计入，避免单只股票缺数导致整个基准日收益缺失。
+                # Barra支持正负权重；长仓域基准权重已在前一日归一化。
                 ret = (w * pct.fillna(0)).sum(axis=1)
-                ret = ret.where(active & ~missing)
+                ret = ret.where(active)
                 # 计算累计净值
                 nav = (1 + ret.fillna(0)).cumprod()
                 nav = nav.where(ret.notna())

@@ -73,8 +73,7 @@ def domain_table(base, domain="industry", construction="longshort", num_groups=1
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
-def plot_barra_exposure(base, construction="longshort", num_groups=10, group_numbers=(10, 1)):
-    """用全体股票绘制Alpha-Barra相关、持仓风格敞口及超额收益风格Beta。"""
+def _barra_statistics(base, construction, num_groups, group_numbers):
     base.cal_groups(num_groups, "universe", "equal", horizon=1)
     codes = base.group_codes
     l = codes.eq(group_numbers[0]).astype(float)
@@ -82,56 +81,86 @@ def plot_barra_exposure(base, construction="longshort", num_groups=10, group_num
     l = l.div(l.sum(axis=1).replace(0, np.nan), axis=0).fillna(0)
     s = s.div(s.sum(axis=1).replace(0, np.nan), axis=0).fillna(0)
     holds = l - s if construction == "longshort" else l if construction == "long" else -s
-    styles = base.fields["barra"]
+    barra = base.fields["barra"]
+    styles = list(barra)
     returns = basic_info(base, construction, num_groups, group_numbers, "universe", "equal")["excess_return"]
 
     correlations, exposures = {}, {}
-    for style, values in styles.items():
-        correlations[style] = pd.Series(
-            m.cross_ic(base.alpha, values), index=base.dates
-        ).mean()
+    for style in styles:
+        values = barra[style]
+        correlations[style] = np.nanmean(m.cross_ic(base.alpha, values))
         exposures[style] = (holds * values).sum(axis=1).mean()
 
     barra_returns = getattr(base, "barra_returns", None)
     if barra_returns is None:
         barra_returns = base.cal_barra_ret()
     barra_returns = barra_returns.reindex(returns.index)
-    regression_betas = {}
-    for style in styles:
-        pair = pd.concat([returns, barra_returns[style]], axis=1).dropna()
-        if len(pair) < 2 or pair.iloc[:, 1].var() == 0:
-            regression_betas[style] = np.nan
-        else:
-            regression_betas[style] = pair.iloc[:, 0].cov(pair.iloc[:, 1]) / pair.iloc[:, 1].var()
+    cumulative_factor_returns = barra_returns[styles].add(1).prod(min_count=1).sub(1)
+    pair = pd.concat([returns.rename("excess_return"), barra_returns.loc[:, styles]], axis=1).dropna()
+    regression_betas = pd.Series(np.nan, index=styles)
+    if len(pair) > len(styles) + 1:
+        design = np.column_stack([np.ones(len(pair)), pair[styles].to_numpy()])
+        coefficients, _, rank, _ = np.linalg.lstsq(design, pair["excess_return"].to_numpy(), rcond=None)
+        if rank == design.shape[1]:
+            regression_betas[:] = coefficients[1:]
 
-    result = pd.DataFrame({
+    signal_table = pd.DataFrame({
         "alpha_barra_corr": pd.Series(correlations),
         "holding_exposure": pd.Series(exposures),
-        "excess_return_beta": pd.Series(regression_betas),
     })
+    return_table = pd.DataFrame({
+        "excess_return_beta": regression_betas,
+        "barra_return": cumulative_factor_returns,
+    })
+    base.barra_section_table, base.barra_return_table = signal_table, return_table
+    return signal_table, return_table
+
+
+def plot_barra_signal_exposure(base, construction="longshort", num_groups=10, group_numbers=(10, 1)):
+    """绘制整体Signal beta和持仓Barra风格敞口。"""
+    result, _ = _barra_statistics(base, construction, num_groups, group_numbers)
+    fig, ax = plt.subplots(figsize=(13, 6))
+    x = np.arange(len(result))
+    width = 0.36
+    ax.bar(x - width / 2, result["alpha_barra_corr"], width, label="Signal beta")
+    ax.bar(x + width / 2, result["holding_exposure"], width, label="Holding exposure")
+    ax.set_xticks(x, result.index, rotation=45, ha="right")
+    limit = np.nanmax(np.abs(result.to_numpy()))
+    ax.set_ylim((-limit * 1.15, limit * 1.15) if np.isfinite(limit) and limit else (-1, 1))
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set(title="Overall signal beta and holding exposure", xlabel="Barra style", ylabel="Value")
+    ax.grid(axis="y", color="gray", alpha=0.2, linewidth=0.7)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    base.barra_section_table = result
+    return fig
+
+
+def plot_barra_return_beta(base, construction="longshort", num_groups=10, group_numbers=(10, 1)):
+    """绘制超额收益回归系数及Barra风格累计收益。"""
+    result = _barra_statistics(base, construction, num_groups, group_numbers)[1]
     fig, ax = plt.subplots(figsize=(13, 6))
     right = ax.twinx()
     x = np.arange(len(result))
-    width = 0.24
-    ax.bar(x - width, result["alpha_barra_corr"], width, label="Signal beta")
-    ax.bar(x, result["holding_exposure"], width, label="Holding exposure")
-    right.bar(x + width, result["excess_return_beta"], width,
-              color="tab:red", alpha=0.7, label="Return beta")
+    width = 0.36
+    ax.bar(x - width / 2, result["excess_return_beta"], width,
+           label="Excess return beta", color="tab:red", alpha=.75)
+    right.bar(x + width / 2, result["barra_return"], width,
+              label="Cumulative Barra return", color="tab:blue", alpha=.65)
     ax.set_xticks(x, result.index, rotation=45, ha="right")
-    left_max = np.nanmax(np.abs(result[["alpha_barra_corr", "holding_exposure"]].to_numpy()))
-    right_max = np.nanmax(np.abs(result["excess_return_beta"].to_numpy()))
-    ax.set_ylim(-left_max * 1.15, left_max * 1.15)
-    right.set_ylim(-right_max * 1.15, right_max * 1.15)
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set(title="Overall Barra style exposures", xlabel="Barra style",
-           ylabel="Signal beta / holding exposure")
-    right.set_ylabel("Return beta")
-    ax.grid(axis="y", color="gray", alpha=0.2, linewidth=0.7)
-    handles1, labels1 = ax.get_legend_handles_labels()
-    handles2, labels2 = right.get_legend_handles_labels()
-    ax.legend(handles1 + handles2, labels1 + labels2, loc="best")
+    for axis, values in ((ax, result["excess_return_beta"]), (right, result["barra_return"])):
+        limit = np.nanmax(np.abs(values.to_numpy()))
+        axis.set_ylim((-limit * 1.15, limit * 1.15) if np.isfinite(limit) and limit else (-1, 1))
+    ax.axhline(0, color="black", linewidth=.8)
+    ax.set(title="Excess return beta and Barra factor returns", xlabel="Barra style",
+           ylabel="Excess return beta")
+    right.set_ylabel("Cumulative Barra return")
+    ax.grid(axis="y", color="gray", alpha=.2, linewidth=.7)
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = right.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, loc="best")
     fig.tight_layout()
-    base.barra_section_table = result
+    base.barra_return_table = result
     return fig
 
 
@@ -150,7 +179,10 @@ if __name__ == "__main__":
     print(f"{domain} domain summary:")
     print(table.to_string(float_format=lambda value: f"{value:.4f}"))
 
-    fig = plot_barra_exposure(base)
-    print("Overall Barra style table:")
+    fig = plot_barra_signal_exposure(base)
+    print("Signal beta and holding exposure:")
     print(base.barra_section_table.to_string(float_format=lambda value: f"{value:.4f}"))
+    fig = plot_barra_return_beta(base)
+    print("Excess return beta and Barra return:")
+    print(base.barra_return_table.to_string(float_format=lambda value: f"{value:.6f}"))
     plt.show()
