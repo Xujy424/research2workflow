@@ -438,6 +438,19 @@ class FactorBase:
             hedge_window=hedge_window,
             hedge_min_periods=hedge_min_periods,
         )
+        # Shift signal weights to the next trading day here, so simulate()
+        # receives execution-day targets and does not need to shift them again.
+        target = self.target_holding.shift(1)
+        if strategy == "enhanced":
+            # Enhanced portfolios start with the index benchmark already held.
+            benchmark = self.benchmark_weight.reindex(
+                index=self.target_holding.index,
+                columns=self.target_holding.columns,
+            )
+            target.iloc[0] = benchmark.iloc[0].fillna(0)
+        elif strategy in ("absolute", "market_neutral"):
+            target.iloc[0] = 0.
+        self.target_holding = target.fillna(0)
         return self.target_holding
 
     def cal_portfolio(

@@ -12,7 +12,6 @@ class PortfolioResult:
     """回测结果，所有表均按日期和股票对齐。"""
     daily: pd.DataFrame
     target: pd.DataFrame
-    actual: pd.DataFrame
     shares: pd.DataFrame
     trades: pd.DataFrame
     diagnostics: pd.DataFrame
@@ -38,7 +37,7 @@ def simulate(
         rebalance_days=1):
     """T 日信号于 T+1 日执行；按执行价估值，收益使用 base.pct。"""
     dates, stocks = frame.index, frame.columns
-    target = frame.shift(1).fillna(0).to_numpy(float)
+    target = frame.fillna(0).to_numpy(float)
     rebalance = (np.arange(len(dates)) > 0) & ((np.arange(len(dates)) - 1) % rebalance_days == 0)
     for t in range(1, len(dates)):
         if not rebalance[t]:
@@ -50,9 +49,7 @@ def simulate(
         for name in names
     }
     prices = data[execution_price].astype(float)
-    returns = base.pct.reindex(index=dates, columns=stocks).to_numpy(float)
     n_stocks = target.shape[1]
-    actual = np.zeros_like(target)
     holdings = np.zeros_like(target)
     trades = np.zeros_like(target)
     equity = float(capital)
@@ -104,7 +101,7 @@ def simulate(
             for _ in range(50):
                 scale = (low + high) / 2
                 candidate = np.floor(buy * scale / lot_size) * lot_size
-                if buy_requirement(candidate) <= cash:
+                if buy_requirement(candidate) <= cash-sell_cost:
                     low = scale
                 else:
                     high = scale
@@ -116,6 +113,7 @@ def simulate(
             buy, trade_price, amount, commission, stamp_tax, impact_coefficient
         )
         buy_cost = buy_commission + buy_tax + buy_impact
+
         shares += order
 
         position_value = shares * base.fields['close']*base.fields['adjustment']
@@ -160,7 +158,6 @@ def simulate(
     return PortfolioResult(
         pd.DataFrame(rows, index=dates),
         pd.DataFrame(target, index=dates, columns=stocks),
-        pd.DataFrame(actual, index=dates, columns=stocks),
         pd.DataFrame(holdings, index=dates, columns=stocks),
         pd.DataFrame(trades, index=dates, columns=stocks),
         pd.DataFrame(diagnostics, index=dates),
