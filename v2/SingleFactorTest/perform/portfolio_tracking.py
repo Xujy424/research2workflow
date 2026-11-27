@@ -17,11 +17,11 @@ else:
 def _daily(base, portfolio_result, params):
     result = portfolio_result if portfolio_result is not None else base.cal_portfolio(**params)
     daily = result.daily.loc[base.report_start:]
-    if not hasattr(base, "benchmark"):
-        base.cal_benchmark()
     domain = params.get("domain", "universe")
     name = params.get("name") or ("market_cap" if domain == "universe" and
                                    params.get("strategy", "enhanced") == "enhanced" else "equal")
+    if not hasattr(base, "benchmark") or name not in base.benchmark["ret"].get(domain, {}):
+        base.cal_benchmark()
     benchmark = base.benchmark["ret"][domain][name].reindex(daily.index)
     capital = result.daily.equity.iloc[0] - result.daily.pnl.iloc[0]
     return daily, benchmark, result.daily, capital
