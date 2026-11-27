@@ -118,7 +118,13 @@ def simulate(
 
         position_value = shares * base.fields['close']*base.fields['adjustment']
 
-        borrow_cost = np.abs(np.minimum(position_value, 0.)).sum() * borrow_rate / 252
+        borrow_cost = (
+            np.maximum(-shares, 0.)
+            * np.nan_to_num(
+                base.fields["close"].iloc[t].to_numpy(dtype=float),
+                nan=0., posinf=0., neginf=0.
+            ).clip(0.)
+        ).sum() * borrow_rate / 252
         total_cost = buy_cost + sell_cost + borrow_cost 
 
         current_gross_equity = cash + position_value  # 扣费前资产价值
@@ -134,7 +140,7 @@ def simulate(
         rows.append({
             "nav": current_equity / capital,
             "equity": position_value,
-            "cash": cash,
+            "cash": cash-total_cost,
             "net_return": current_equity / equity,
             "gross_return": gross_pnl / equity,
             "pnl": net_pnl,
