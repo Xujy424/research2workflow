@@ -18,7 +18,7 @@ else:
     from v2.SingleFactorTest.base import maths as m
 
 
-def table(base, horizon=1):
+def ic_stats_table(base, horizon=1):
     """自然年及Overall的IC表。
     Params: base/horizon: 1/3/5/10/20；
     Return: DataFrame；IR=日均/日标准差，未乘sqrt252；正负IC按未来收益正负分截面子样本。
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     base = create_base()
     horizon = 1
     print("IC summary:")
-    print(table(base, horizon).to_string(float_format=lambda value: f"{value:.4f}"))
+    print(ic_stats_table(base, horizon).to_string(float_format=lambda value: f"{value:.4f}"))
     figures = [
         plot_distribution(base, horizon),
         plot_ic_cumulative(base, years=3, horizon=horizon),

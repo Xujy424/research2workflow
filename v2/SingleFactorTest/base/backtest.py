@@ -52,8 +52,8 @@ def simulate(
     n_stocks = target.shape[1]
     holdings = np.zeros_like(target)
     trades = np.zeros_like(target)
-    equity = float(capital)
-    cash = equity
+    value = float(capital)
+    cash = value
     shares = np.zeros(n_stocks)
     rows, diagnostics = [], []
 
@@ -64,7 +64,7 @@ def simulate(
         amount = np.nan_to_num(data["amount"][t].astype(float), nan=0., posinf=0., neginf=0.).clip(0.)
 
         desired = np.divide(
-            target[t] * equity, trade_price,
+            target[t] * value, trade_price,
             out=np.zeros(n_stocks), where=trade_price > 0,
         )
         desired = np.trunc(desired / lot_size) * lot_size
@@ -127,29 +127,30 @@ def simulate(
         ).sum() * borrow_rate / 252
         total_cost = buy_cost + sell_cost + borrow_cost 
 
-        current_gross_equity = cash + position_value  # 扣费前资产价值
-        gross_pnl = current_gross_equity - equity     # 扣费前pnl
+        current_gross_value = cash + position_value  # 扣费前资产价值
+        gross_pnl = current_gross_value - value     # 扣费前pnl
         net_pnl = gross_pnl - total_cost      # 扣费后pnl
-        current_equity = current_gross_equity - total_cost    # 扣费后资产价值
-        if current_equity <= 0:
+        current_value = current_gross_value - total_cost    # 扣费后资产价值
+        if current_value <= 0:
             raise ValueError(f"{date} 组合净资产非正，回测终止")
 
         holdings[t], trades[t] = shares, order
         requested_value = np.abs(requested * trade_price).sum()
         traded_value = np.abs(order * trade_price).sum()
+        fill_ratio = np.clip(traded_value / requested_value, 0, 1)
+
         rows.append({
-            "nav": current_equity / capital,
             "equity": position_value,
             "cash": cash-total_cost,
-            "net_return": current_equity / equity,
-            "gross_return": gross_pnl / equity,
-            "pnl": net_pnl,
-            "fill_ratio": np.clip(traded_value / requested_value, 0, 1) if requested_value else np.nan,
-            "turnover": traded_value / equity / 2,
-            "commission": (sell_commission+buy_commission) / equity,
-            "stamp_tax": (sell_tax+buy_tax)/ equity,
-            "impact": (sell_impact+buy_impact) / equity,
-            "borrow": borrow_cost / equity,
+            "gross_pnl": gross_pnl,
+            "net_pnl": net_pnl,
+            "fill_ratio": fill_ratio if t!=0 else 0,
+            "turnover": (traded_value if t!=0 else 0) / value / 2,
+            'trade_fee': total_cost if t!=0 else 0, 
+            "commission": ((sell_commission+buy_commission) if t!=0 else 0) / value,
+            "stamp_tax": ((sell_tax+buy_tax) if t!=0 else 0)/ value,
+            "impact": ((sell_impact+buy_impact) if t!=0 else 0) / value,
+            "borrow": (borrow_cost if t!=0 else 0) / value,
             "requested_value": requested_value,
             "traded_value": traded_value,
             "rebalance": bool(rebalance[t]),
@@ -159,7 +160,7 @@ def simulate(
             "gross_exposure": np.abs(order).sum(),
             "net_exposure": order.sum(),
         })
-        equity = current_equity
+        value = current_value
 
     return PortfolioResult(
         pd.DataFrame(rows, index=dates),

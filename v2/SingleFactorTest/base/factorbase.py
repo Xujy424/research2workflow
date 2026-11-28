@@ -495,6 +495,8 @@ class FactorBase:
             hedge_window=hedge_window,
             hedge_min_periods=hedge_min_periods,
         )
+        self.strategy, self.domain, self.name = strategy, domain, name
+        self.capital = capital
 
         # 2. 模拟实际成交及收益
         self.portfolio = simulate(
